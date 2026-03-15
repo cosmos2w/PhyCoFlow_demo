@@ -49,8 +49,7 @@ share_query_proj: false
 
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline
-# These MUST be provided and must match the dataset, otherwise
-# training will warn and exit.
+# These MUST be provided and must match the dataset, otherwise training will warn and exit.
 # ----------------------------------------------------------
 Num_x: 403
 Num_y: 100

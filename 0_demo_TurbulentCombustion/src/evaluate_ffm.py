@@ -40,7 +40,7 @@ def parse_args():
                    help="Override visualization n_obs list. Defaults to YAML vis_n_obs_list or n_obs_max_list.")
     p.add_argument("--checkpoint", type=str, default="best", choices=["best", "last"],
                    help="Which checkpoint to load from the recovered run directory.")
-    p.add_argument("--n-steps-generation", type=int, default = 4,
+    p.add_argument("--n-steps-generation", type=int, default = 8,
                    help="Override generation steps. Defaults to YAML n_steps_generation if present.")
     p.add_argument("--device", type=str, default=None, help="e.g. cuda:0 or cpu")
     

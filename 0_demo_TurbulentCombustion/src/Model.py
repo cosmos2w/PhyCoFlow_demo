@@ -494,9 +494,8 @@ class ConditionalPointPerceiver(nn.Module):
         coords: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Decode per-point outputs in chunks to reduce memory during full-resolution
-        reconstruction. Training usually uses a smaller n_query_points and may not
-        need chunking, but reconstruction on all ~40k points can benefit from it.
+        Decode per-point outputs in chunks to reduce memory during full-resolution reconstruction. 
+        Training usually uses a smaller n_query_points and may not need chunking, but reconstruction on all ~40k points can benefit from it.
         """
         n_pts = coords.shape[1]
 

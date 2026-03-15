@@ -1,0 +1,451 @@
+
+# Turbulent Combustion Multi-Field Reconstruction with Functional Flow Matching
+# Updated 3/14/2026
+
+This repository contains a set of conditional generative models for **multi-field reconstruction** on a turbulent combustion dataset. The core task is:
+
+- start from a partially observed state, where only sparse sensors are available,
+- condition on one or more physical fields,
+- reconstruct the full coupled field set:
+  **CH4, CO, T, U_1, p**.
+
+The codebase supports several interchangeable backbones under a common training and evaluation workflow:
+
+- **ConditionalPointMLPRBF**     — point-cloud backbone with local RBF sensor aggregation
+- **ConditionalPointPerceiver**  — point-cloud backbone with latent attention
+- **FNO / FNOFFM**               — regular-grid baseline for reshaped mesh data
+
+The training pipeline treats each saved time step as one sample, loads the HDF5 dataset lazily, normalizes fields using train-split statistics, and saves timestamped configs, checkpoints, loss curves, and reconstruction figures into separate run directories. fileciteturn2file10 fileciteturn2file2
+
+---
+
+## 1. Central idea
+
+### 1.1 Problem setting
+
+The dataset stores one turbulent-combustion trajectory with:
+
+- coordinates for `40300` spatial points,
+- `10000` time steps,
+- `5` physical fields:
+  `CH4, CO, T, U_1, p`.
+
+In the point-cloud workflow, each time step is treated as a separate sample of shape `[N_points, C_fields]`, while the spatial coordinates are reused across all samples. 
+The helper dataset class loads the HDF5 file, normalizes coordinates for the model input, and normalizes field values with train-split mean and standard deviation. 
+
+### 1.2 Conditioning idea
+
+Instead of conditioning on a dense field, the model conditions on a set of **sparse sensor observations**. The code supports:
+
+- a single conditioned field, such as `T`,
+- multiple conditioned fields, such as `[T, U_1]`,
+- different sensor counts per field.
+
+The sparse-conditioning helper builds observation tensors containing:
+
+- sensor coordinates,
+- observed scalar values,
+- observation masks,
+- observation field IDs,
+- observation point indices.
+
+That generalized interface is what lets the same training loop work with the point-cloud backbones and the FNO baseline.
+
+### 1.3 Model family overview
+
+#### A. Point-cloud MLP + RBF backbone
+
+This model encodes each query point from `(coords, x_t, t)`, encodes each sparse sensor from `(obs_coords, obs_value, field_id)`, then uses an RBF-weighted aggregation so nearby sensors influence each query point most strongly. 
+A global pooled feature is also added before predicting the velocity field.
+
+#### B. Point-cloud Perceiver backbone
+
+This model replaces the local RBF aggregation with a latent-attention bottleneck. 
+Query-point tokens and sparse sensor tokens are compressed into learned latent slots, processed by latent self-attention blocks, then decoded back to per-point velocity predictions. 
+This is designed to improve global interaction modeling and multi-field coupling while preserving the same sparse-conditioning API.
+
+#### C. FNO baseline
+
+The FNO branch is a **regular-grid baseline**. It is used only when the dataset can be interpreted as a structured mesh and when `Num_x` and `Num_y` are explicitly provided. 
+In this repo, the combustion data can be reshaped to `Num_x = 403`, `Num_y = 100`, giving a grid baseline for comparison against the point-cloud models.
+
+---
+
+## 2. Data format
+
+The expected main dataset file is:
+
+```text
+Dataset/Merged_CH4COTU1P.h5
+```
+
+The HDF5 structure is assumed to contain:
+
+- `coordinates`: spatial coordinates for all points
+- `fields`: time-dependent multi-field data
+- `time`: physical time stamps
+
+The point-cloud dataset class reads the HDF5 file lazily and interprets the data as:
+
+- one sample = one time step,
+- one sample shape = `[N_points, N_fields]`.
+
+For plotting, we optionally keep the **original physical coordinates** and use them only for visualization, while normalized coordinates are still fed into the model.
+
+---
+
+## 3. Repository structure
+
+A minimal working structure is:
+
+```text
+.
+├── Dataset/
+│   └── Merged_CH4COTU1P.h5
+├── Save_config/
+│   └── pointcloud_ffm/
+├── Save_TrainedModel/
+├── Save_loss_csv/
+├── Save_reconstruction_files/
+├── src/
+│   ├── train_pointcloud_ffm.py
+│   ├── evaluate_ffm.py
+│   ├── helpers.py
+│   ├── Model.py
+│   └── config_pointcloud_ffm.yaml
+└── README.md
+```
+
+### Main scripts
+
+#### `Model.py`
+Contains all model-related code, including:
+
+- point-cloud backbone(s)
+- Perceiver backbone
+- FNO baseline
+- FFM wrapper(s)
+- prior samplers
+
+#### `helpers.py`
+Contains:
+
+- `TurbulentCombustionH5Dataset`
+- sparse-conditioning utilities
+- reconstruction plotting
+- logging utilities
+- grid compatibility checks (for FNO)
+
+#### `train_pointcloud_ffm.py`
+Main training script. It:
+
+- loads a YAML config,
+- backs it up with `Demo_Num + timestamp`,
+- constructs output directories,
+- builds datasets and loaders,
+- selects the requested backbone,
+- trains and validates,
+- saves checkpoints,
+- writes loss CSV/plots,
+- periodically saves reconstruction figures. fileciteturn2file1 fileciteturn2file2
+
+#### `evaluate_ffm.py`
+Standalone evaluator. It:
+
+- locates the latest backed-up config for a chosen `Demo_Num`,
+- resolves the matching checkpoint directory,
+- rebuilds the model from YAML,
+- loads the selected checkpoint,
+- reconstructs a chosen test/validation snapshot,
+- saves evaluation plots and metrics.
+
+---
+
+## 4. Run directory convention
+
+Each run is timestamped. The training script backs up the YAML to:
+
+```text
+Save_config/pointcloud_ffm/config_pointcloud_ffm_DemoN{Demo_Num}_{timestamp}.yaml
+```
+
+Model checkpoints are saved to:
+
+```text
+Save_TrainedModel/ffm_tc_pointcloud_DemoN{Demo_Num}_{timestamp}/
+```
+
+Loss logs are saved to:
+
+```text
+Save_loss_csv/Loss_DemoN{Demo_Num}_{timestamp}/
+```
+
+Reconstruction figures are saved to:
+
+```text
+Save_reconstruction_files/ffm_tc_pointcloud/demo_N{Demo_Num}_{timestamp}/
+```
+
+This structure is what allows `evaluate_ffm.py` to recover a trained run from `Demo_Num` alone. fileciteturn2file2 fileciteturn2file14
+
+---
+
+## 5. Configuration file
+
+The main YAML config controls:
+
+- optimizer / scheduler settings
+- training split and batching
+- backbone type
+- prior type
+- sparse-conditioning settings
+- visualization settings
+
+A typical config includes fields such as:
+
+- `Demo_Num`
+- `data`
+- `save_dir`
+- `backbone`
+- `prior`
+- `cond_fields`
+- `n_obs_min_list`
+- `n_obs_max_list`
+- `vis_cond_fields`
+- `vis_n_obs_list`
+- `Num_x`, `Num_y` for FNO runs. fileciteturn2file0
+
+### Important FNO note
+
+When using the FNO wrapper:
+
+- `Num_x` and `Num_y` **must** be provided,
+- they **must** be compatible with the dataset,
+- otherwise the code should warn and exit.
+
+This is because FNO assumes a regular grid and cannot operate directly on an arbitrary point cloud.
+
+---
+
+## 6. Backbones and wrappers
+
+## 6.1 Point-cloud backbones
+
+### `ConditionalPointMLPRBF`
+Recommended when:
+
+- local sensor influence is physically meaningful,
+- we want a simple, stable baseline,
+- sensor counts are moderate,
+- we want efficient training with point subsampling.
+
+### `ConditionalPointPerceiver`
+Recommended when:
+
+- global interactions matter more,
+- multiple conditioned fields are used,
+- sensor types and layouts are heterogeneous,
+- richer cross-field coupling is needed.
+
+## 6.2 Grid baseline
+
+### `FNO`
+Recommended when:
+
+- the dataset can be reshaped consistently onto a regular mesh,
+- we want a spectral-operator baseline,
+- we want to compare against the original grid-style FFM philosophy.
+
+### `FNOFFM`
+This wrapper keeps the same outer FFM objective as the point-cloud wrapper, but rasterizes sparse observations into dense field-aligned maps before feeding them into FNO.
+
+---
+
+## 7. Training workflow
+
+The standard training workflow is:
+
+1. read YAML config,
+2. back up the config using a timestamp,
+3. create run directories,
+4. load train / val datasets,
+5. sample sparse sensors from configured `cond_fields`,
+6. optionally subsample query points for point-cloud models,
+7. train the selected wrapper with the FFM objective,
+8. periodically validate,
+9. save checkpoints and reconstruction plots. fileciteturn2file2 fileciteturn2file8
+
+### Example
+
+```bash
+python src/train_pointcloud_ffm.py --config Save_config/config_pointcloud_ffm.yaml
+```
+
+If we use the YAML path as the main control file, that is usually enough.
+
+---
+
+## 8. Evaluation workflow
+
+The standalone evaluator is designed to avoid manual checkpoint bookkeeping.
+
+Given a `Demo_Num`, it will:
+
+1. search `Save_config/pointcloud_ffm/` for matching YAML backups,
+2. ignore the timestamp during the search,
+3. choose the latest matching backup,
+4. recover the matching checkpoint directory,
+5. rebuild the model using the recovered YAML,
+6. evaluate a selected snapshot with `vis_cond_fields` / `vis_n_obs_list`,
+7. save new figures and metrics.
+
+### Example
+
+```bash
+python src/evaluate_ffm.py --Demo-Num 3 --split test --snapshot-index 0
+```
+
+Override visualization sensor settings manually:
+
+```bash
+python src/evaluate_ffm.py \
+  --Demo-Num 3 \
+  --split test \
+  --snapshot-index 5 \
+  --vis-cond-fields 0 2 \
+  --vis-n-obs-list 128 256
+```
+
+---
+
+## 9. Reconstruction and plotting
+
+The repo provides reconstruction plotting through `helpers.py`.
+
+The improved visualization keeps the same logic:
+
+- rebuild sparse observations exactly from the requested sensor recipe,
+- reconstruct all fields,
+- compute normalized L2 error per field,
+- save one figure per field,
+- save metrics to JSON.
+
+The updated plotting style uses:
+
+- `Ground truth | Reconstruction | |Error|` panels,
+- higher-quality contour plots,
+- sensor markers,
+- cleaner axes and shared colorbars.
+
+If desired, we can plot using the **original physical coordinates** while still keeping normalized coordinates for the model.
+
+---
+
+## 10. Dependencies
+
+Typical dependencies include:
+
+- `python >= 3.10`
+- `torch`
+- `numpy`
+- `matplotlib`
+- `h5py`
+- `pyyaml`
+- `tqdm`
+
+Additional optional dependencies:
+
+- `neuraloperator` or compatible `neuralop` install for the FNO baseline
+
+If we use FNO, must make sure the `neuralop.models.FNO` import is available.
+
+---
+
+## 11. Recommended usage pattern
+
+### Baseline progression
+
+A sensible experiment order is:
+
+1. **MLP + RBF** baseline
+2. **Perceiver** backbone
+3. **FNO** baseline on reshaped regular mesh
+
+This lets us compare:
+
+- local point-cloud inductive bias,
+- global latent-attention reasoning,
+- grid-based operator learning.
+
+### Sensor experiments
+
+Try the following staged recipes:
+
+- single-field sparse conditioning:
+  - `cond_fields: [2]`
+- two-field sparse conditioning:
+  - `cond_fields: [2, 3]`
+- cross-property combinations:
+  - `cond_fields: [0, 2]`
+  - `cond_fields: [2, 4]`
+
+---
+
+## 12. Notes and caveats
+
+- FNO requires explicit and compatible `Num_x`, `Num_y`.
+- Point-cloud models can use `n_query_points` subsampling, but FNO should use the full grid.
+- Evaluation on newer PyTorch versions may require careful checkpoint loading depending on how checkpoints were saved.
+- Plotting may be based on normalized or original coordinates depending on the helper version we choose.
+
+---
+
+## 13. Quick start
+
+### Train with YAML
+
+```bash
+python src/train_pointcloud_ffm.py --config Save_config/config_pointcloud_ffm.yaml
+```
+
+### Evaluate latest run for a demo number
+
+```bash
+python src/evaluate_ffm.py --Demo-Num 3 --split test --snapshot-index 0
+```
+
+### Switch backbone in YAML
+
+```yaml
+backbone: "mlp_rbf"
+# or
+backbone: "perceiver"
+# or
+backbone: "fno"
+```
+
+### FNO-specific YAML additions
+
+```yaml
+Num_x: 403
+Num_y: 100
+fno_modes_x: 32
+fno_modes_y: 8
+fno_hidden_channels: 64
+fno_n_layers: 4
+```
+
+---
+
+## 14. Summary
+
+This repo provides a unified framework for **conditional generative reconstruction of turbulent combustion fields** under sparse measurements. It supports:
+
+- generalized sparse multi-field conditioning,
+- point-cloud and grid-based backbones,
+- timestamped experiment tracking,
+- standalone evaluation and reconstruction,
+- and modular model definitions separated into `Model.py`.
+
+It is designed so that new backbones can be added while preserving the same dataset, sparse-conditioning API, training loop, and evaluation workflow.
