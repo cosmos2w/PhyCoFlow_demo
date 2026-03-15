@@ -15,7 +15,7 @@ The codebase supports several interchangeable backbones under a common training 
 - **ConditionalPointPerceiver**  — point-cloud backbone with latent attention
 - **FNO / FNOFFM**               — regular-grid baseline for reshaped mesh data
 
-The training pipeline treats each saved time step as one sample, loads the HDF5 dataset lazily, normalizes fields using train-split statistics, and saves timestamped configs, checkpoints, loss curves, and reconstruction figures into separate run directories. fileciteturn2file10 fileciteturn2file2
+The training pipeline treats each saved time step as one sample, loads the HDF5 dataset lazily, normalizes fields using train-split statistics, and saves timestamped configs, checkpoints, loss curves, and reconstruction figures into separate run directories.
 
 ---
 
@@ -75,7 +75,7 @@ In this repo, the combustion data can be reshaped to `Num_x = 403`, `Num_y = 100
 
 The expected main dataset file is:
 
-```text
+```
 Dataset/Merged_CH4COTU1P.h5
 ```
 
@@ -98,7 +98,7 @@ For plotting, we optionally keep the **original physical coordinates** and use t
 
 A minimal working structure is:
 
-```text
+```
 .
 ├── Dataset/
 │   └── Merged_CH4COTU1P.h5
@@ -147,7 +147,7 @@ Main training script. It:
 - trains and validates,
 - saves checkpoints,
 - writes loss CSV/plots,
-- periodically saves reconstruction figures. fileciteturn2file1 fileciteturn2file2
+- periodically saves reconstruction figures.
 
 #### `evaluate_ffm.py`
 Standalone evaluator. It:
@@ -165,29 +165,29 @@ Standalone evaluator. It:
 
 Each run is timestamped. The training script backs up the YAML to:
 
-```text
+```
 Save_config/pointcloud_ffm/config_pointcloud_ffm_DemoN{Demo_Num}_{timestamp}.yaml
 ```
 
 Model checkpoints are saved to:
 
-```text
+```
 Save_TrainedModel/ffm_tc_pointcloud_DemoN{Demo_Num}_{timestamp}/
 ```
 
 Loss logs are saved to:
 
-```text
+```
 Save_loss_csv/Loss_DemoN{Demo_Num}_{timestamp}/
 ```
 
 Reconstruction figures are saved to:
 
-```text
+```
 Save_reconstruction_files/ffm_tc_pointcloud/demo_N{Demo_Num}_{timestamp}/
 ```
 
-This structure is what allows `evaluate_ffm.py` to recover a trained run from `Demo_Num` alone. fileciteturn2file2 fileciteturn2file14
+This structure is what allows `evaluate_ffm.py` to recover a trained run from `Demo_Num` alone.
 
 ---
 
@@ -214,7 +214,7 @@ A typical config includes fields such as:
 - `n_obs_max_list`
 - `vis_cond_fields`
 - `vis_n_obs_list`
-- `Num_x`, `Num_y` for FNO runs. fileciteturn2file0
+- `Num_x`, `Num_y` for FNO runs.
 
 ### Important FNO note
 
@@ -274,7 +274,7 @@ The standard training workflow is:
 6. optionally subsample query points for point-cloud models,
 7. train the selected wrapper with the FFM objective,
 8. periodically validate,
-9. save checkpoints and reconstruction plots. fileciteturn2file2 fileciteturn2file8
+9. save checkpoints and reconstruction plots.
 
 ### Example
 
