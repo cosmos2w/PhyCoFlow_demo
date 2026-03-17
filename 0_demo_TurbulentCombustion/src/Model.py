@@ -555,6 +555,308 @@ class ConditionalPointPerceiver(nn.Module):
 
 
 # ------------------------------
+# Global-Local backbone
+# ------------------------------
+class ConditionalPointHybridLocalGlobalRBF(nn.Module):
+    """
+    Hybrid local-global backbone for conditional point-cloud FFM.
+
+    Core idea:
+      1) Build sparse sensor tokens from (obs_coords, obs_values, obs_field_ids)
+      2) Let a learned latent array attend to those sensor tokens
+      3) Let the sparse sensor tokens attend back to the processed latents
+         ("double dip") to get globally enriched local sensor tokens
+      4) Gather those refined local sensor tokens to query points with the
+         same RBF distance-based aggregation used by the current baseline
+      5) Extract one global summary from the latent array and concatenate it
+         separately to every query point
+
+    Important design choice:
+      - The latent summary / CLS-like token is NOT appended into the RBF gather.
+        It has no physical coordinates, so it should be used as a separate global
+        feature rather than a fake spatial sensor.
+    """
+    def __init__(
+        self,
+        n_fields: int,
+        coord_dim: int = 3,
+        hidden_dim: int = 256,
+        cond_dim: int = 128,
+        field_embed_dim: int = 32,
+        latent_dim: int = 256,
+        num_latents: int = 64,
+        num_heads: int = 8,
+        num_latent_blocks: int = 3,
+        ff_mult: int = 4,
+        attn_dropout: float = 0.0,
+        mlp_dropout: float = 0.0,
+        rbf_sigma: float = 0.05,
+        summary_type: str = "cls",   # choices: ["cls", "mean"]
+    ) -> None:
+        super().__init__()
+
+        if summary_type not in ["cls", "mean"]:
+            raise ValueError(f"summary_type must be 'cls' or 'mean', got {summary_type}")
+
+        self.n_fields = n_fields
+        self.coord_dim = coord_dim
+        self.rbf_sigma = rbf_sigma
+        self.latent_dim = latent_dim
+        self.num_latents = num_latents
+        self.summary_type = summary_type
+
+        # -------------------------
+        # Point/query branch
+        # -------------------------
+        # Query point token from [coords, x_t, t]
+        self.point_encoder = make_mlp(
+            in_dim=coord_dim + n_fields + 1,
+            hidden_dim=hidden_dim,
+            out_dim=hidden_dim,
+            depth=3,
+        )
+
+        # -------------------------
+        # Sparse sensor branch
+        # -------------------------
+        self.field_embed = nn.Embedding(n_fields, field_embed_dim)
+
+        # Initial sparse sensor token from [obs_coords, obs_value, field_embed]
+        self.sensor_in_proj = make_mlp(
+            in_dim=coord_dim + 1 + field_embed_dim,
+            hidden_dim=latent_dim,
+            out_dim=latent_dim,
+            depth=3,
+        )
+
+        # Project the refined sensor tokens to the local conditioning width
+        # used by the RBF gather.
+        self.sensor_out_proj = make_mlp(
+            in_dim=latent_dim,
+            hidden_dim=cond_dim,
+            out_dim=cond_dim,
+            depth=2,
+        )
+
+        # -------------------------
+        # Latent global processor
+        # -------------------------
+        self.latents = nn.Parameter(
+            torch.randn(num_latents, latent_dim) / math.sqrt(latent_dim)
+        )
+
+        # Latents attend to sparse sensor tokens
+        self.input_cross_attn = CrossAttentionBlock(
+            dim=latent_dim,
+            num_heads=num_heads,
+            ff_mult=ff_mult,
+            attn_dropout=attn_dropout,
+            mlp_dropout=mlp_dropout,
+        )
+
+        # Process latents in latent space
+        self.latent_blocks = nn.ModuleList([
+            SelfAttentionBlock(
+                dim=latent_dim,
+                num_heads=num_heads,
+                ff_mult=ff_mult,
+                attn_dropout=attn_dropout,
+                mlp_dropout=mlp_dropout,
+            )
+            for _ in range(num_latent_blocks)
+        ])
+
+        # Double-dip: refined local sensor tokens query the processed latents
+        self.sensor_back_attn = CrossAttentionBlock(
+            dim=latent_dim,
+            num_heads=num_heads,
+            ff_mult=ff_mult,
+            attn_dropout=attn_dropout,
+            mlp_dropout=mlp_dropout,
+        )
+
+        # Separate projection for the latent summary used as a global feature
+        self.summary_proj = make_mlp(
+            in_dim=latent_dim,
+            hidden_dim=hidden_dim,
+            out_dim=hidden_dim,
+            depth=2,
+        )
+
+        # -------------------------
+        # Final velocity head
+        # -------------------------
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim + hidden_dim + cond_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(mlp_dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(mlp_dropout),
+            nn.Linear(hidden_dim, n_fields),
+        )
+
+    def _build_sensor_tokens(
+        self,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Build sparse sensor tokens from:
+          - sensor coordinates
+          - observed scalar value
+          - field identity embedding
+        """
+        safe_field_ids = obs_field_ids.clamp_min(0)
+        field_feat = self.field_embed(safe_field_ids)                 # [B, M, E]
+        field_feat = field_feat * obs_mask.unsqueeze(-1)             # zero padded rows
+
+        sensor_in = torch.cat([obs_coords, obs_values, field_feat], dim=-1)
+        sensor_tokens = self.sensor_in_proj(sensor_in)               # [B, M, D]
+        sensor_tokens = sensor_tokens * obs_mask.unsqueeze(-1)
+        return sensor_tokens
+
+    def _encode_latents(
+        self,
+        sensor_tokens: torch.Tensor,
+        obs_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Let the learned latent array absorb and process the sparse sensor set.
+        """
+        bsz = sensor_tokens.shape[0]
+
+        # Expand learned latents across the batch
+        latents = self.latents.unsqueeze(0).expand(bsz, -1, -1)      # [B, L, D]
+
+        # key_padding_mask: True means "ignore this token"
+        sensor_padding_mask = ~obs_mask.bool()
+
+        # Latents attend to sparse sensor tokens
+        latents = self.input_cross_attn(
+            q=latents,
+            kv=sensor_tokens,
+            kv_padding_mask=sensor_padding_mask,
+        )
+
+        # Process in latent space
+        for block in self.latent_blocks:
+            latents = block(latents)
+
+        return latents
+
+    def _extract_global_summary(self, latents: torch.Tensor) -> torch.Tensor:
+        """
+        Convert the latent array into one global summary vector.
+
+        If summary_type == 'cls', the last latent slot is treated as the summary token.
+        If summary_type == 'mean', use the mean of all latent slots.
+        """
+        if self.summary_type == "cls":
+            summary = latents[:, -1]         # [B, D]
+        else:
+            summary = latents.mean(dim=1)    # [B, D]
+
+        return self.summary_proj(summary)    # [B, H]
+
+    def aggregate_sparse_obs(
+        self,
+        query_coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        refined_sensor_feat: torch.Tensor,
+        obs_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Gather the globally enriched local sensor features back to query points
+        using the same RBF distance-based weighting as the original baseline.
+        """
+        d2 = torch.cdist(query_coords, obs_coords, p=2.0) ** 2        # [B, N, M]
+        large = torch.full_like(d2, 1e6)
+        d2 = torch.where(obs_mask.unsqueeze(1) > 0, d2, large)
+
+        weights = torch.softmax(-d2 / (2 * self.rbf_sigma ** 2 + 1e-12), dim=-1)
+        local_cond = torch.einsum("bnm,bmd->bnd", weights, refined_sensor_feat)
+        return local_cond
+
+    def forward(
+        self,
+        t: torch.Tensor,
+        x_t: torch.Tensor,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Output:
+            velocity field of shape [B, N, C]
+        """
+        bsz, n_pts, _ = x_t.shape
+
+        # -------------------------
+        # Query-point features
+        # -------------------------
+        t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
+        point_feat = self.point_encoder(torch.cat([coords, x_t, t_feat], dim=-1))  # [B, N, H]
+
+        # -------------------------
+        # Local sensor tokens
+        # -------------------------
+        sensor_tokens = self._build_sensor_tokens(
+            obs_coords=obs_coords,
+            obs_values=obs_values,
+            obs_mask=obs_mask,
+            obs_field_ids=obs_field_ids,
+        )  # [B, M, D]
+
+        # -------------------------
+        # Global latent processing
+        # -------------------------
+        latents = self._encode_latents(sensor_tokens=sensor_tokens, obs_mask=obs_mask)  # [B, L, D]
+
+        # -------------------------
+        # Double-dip refinement:
+        # sensor tokens query back into the latent memory
+        # -------------------------
+        refined_sensor_tokens = self.sensor_back_attn(
+            q=sensor_tokens,
+            kv=latents,
+            kv_padding_mask=None,
+        )  # [B, M, D]
+
+        # Zero out padded sensor rows again after attention
+        refined_sensor_tokens = refined_sensor_tokens * obs_mask.unsqueeze(-1)
+
+        # Project refined sensor tokens to the local conditioning width
+        refined_sensor_feat = self.sensor_out_proj(refined_sensor_tokens)   # [B, M, cond_dim]
+        refined_sensor_feat = refined_sensor_feat * obs_mask.unsqueeze(-1)
+
+        # -------------------------
+        # RBF gather back to queries
+        # -------------------------
+        local_cond = self.aggregate_sparse_obs(
+            query_coords=coords,
+            obs_coords=obs_coords,
+            refined_sensor_feat=refined_sensor_feat,
+            obs_mask=obs_mask,
+        )  # [B, N, cond_dim]
+
+        # -------------------------
+        # Separate global summary
+        # -------------------------
+        global_feat = self._extract_global_summary(latents)                 # [B, H]
+        global_feat = global_feat.unsqueeze(1).expand(bsz, n_pts, -1)      # [B, N, H]
+
+        # -------------------------
+        # Final velocity prediction
+        # -------------------------
+        out = self.head(torch.cat([point_feat, global_feat, local_cond], dim=-1))
+        return out
+
+# ------------------------------
 # FNO backbone
 # ------------------------------
 class FNO(nn.Module):

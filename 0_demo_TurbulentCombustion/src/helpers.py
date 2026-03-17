@@ -569,7 +569,7 @@ def visualize_reconstruction(
     n_obs: Union[int, Sequence[int]] = 256,
     n_steps: int = 32,
     snapshot_index: int = 0,
-    file_prefix: Optional[str] = None,
+    file_tag: Optional[str] = None,
     save_metrics_json: bool = True,
 ):
     """
@@ -651,12 +651,12 @@ def visualize_reconstruction(
             field_name=name,
             epoch=epoch,
             save_dir=save_dir,
-            file_prefix=file_prefix,
+            file_prefix=file_tag,
         )
         metrics[name] = l2_error
 
     if save_metrics_json:
-        prefix = file_prefix if file_prefix is not None else f"epoch_{epoch:04d}"
+        prefix = file_tag if file_tag is not None else f"epoch_{epoch:04d}"
         metrics_path = os.path.join(save_dir, f"{prefix}_metrics.json")
         payload = {
             "epoch": int(epoch),

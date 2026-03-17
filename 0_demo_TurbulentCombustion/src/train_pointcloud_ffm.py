@@ -41,6 +41,7 @@ from Model import (
     ConditionalPointFFM, 
     ConditionalPointMLPRBF, 
     ConditionalPointPerceiver,
+    ConditionalPointHybridLocalGlobalRBF,
     PointCloudFFM,
     FNO,
     FNOFFM,
@@ -65,7 +66,7 @@ def parse_args():
     # Backbone selection
     # ------------------------------
     p.add_argument(
-        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno"], 
+        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf"], 
         help="Backbone type. point-cloud MLP+RBF, point-cloud Perceiver, or grid-based FNO baseline.")
 
     p.add_argument("--seed", type=int, default=42)
@@ -106,6 +107,9 @@ def parse_args():
                    help="Chunk size for Perceiver output decoding. Useful for full-resolution reconstruction.",)
     p.add_argument("--share-query-proj", action="store_true",
         help="If set, use the same projection for Perceiver encoder query tokens and decoder query tokens.",)
+
+    p.add_argument("--summary-type", type=str, default='cls',
+        help="Only for GL_rbf; select either cls or mean",)
 
     # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
@@ -416,6 +420,24 @@ def main():
             share_query_proj=args.share_query_proj,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
+    elif args.backbone == "GL_rbf":
+        backbone = ConditionalPointHybridLocalGlobalRBF(
+            n_fields=train_set.num_fields,
+            coord_dim=3,
+            hidden_dim=args.hidden_dim,
+            cond_dim=args.cond_dim,
+            field_embed_dim=args.field_embed_dim,
+            latent_dim=args.latent_dim,
+            num_latents=args.num_latents,
+            num_heads=args.num_heads,
+            num_latent_blocks=args.num_latent_blocks,
+            ff_mult=args.ff_mult,
+            attn_dropout=args.attn_dropout,
+            mlp_dropout=args.mlp_dropout,
+            rbf_sigma=args.rbf_sigma,
+            summary_type=args.summary_type,
+        )
+        model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":
         # FNO requires an explicit regular-grid interpretation of the dataset.
         try:
@@ -493,6 +515,7 @@ def main():
                 "field_names": train_set.field_names,
                 "method": "1_rectified_flow",
                 "backbone": args.backbone,
+                "summary_type": args.summary_type,
                 "ode_solver": args.ode_solver,
                 "Num_x": args.Num_x,
                 "Num_y": args.Num_y,
@@ -511,6 +534,22 @@ def main():
             
             step_list = args.benchmark_n_steps if args.benchmark_n_steps else [args.n_steps_generation]
             for nfe in step_list:
+                # recon_metrics = visualize_reconstruction(
+                #     model=model,
+                #     dataset=val_set,
+                #     epoch=epoch,
+                #     device=device,
+                #     save_dir=recon_dir_epoch,
+
+                #     cond_fields=args.vis_cond_fields,
+                #     n_obs=args.vis_n_obs_list,
+
+                #     n_steps=nfe,
+                #     ode_solver=args.ode_solver,
+                #     snapshot_index=0,
+                #     file_tag=f"{args.ode_solver}_nfe{nfe}",
+                # )
+
                 recon_metrics = visualize_reconstruction(
                     model=model,
                     dataset=val_set,
@@ -520,11 +559,10 @@ def main():
 
                     cond_fields=args.vis_cond_fields,
                     n_obs=args.vis_n_obs_list,
-
                     n_steps=nfe,
-                    ode_solver=args.ode_solver,
                     snapshot_index=0,
                     file_tag=f"{args.ode_solver}_nfe{nfe}",
+                    save_metrics_json = True,
                 )
 
                 metric_str = ", ".join([f"{k}:{v:.4e}" for k, v in recon_metrics.items()])

@@ -15,6 +15,7 @@ from helpers import TurbulentCombustionH5Dataset, visualize_reconstruction
 from Model import (
     ConditionalPointMLPRBF,
     ConditionalPointPerceiver,
+    ConditionalPointHybridLocalGlobalRBF,
     PointCloudFFM,
 )
 try:
@@ -167,6 +168,26 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
         model = FNOFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
 
+    if backbone_name == "GL_rbf":
+        backbone = ConditionalPointHybridLocalGlobalRBF(
+            n_fields=dataset.num_fields,
+            coord_dim=3,
+            hidden_dim=cfg.get("hidden_dim", 256),
+            cond_dim=cfg.get("cond_dim", 128),
+            field_embed_dim=cfg.get("field_embed_dim", 128),
+            latent_dim=cfg.get("latent_dim", 256),
+            num_latents=cfg.get("num_latents", 128),
+            num_heads=cfg.get("num_heads", 8),
+            num_latent_blocks=cfg.get("num_latent_blocks", 4),
+            ff_mult=cfg.get("ff_mult", 4),
+            attn_dropout=cfg.get("attn_dropout", 0),
+            mlp_dropout=cfg.get("mlp_dropout", 0),
+            rbf_sigma=cfg.get("rbf_sigma", 0.05),
+            summary_type=cfg.get("summary_type", "cls"),
+        )
+        model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
+        return model
+
     backbone = ConditionalPointMLPRBF(
         n_fields=dataset.num_fields,
         coord_dim=3,
@@ -176,6 +197,7 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
         rbf_sigma=cfg.get("rbf_sigma", 0.05),
     )
     model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
+
     return model
 
 

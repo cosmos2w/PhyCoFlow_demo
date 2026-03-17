@@ -1,19 +1,21 @@
 
 #----------------------------------------------------------
 
-# Notes: Changing to V3 version: multi-field sparse encoding + Rectified Flow + Perceiver backbone
+# Notes: Changing to V4 version: multi-field sparse encoding + Rectified Flow + Perceiver backbone + Global-Local mode
+
+# if later we push M very high, the next improvement would be a top-k nearest-sensor gather instead of full gather
 
 #----------------------------------------------------------
 
-Demo_Num: 7
-device_ids: [2]
+Demo_Num: 8
+device_ids: [1]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
-epochs : 5000
-batch_size : 128
+epochs : 10000
+batch_size : 192
 lr : 1.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -23,19 +25,19 @@ num_workers : 4
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "fno" # Selection in ["mlp_rbf", "perceiver", "fno"]
+backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
 # ----------------------------------------------------------
-hidden_dim : 512
-cond_dim : 256
-field_embed_dim : 256
+hidden_dim : 256
+cond_dim : 128
+field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
 
 # ----------------------------------------------------------
-# Hyperparameters for Perceiver backbone
+# Hyperparameters for Perceiver backbone or GL_rbf
 # ----------------------------------------------------------
 latent_dim: 256
 num_latents: 128
@@ -46,6 +48,8 @@ attn_dropout: 0.0
 mlp_dropout: 0.0
 decode_chunk_size: 4096
 share_query_proj: false
+
+summary_type: "cls" # Only for GL_rbf, mean or cls
 
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline
@@ -72,7 +76,7 @@ rff_features : 256
 rff_lengthscale : 0.15
 
 eval_every : 5
-save_every : 100         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
+save_every : 200         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
 n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # Setting up the conditioning process
