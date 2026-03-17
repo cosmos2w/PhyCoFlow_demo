@@ -300,7 +300,7 @@ def main():
         n_obs=vis_n_obs_list,
         n_steps=n_steps_generation,
         snapshot_index=args.snapshot_index,
-        file_prefix=f"snapshot_{args.snapshot_index:04d}",
+        file_tag=f"snapshot_{args.snapshot_index:04d}",
         save_metrics_json=True,
     )
 
