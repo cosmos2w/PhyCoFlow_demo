@@ -57,6 +57,9 @@ That generalized interface is what lets the same training loop work with the poi
 
 This model encodes each query point from `(coords, x_t, t)`, encodes each sparse sensor from `(obs_coords, obs_value, field_id)`, then uses an RBF-weighted aggregation so nearby sensors influence each query point most strongly. 
 A global pooled feature is also added before predicting the velocity field.
+- t is the flow-matching interpolation time
+- x1 is the true normalized snapshot sampled from the dataset.
+- x_t is an intermediate corrupted/interpolated state along the generative path between prior noise and the target snapshot.
 
 #### B. Point-cloud Perceiver backbone
 

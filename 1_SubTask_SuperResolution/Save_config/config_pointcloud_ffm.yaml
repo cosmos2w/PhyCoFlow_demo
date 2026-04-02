@@ -1,0 +1,127 @@
+
+#----------------------------------------------------------
+
+# For multi-resolution training & super-resolution task
+
+# Option A — simplest workflow: 
+# Step-1: Put the multi-resolution settings in this YAML as the default source of truth
+# Step 2: Run only: python src/train_pointcloud_ffm.py --config Save_config/config_pointcloud_ffm.yaml
+
+# Option B — explicit / manual manifest build
+# We can run:
+# python src/organize_train_MultiRes.py \
+#     --processed-root ./Dataset/PDE_Bench/Processed \
+#     --dataset-name CFD \
+#     --selected-field-idx 0 \
+#     --multires-ratio 1:1:1
+# That creates a manifest JSON, for example something like: Dataset/PDE_Bench/Processed/manifests/CFD_field0_ratio_1-1-1.json 
+
+# Then in YAML set: multires_manifest_path: "Dataset/PDE_Bench/Processed/manifests/CFD_field0_ratio_1-1-1.json"
+# and run training normally: python src/train_pointcloud_ffm.py --config Save_config/config_pointcloud_ffm.yaml
+# This forces training to reuse exactly that manifest.
+
+#----------------------------------------------------------
+
+Demo_Num: 0
+device_ids: [2]
+
+# data: "Dataset/Merged_CH4COTU1P.h5"
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+seed : 42
+epochs : 10000
+batch_size : 512
+lr : 2.0e-4
+weight_decay : 1.0e-6
+train_ratio : 0.9
+time_stride : 1
+num_workers : 4
+
+# ----------------------------------------------------------
+# Dataset mode
+# ----------------------------------------------------------
+dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
+# ----------------------------------------------------------
+# PDEBench multi-resolution settings
+# ----------------------------------------------------------
+pdebench_dataset_name: "RD"         # ["RD", "CFD"]
+pdebench_processed_root: "Dataset/PDE_Bench/Processed"
+selected_field_idx_raw: 0           # RD: Species_0 ; CFD: density
+multires_ratio: "1:1:1"             # one of "1:1:1", "1:1:0", "2:1:0"
+multires_manifest_path: ""          # optional; leave empty for auto-build
+eval_resolution: "H"
+
+# ----------------------------------------------------------
+# Backbone selection
+# ----------------------------------------------------------
+backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+
+# ----------------------------------------------------------
+# Hyperparameters for mlp_rbf backbone
+# ----------------------------------------------------------
+hidden_dim : 256
+cond_dim : 128
+field_embed_dim : 128
+sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
+rbf_sigma : 0.05
+
+# ----------------------------------------------------------
+# Hyperparameters for Perceiver backbone or GL_rbf
+# ----------------------------------------------------------
+latent_dim: 128
+num_latents: 128
+num_heads: 8
+num_latent_blocks: 4
+ff_mult: 4
+attn_dropout: 0.0
+mlp_dropout: 0.0
+decode_chunk_size: 4096
+share_query_proj: false
+
+summary_type: "cls" # Only for GL_rbf, mean or cls
+
+# ----------------------------------------------------------
+# Regular-grid specification required by the FNO baseline
+# These MUST be provided and must match the dataset, otherwise training will warn and exit.
+# ----------------------------------------------------------
+Num_x: 128
+Num_y: 128
+# ----------------------------------------------------------
+# Hyperparameters for FNO backbone
+# The tensor fed to FNO is shaped [B, C, Num_y, Num_x], so modes are specified separately along x and y.
+# ----------------------------------------------------------
+fno_modes_x: 16
+fno_modes_y: 16
+fno_hidden_channels: 64
+fno_n_layers: 4
+
+
+# ----------------------------------------------------------
+# These are hyperparameters for the training process
+# ----------------------------------------------------------
+n_query_points : 2048    # Number of query points to be evaluated in training process
+prior : "rff"            # choices=["iid", "rff"]; idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
+rff_features : 256
+rff_lengthscale : 0.15
+
+eval_every : 5
+save_every : 500         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
+n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
+
+# ----------------------------------------------------------
+# Setting up the conditioning process
+# For PDEBench multi-resolution task, the dataset slices ONE raw field only, 
+# so the model-space field index is always 0.
+# Here, n_obs_min_list and n_obs_max_list are default for High-Resolution data, 
+# and will down scale automatically for others automatically in training
+cond_fields: [0]
+n_obs_min_list: [256]
+n_obs_max_list: [512]
+
+vis_cond_fields:
+vis_n_obs_list: [256]
+# ----------------------------------------------------------
+
+# ===== Rectified Flow generation controls =====
+ode_solver : "euler"
+benchmark_n_steps : [2, 4, 16]

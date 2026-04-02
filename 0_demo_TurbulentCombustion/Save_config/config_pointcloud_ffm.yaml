@@ -7,16 +7,16 @@
 
 #----------------------------------------------------------
 
-Demo_Num: 8
-device_ids: [1]
+Demo_Num: 1
+device_ids: [2]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
 epochs : 10000
-batch_size : 192
-lr : 1.0e-4
+batch_size : 256
+lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
 time_stride : 1
@@ -25,7 +25,7 @@ num_workers : 4
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "mlp_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone

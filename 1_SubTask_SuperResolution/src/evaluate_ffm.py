@@ -10,7 +10,8 @@ import yaml
 import pickle
 import numpy as np
 
-from helpers import TurbulentCombustionH5Dataset, visualize_reconstruction
+from helpers import TurbulentCombustionH5Dataset, PDEBenchMultiResDataset, visualize_reconstruction
+from organize_train_MultiRes import build_manifest, default_manifest_path
 
 from Model import (
     ConditionalPointMLPRBF,
@@ -45,6 +46,16 @@ def parse_args():
     p.add_argument("--n-steps-generation", type=int, default = 8,
                    help="Override generation steps. Defaults to YAML n_steps_generation if present.")
     p.add_argument("--device", type=str, default=None, help="e.g. cuda:0 or cpu")
+
+    p.add_argument(
+        "--dataset-mode",
+        type=str,
+        default="pdebench_multires",
+        choices=["default", "pdebench_multires"],
+        help="default: old single-file combustion workflow; pdebench_multires: new mixed-resolution PDEBench workflow.",
+    )
+    p.add_argument("--eval-resolution", type=str, default="H", choices=["L", "M", "H"],
+                   help="For PDEBench multi-resolution task, rebuild this resolution at evaluation time.")
     
     return p.parse_args()
 
@@ -114,6 +125,16 @@ def _normalize_eval_config(cfg: dict) -> dict:
 
     if cfg.get("backbone") is None:
         cfg["backbone"] = "mlp_rbf"
+
+    if cfg.get("dataset_mode", "default") == "pdebench_multires":
+        cfg["cond_fields"] = [0]
+        cfg["vis_cond_fields"] = [0]
+        if cfg.get("n_obs_min_list") not in (None, ""):
+            cfg["n_obs_min_list"] = [int(cfg["n_obs_min_list"][0])]
+        if cfg.get("n_obs_max_list") not in (None, ""):
+            cfg["n_obs_max_list"] = [int(cfg["n_obs_max_list"][0])]
+        if cfg.get("vis_n_obs_list") not in (None, ""):
+            cfg["vis_n_obs_list"] = [int(cfg["vis_n_obs_list"][0])]
 
     return cfg
 
@@ -202,6 +223,33 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
     return model
 
 
+def build_or_find_multires_manifest_for_eval(demo_root: Path, cfg: dict) -> str:
+    processed_root = Path(demo_root) / cfg.get("pdebench_processed_root", "Dataset/PDE_Bench/Processed")
+
+    explicit = cfg.get("multires_manifest_path", "")
+    if explicit not in [None, ""]:
+        return str(Path(demo_root) / explicit)
+
+    path = default_manifest_path(
+        processed_root=processed_root,
+        dataset_name=cfg["pdebench_dataset_name"],
+        selected_field_idx=cfg["selected_field_idx_raw"],
+        multires_ratio=cfg["multires_ratio"],
+    )
+    if not path.exists():
+        manifest = build_manifest(
+            processed_root=processed_root,
+            dataset_name=cfg["pdebench_dataset_name"],
+            selected_field_idx=cfg["selected_field_idx_raw"],
+            multires_ratio=cfg["multires_ratio"],
+            train_fraction=cfg.get("train_ratio", 0.9),
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(manifest, f, indent=2)
+    return str(path)
+
+
 def main():
     args = parse_args()
 
@@ -237,14 +285,25 @@ def main():
 
     device = torch.device(args.device if args.device is not None else ("cuda:0" if torch.cuda.is_available() else "cpu"))
 
-    dataset = TurbulentCombustionH5Dataset(
-        cfg.get("data", "Dataset/Merged_CH4COTU1P.h5"),
-        split=args.split,
-        train_ratio=cfg.get("train_ratio", 0.9),
-        seed=cfg.get("seed", 42),
-        time_stride=cfg.get("time_stride", 1),
-        stats_path=str(model_root / "dataset_stats.pt"),
-    )
+    if cfg.get("dataset_mode", "default") == "pdebench_multires":
+        manifest_path = build_or_find_multires_manifest_for_eval(demo_root, cfg)
+
+        dataset = PDEBenchMultiResDataset(
+            manifest_path=manifest_path,
+            split=args.split,
+            eval_resolution=args.eval_resolution,
+            force_resolution=None,
+            stats_path=str(model_root / "dataset_stats.pt"),
+        )
+    else:
+        dataset = TurbulentCombustionH5Dataset(
+            cfg.get("data", "Dataset/Merged_CH4COTU1P.h5"),
+            split=args.split,
+            train_ratio=cfg.get("train_ratio", 0.9),
+            seed=cfg.get("seed", 42),
+            time_stride=cfg.get("time_stride", 1),
+            stats_path=str(model_root / "dataset_stats.pt"),
+        )
 
     try:
         model = _build_model(cfg, dataset).to(device)
