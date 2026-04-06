@@ -56,6 +56,11 @@ def parse_args():
     )
     p.add_argument("--eval-resolution", type=str, default="H", choices=["L", "M", "H"],
                    help="For PDEBench multi-resolution task, rebuild this resolution at evaluation time.")
+    p.add_argument(
+        "--Case-Truncate-Ratio", dest="Case_Truncate_Ratio", type=float, default=0.0,
+        help="Drop the first ratio fraction of time frames from each PDEBench case before organizing the dataset. "
+             "0 means no truncation; must satisfy 0 <= ratio < 1.",
+    )
     
     return p.parse_args()
 
@@ -229,12 +234,15 @@ def build_or_find_multires_manifest_for_eval(demo_root: Path, cfg: dict) -> str:
     explicit = cfg.get("multires_manifest_path", "")
     if explicit not in [None, ""]:
         return str(Path(demo_root) / explicit)
+    
+    case_truncate_ratio = cfg.get("Case_Truncate_Ratio", 0.0)
 
     path = default_manifest_path(
         processed_root=processed_root,
         dataset_name=cfg["pdebench_dataset_name"],
         selected_field_idx=cfg["selected_field_idx_raw"],
         multires_ratio=cfg["multires_ratio"],
+        case_truncate_ratio = cfg.get("Case_Truncate_Ratio", 0.0)
     )
     if not path.exists():
         manifest = build_manifest(
@@ -243,6 +251,7 @@ def build_or_find_multires_manifest_for_eval(demo_root: Path, cfg: dict) -> str:
             selected_field_idx=cfg["selected_field_idx_raw"],
             multires_ratio=cfg["multires_ratio"],
             train_fraction=cfg.get("train_ratio", 0.9),
+            case_truncate_ratio=case_truncate_ratio,
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:

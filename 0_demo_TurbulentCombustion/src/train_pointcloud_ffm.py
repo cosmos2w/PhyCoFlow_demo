@@ -79,7 +79,7 @@ def parse_args():
     p.add_argument("--num-workers", type=int, default=4)
 
     # ------------------------------
-    # These are hyperparameters for mlp_rbf backbone
+    # These are hyperparameters for mlp_rbf backbone or part of GL_rbf
     # ------------------------------
     p.add_argument("--hidden-dim", type=int, default=256)
     p.add_argument("--cond-dim", type=int, default=128)
@@ -87,7 +87,7 @@ def parse_args():
     p.add_argument("--rbf-sigma", type=float, default=0.05)
 
     # ------------------------------
-    # These are hyperparameters for Perceiver backbone
+    # These are hyperparameters for Perceiver backbone or part of GL_rbf
     # ------------------------------
     p.add_argument("--latent-dim", type=int, default=256, 
                    help="Token / latent width for the Perceiver backbone.",)
@@ -110,6 +110,26 @@ def parse_args():
 
     p.add_argument("--summary-type", type=str, default='cls',
         help="Only for GL_rbf; select either cls or mean",)
+
+    # ----------------------------------------------------------
+    # Hybrid local-global gather options
+    # ----------------------------------------------------------
+    p.add_argument(
+        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate"],
+        help="Gather mode used by ConditionalPointHybridLocalGlobalRBF. 'rbf' preserves the current full gather as default.",
+    )
+    p.add_argument(
+        "--gather-topk", type=int, default=32, 
+        help="Number of nearest refined sensor tokens used in top-k gather modes.",
+    )
+    p.add_argument(
+        "--gather-query-chunk-size", type=int, default=None,
+        help="Optional query chunk size for memory-friendly gathering. Applies to all gather modes.",
+    )
+    p.add_argument(
+        "--learnable-rbf-sigma", action="store_true",
+        help="If set, make the RBF sigma in the hybrid gather learnable.",
+    )
 
     # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
@@ -436,6 +456,11 @@ def main():
             mlp_dropout=args.mlp_dropout,
             rbf_sigma=args.rbf_sigma,
             summary_type=args.summary_type,
+
+            gather_mode=args.gather_mode,
+            gather_topk=args.gather_topk,
+            gather_query_chunk_size=args.gather_query_chunk_size,
+            learnable_rbf_sigma=args.learnable_rbf_sigma,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":

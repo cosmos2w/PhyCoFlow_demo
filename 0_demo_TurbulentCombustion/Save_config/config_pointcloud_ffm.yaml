@@ -1,13 +1,13 @@
 
 #----------------------------------------------------------
 
-# Notes: Changing to V4 version: multi-field sparse encoding + Rectified Flow + Perceiver backbone + Global-Local mode
+# Notes: Changing to V5 version: multi-field sparse encoding + Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
 
 # if later we push M very high, the next improvement would be a top-k nearest-sensor gather instead of full gather
 
 #----------------------------------------------------------
 
-Demo_Num: 1
+Demo_Num: 9
 device_ids: [2]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
@@ -15,7 +15,7 @@ save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
 epochs : 10000
-batch_size : 256
+batch_size : 128
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -25,7 +25,7 @@ num_workers : 4
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "mlp_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -39,7 +39,7 @@ rbf_sigma : 0.05
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf
 # ----------------------------------------------------------
-latent_dim: 256
+latent_dim: 128
 num_latents: 128
 num_heads: 8
 num_latent_blocks: 4
@@ -50,6 +50,11 @@ decode_chunk_size: 4096
 share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
+
+gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
+gather_topk: 32
+gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
+learnable_rbf_sigma: true
 
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline
@@ -76,7 +81,7 @@ rff_features : 256
 rff_lengthscale : 0.15
 
 eval_every : 5
-save_every : 200         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
+save_every : 500         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
 n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # Setting up the conditioning process

@@ -89,6 +89,11 @@ def parse_args():
                    help="Optional path to a prebuilt multi-resolution manifest JSON. If empty, it will be auto-generated/located.")
     p.add_argument("--eval-resolution", type=str, default="H", choices=["L", "M", "H"],
                    help="Resolution to rebuild in evaluate_ffm.py. Training validation remains high-resolution by default.")
+    p.add_argument(
+        "--Case-Truncate-Ratio", dest="Case_Truncate_Ratio", type=float, default=0.0,
+        help="Drop the first ratio fraction of time frames from each PDEBench case before organizing the dataset. "
+             "0 means no truncation; must satisfy 0 <= ratio < 1.",
+    )
 
     # ------------------------------
     # Backbone selection
@@ -233,6 +238,7 @@ def build_or_find_multires_manifest(demo_dir: str, args) -> str:
         dataset_name=args.pdebench_dataset_name,
         selected_field_idx=args.selected_field_idx_raw,
         multires_ratio=args.multires_ratio,
+        case_truncate_ratio=args.Case_Truncate_Ratio,
     )
 
     if not default_path.exists():
@@ -242,6 +248,7 @@ def build_or_find_multires_manifest(demo_dir: str, args) -> str:
             selected_field_idx=args.selected_field_idx_raw,
             multires_ratio=args.multires_ratio,
             train_fraction=args.train_ratio,
+            case_truncate_ratio=args.Case_Truncate_Ratio,
         )
         default_path.parent.mkdir(parents=True, exist_ok=True)
         with open(default_path, "w") as f:
@@ -589,7 +596,7 @@ def main():
 
         print(f"[*] PDEBench multi-resolution mode enabled.")
         print(f"[*] Dataset      : {train_set.dataset_name}")
-        print(f"[*] Target field : {train_set.field_names[0]}")
+        print(f"[*] Target field : {train_set.field_names[args.selected_field_idx_raw]}")
         print(f"[*] Train ratio  : {args.multires_ratio}")
         print(f"[*] Val res      : H")
         if force_resolution is not None:
@@ -778,13 +785,11 @@ def main():
             }
             torch.save(ckpt, save_dir / "last.pt")
 
-            # if val_loss < best_val:
-            #     best_val = val_loss
-
-            # For multi-reso, we use train loss to save best
-            # Since val loss is not stable
-            if tr_loss < best_val:
-                best_val = tr_loss
+            if val_loss < best_val:
+                best_val = val_loss
+            # use train loss to save best (?)
+            # if tr_loss < best_val:
+            #     best_val = tr_loss
 
                 torch.save(ckpt, save_dir / "best.pt")
                 print('Saving the best model...')

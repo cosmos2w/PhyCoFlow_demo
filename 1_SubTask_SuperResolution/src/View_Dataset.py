@@ -151,7 +151,7 @@ def __create_png(
 def create_png(
     field: np.ndarray, times: np.ndarray, triang: mtri.Triangulation,
     t_idx: int, out: Path, vmin: float, vmax: float, cmap: str = "viridis",
-    marker_size: float = 5.0  # Adjustable marker size for the scatter points
+    marker_size: float = 8.0  # Adjustable marker size for the scatter points
 ) -> None:
     """
     Render *one* frame (scatter plot) and write it to *out*.
@@ -211,7 +211,7 @@ def main() -> None:
     root    = Path(__file__).resolve().parent.parent   # project/
     # h5_path = root / "Dataset" / "Merged_CH4COTU1P.h5"
     data_TYPE = 'RD'
-    Res = 'L' # H, M, L
+    Res = 'H' # H, M, L
     h5_path = root / "Dataset" / "PDE_Bench" / "Processed" / f"{data_TYPE}_{Res}_Res.h5"
 
     # Dataset/PDE_Bench/Processed/RD_H_Res.h5

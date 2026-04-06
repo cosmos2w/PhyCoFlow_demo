@@ -275,6 +275,12 @@ class PDEBenchMultiResDataset(Dataset):
 
         self.manifest_path = str(manifest_path)
         self.manifest = load_multires_manifest(self.manifest_path)
+
+        self.case_truncate_ratio = float(self.manifest.get("case_truncate_ratio", 0.0))
+        self.time_start_idx = int(self.manifest.get("time_start_idx", 0))
+        self.n_time_total = int(self.manifest.get("n_time_total", self.manifest["n_time"]))
+        self.n_time = int(self.manifest["n_time"])   # effective number of usable frames after truncation
+
         self.split = split
         self.eval_resolution = eval_resolution.upper()
         self.force_resolution = None if force_resolution is None else force_resolution.upper()
@@ -303,22 +309,24 @@ class PDEBenchMultiResDataset(Dataset):
         self.indices_by_res = {"L": [], "M": [], "H": []}
 
         split_info = self.manifest["split"]
-        n_time = int(self.manifest["n_time"])
+        # n_time = int(self.manifest["n_time"])
 
         if split == "train":
             for res_tag in ["L", "M", "H"]:
                 case_ids = split_info["train_cases_by_res"][res_tag]
                 for case_id in case_ids:
-                    for t_idx in range(n_time):
+                    for t_idx in range(self.n_time):
+                        t_abs = self.time_start_idx + t_idx
                         ds_idx = len(self.entries)
-                        self.entries.append((res_tag, int(case_id), int(t_idx)))
+                        self.entries.append((res_tag, int(case_id), int(t_abs)))
                         self.indices_by_res[res_tag].append(ds_idx)
         elif split in ["val", "test"]:
             case_ids = split_info["val_cases"]
             for case_id in case_ids:
-                for t_idx in range(n_time):
+                for t_idx in range(self.n_time):
+                    t_abs = self.time_start_idx + t_idx
                     ds_idx = len(self.entries)
-                    self.entries.append((self.eval_resolution, int(case_id), int(t_idx)))
+                    self.entries.append((self.eval_resolution, int(case_id), int(t_abs)))
                     self.indices_by_res[self.eval_resolution].append(ds_idx)
         else:
             raise ValueError(f"Unknown split: {split}")
@@ -380,7 +388,10 @@ class PDEBenchMultiResDataset(Dataset):
 
         for start in range(0, len(train_cases), self.stats_chunk_cases):
             case_chunk = train_cases[start:start + self.stats_chunk_cases]
-            arr = h5["fields"][case_chunk, :, :, 0, 0, self.selected_field_idx_raw]   # [B_case, T, N]
+
+            # arr = h5["fields"][case_chunk, :, :, 0, 0, self.selected_field_idx_raw]   # [B_case, T, N]
+            arr = h5["fields"][case_chunk, self.time_start_idx:, :, 0, 0, self.selected_field_idx_raw]
+
             x = torch.from_numpy(arr.astype(np.float32)).reshape(-1, 1)
             total_sum += x.sum(dim=0, dtype=torch.float64)
             total_sq += (x.double() ** 2).sum(dim=0)
@@ -715,12 +726,12 @@ def _save_single_field_plot(
     err_min = float(positive_err.min()) if positive_err.size > 0 else 0.0
     err_max = float(err.max()) if err.size > 0 else 1.0
 
-    fig = plt.figure(figsize=(16, 12))
-    gs = gridspec.GridSpec(3, 1, wspace=0.0, hspace=0.20)
+    fig = plt.figure(figsize=(14, 5))
+    gs = gridspec.GridSpec(1, 3, wspace=0.2, hspace=0.0)
 
     ax_true = fig.add_subplot(gs[0, 0])
-    ax_pred = fig.add_subplot(gs[1, 0])
-    ax_err = fig.add_subplot(gs[2, 0])
+    ax_pred = fig.add_subplot(gs[0, 1])
+    ax_err = fig.add_subplot(gs[0, 2])
 
     im_true = ax_true.tricontourf(
         triang, true_f, levels=100, cmap=cmap_field,
@@ -750,7 +761,7 @@ def _save_single_field_plot(
     if sensor_coords is not None and len(sensor_coords) > 0:
         ax_true.scatter(
             sensor_coords[:, 0], sensor_coords[:, 1],
-            s=12.5, c="none", edgecolors="tab:green", linewidths=2.0,
+            s=6, c="none", edgecolors="tab:green", linewidths=1.0,
             marker="o", zorder=4
         )
 

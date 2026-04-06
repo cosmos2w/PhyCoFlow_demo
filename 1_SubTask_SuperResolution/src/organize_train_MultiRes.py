@@ -1,5 +1,6 @@
 import argparse
 import json
+import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -15,6 +16,14 @@ python organize_train_MultiRes.py \
     --selected-field-idx 0 \
     --multires-ratio 1:1:1
 """
+
+def validate_case_truncate_ratio(case_truncate_ratio: float) -> float:
+    ratio = float(case_truncate_ratio)
+    if ratio < 0.0 or ratio >= 1.0:
+        raise ValueError(
+            f"Case_Truncate_Ratio must satisfy 0 <= ratio < 1, got {ratio}."
+        )
+    return ratio
 
 def parse_ratio(ratio: str) -> Tuple[int, int, int]:
     """
@@ -151,6 +160,7 @@ def build_manifest(
     selected_field_idx: int,
     multires_ratio: str,
     train_fraction: float = 0.9,
+    case_truncate_ratio: float = 0.0,
 ) -> Dict:
     """
     Constructs the overall manifest dictionary detailing how the dataset is split 
@@ -158,6 +168,7 @@ def build_manifest(
     """
     info = infer_dataset_info(processed_root, dataset_name)
     n_cases = info["n_cases"]
+    case_truncate_ratio = validate_case_truncate_ratio(case_truncate_ratio)
 
     if not (0 <= selected_field_idx < info["n_fields"]):
         raise ValueError(
@@ -179,6 +190,15 @@ def build_manifest(
         "H": train_cases[nL + nM:nL + nM + nH],
     }
 
+    n_time_total = int(info["n_time"])
+    time_start_idx = int(np.floor(case_truncate_ratio * n_time_total))
+    n_time_effective = n_time_total - time_start_idx
+    if n_time_effective <= 0:
+        raise ValueError(
+            f"Case_Truncate_Ratio={case_truncate_ratio} leaves no usable frames "
+            f"(n_time_total={n_time_total}, time_start_idx={time_start_idx})."
+        )
+
     manifest = {
         "dataset_mode": "pdebench_multires",
         "dataset_name": info["dataset_name"],
@@ -187,7 +207,13 @@ def build_manifest(
         "multires_ratio": multires_ratio,
         "train_fraction": train_fraction,
         "n_cases": info["n_cases"],
-        "n_time": info["n_time"],
+        # "n_time": info["n_time"],
+
+        "case_truncate_ratio" : float(case_truncate_ratio),
+        "time_start_idx"      : int(time_start_idx),
+        "n_time_total"        : int(n_time_total),
+        "n_time"              : int(n_time_effective),   # keep n_time as the effective number for downstream loaders
+
         "n_fields_raw": info["n_fields"],
         "field_names_raw": info["field_names"],
         "paths": info["paths"],
@@ -205,12 +231,13 @@ def build_manifest(
     return manifest
 
 
-def default_manifest_path(processed_root: Path, dataset_name: str, selected_field_idx: int, multires_ratio: str) -> Path:
+def default_manifest_path(processed_root: Path, dataset_name: str, selected_field_idx: int, multires_ratio: str, case_truncate_ratio: float = 0.0) -> Path:
     """Generates a default file path to save the JSON manifest based on its parameters."""
     safe_ratio = multires_ratio.replace(":", "-")
     out_dir = processed_root / "manifests"
     out_dir.mkdir(parents=True, exist_ok=True)
-    return out_dir / f"{dataset_name.upper()}_field{selected_field_idx}_ratio_{safe_ratio}.json"
+    truncate_tag = str(case_truncate_ratio).replace(".", "p")
+    return out_dir / f"{dataset_name.upper()}_field{selected_field_idx}_ratio_{safe_ratio}_truncate_{truncate_tag}.json"
 
 
 def main():
@@ -228,6 +255,12 @@ def main():
                    help="Percentage of total cases to allocate for training vs validation.")
     p.add_argument("--output", type=str, default=None, 
                    help="Custom output path for the JSON manifest.")
+    
+    p.add_argument(
+        "--Case-Truncate-Ratio", dest="Case_Truncate_Ratio", type=float, default=0.0,
+        help="Drop the first ratio fraction of time frames from each case before organizing the dataset. "
+             "0 means no truncation; must satisfy 0 <= ratio < 1.",)
+
     args = p.parse_args()
 
     processed_root = Path(args.processed_root)
@@ -237,10 +270,11 @@ def main():
         selected_field_idx=args.selected_field_idx,
         multires_ratio=args.multires_ratio,
         train_fraction=args.train_fraction,
+        case_truncate_ratio=args.Case_Truncate_Ratio,
     )
 
     out_path = Path(args.output) if args.output is not None else default_manifest_path(
-        processed_root, args.dataset_name, args.selected_field_idx, args.multires_ratio
+        processed_root, args.dataset_name, args.selected_field_idx, args.multires_ratio, args.case_truncate_ratio,
     )
     
     out_path.parent.mkdir(parents=True, exist_ok=True)
