@@ -196,7 +196,7 @@ def main() -> None:
                         help="case number (e.g. 0)")
     parser.add_argument("--channel", type=int, default = 0,
                         help="0 ≤ channel ≤ 4")
-    parser.add_argument("--T_ini", type=int, default = 95,
+    parser.add_argument("--T_ini", type=int, default = 10,
                         help="first time index to plot (0-based)")
     parser.add_argument("--N_T", type=int, default = 1,
                         help="number of *consecutive* time steps to plot")
@@ -210,16 +210,16 @@ def main() -> None:
 
     root    = Path(__file__).resolve().parent.parent   # project/
     # h5_path = root / "Dataset" / "Merged_CH4COTU1P.h5"
-    data_TYPE = 'RD'
+    data_TYPE = 'CFD'
     Res = 'H' # H, M, L
-    h5_path = root / "Dataset" / "PDE_Bench" / "Processed" / f"{data_TYPE}_{Res}_Res.h5"
+    h5_path = root / "Dataset" / "PDE_Bench" / "Processed" / f"{data_TYPE}_{Res}_res.h5"
 
     # Dataset/PDE_Bench/Processed/RD_H_Res.h5
     # Dataset/PDE_Bench/Processed/RD_M_Res.h5
     # Dataset/PDE_Bench/Processed/RD_L_Res.h5
-    # Dataset/PDE_Bench/Processed/CFD_H_Res.h5
-    # Dataset/PDE_Bench/Processed/CFD_M_Res.h5
-    # Dataset/PDE_Bench/Processed/CFD_L_Res.h5
+    # Dataset/PDE_Bench/Processed/CFD_H_res.h5
+    # Dataset/PDE_Bench/Processed/CFD_M_res.h5
+    # Dataset/PDE_Bench/Processed/CFD_L_res.h5
 
     if not h5_path.exists():
         sys.exit(f"ERROR: file not found: {h5_path}")
@@ -236,14 +236,15 @@ def main() -> None:
     # ------------------------------------------------------------------ plots
     tri = triangulation(X)
 
-    # fmin, fmax = field.min(), field.max()
-    print(f'\nUsing hand-set min-max range!!!\n')
-    fmin, fmax = -1, 1
+    fmin, fmax = field.min(), field.max()
+    # print(f'\nUsing hand-set min-max range!!!\n')
+    # fmin, fmax = -1, 1
 
     t_indices = range(args.T_ini, args.T_ini + args.N_T)
 
     out_subdir = (
         args.out_dir
+        / f"{data_TYPE}"
         / f"Case_{args.case}"
         / f"ch{args.channel}"
     )

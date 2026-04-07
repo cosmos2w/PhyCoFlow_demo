@@ -2,13 +2,14 @@
 #----------------------------------------------------------
 
 # Notes: Changing to V5 version: multi-field sparse encoding + Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
-
 # if later we push M very high, the next improvement would be a top-k nearest-sensor gather instead of full gather
 
 #----------------------------------------------------------
+# Test new GL_rbf with top_k gated gathering & using keops gathering
+#----------------------------------------------------------
 
-Demo_Num: 9
-device_ids: [2]
+Demo_Num: 10
+device_ids: [1]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
@@ -51,10 +52,11 @@ share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
 
-gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
-gather_topk: 32
+gather_mode: "topk_rbf_gate"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
+gather_topk: 24
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
+neighbor_backend: "keops" # choices: ["auto", "torch", "keops"], keops is more efficient
 
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline
@@ -70,7 +72,6 @@ fno_modes_x: 32
 fno_modes_y: 8
 fno_hidden_channels: 64
 fno_n_layers: 4
-
 
 # ----------------------------------------------------------
 # These are hyperparameters for the training process

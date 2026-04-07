@@ -130,6 +130,10 @@ def parse_args():
         "--learnable-rbf-sigma", action="store_true",
         help="If set, make the RBF sigma in the hybrid gather learnable.",
     )
+    p.add_argument(
+        "--neighbor-backend", type=str, default="torch", choices=["auto", "torch", "keops"],
+        help="Neighbor / kernel backend for the hybrid gather. "
+            "'auto' uses KeOps if available, otherwise falls back to pure PyTorch.",)
 
     # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
@@ -461,6 +465,7 @@ def main():
             gather_topk=args.gather_topk,
             gather_query_chunk_size=args.gather_query_chunk_size,
             learnable_rbf_sigma=args.learnable_rbf_sigma,
+            neighbor_backend=args.neighbor_backend,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":

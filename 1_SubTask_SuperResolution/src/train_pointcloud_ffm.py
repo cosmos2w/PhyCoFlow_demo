@@ -145,6 +145,30 @@ def parse_args():
         help="Only for GL_rbf; select either cls or mean",)
 
     # ----------------------------------------------------------
+    # Hybrid local-global gather options
+    # ----------------------------------------------------------
+    p.add_argument(
+        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate"],
+        help="Gather mode used by ConditionalPointHybridLocalGlobalRBF. 'rbf' preserves the current full gather as default.",
+    )
+    p.add_argument(
+        "--gather-topk", type=int, default=32, 
+        help="Number of nearest refined sensor tokens used in top-k gather modes.",
+    )
+    p.add_argument(
+        "--gather-query-chunk-size", type=int, default=None,
+        help="Optional query chunk size for memory-friendly gathering. Applies to all gather modes.",
+    )
+    p.add_argument(
+        "--learnable-rbf-sigma", action="store_true",
+        help="If set, make the RBF sigma in the hybrid gather learnable.",
+    )
+    p.add_argument(
+        "--neighbor-backend", type=str, default="torch", choices=["auto", "torch", "keops"],
+        help="Neighbor / kernel backend for the hybrid gather. "
+            "'auto' uses KeOps if available, otherwise falls back to pure PyTorch.",)
+
+    # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
     # Num_x / Num_y must be supplied for the FNO baseline.
     # ----------------------------------------------------------
@@ -596,7 +620,8 @@ def main():
 
         print(f"[*] PDEBench multi-resolution mode enabled.")
         print(f"[*] Dataset      : {train_set.dataset_name}")
-        print(f"[*] Target field : {train_set.field_names[args.selected_field_idx_raw]}")
+        # print(f"[*] All fields   : {train_set.field_names}")
+        print(f"[*] Target field : {train_set.field_names[0]}") # args.selected_field_idx_raw
         print(f"[*] Train ratio  : {args.multires_ratio}")
         print(f"[*] Val res      : H")
         if force_resolution is not None:
@@ -699,6 +724,12 @@ def main():
             mlp_dropout=args.mlp_dropout,
             rbf_sigma=args.rbf_sigma,
             summary_type=args.summary_type,
+
+            gather_mode=args.gather_mode,
+            gather_topk=args.gather_topk,
+            gather_query_chunk_size=args.gather_query_chunk_size,
+            learnable_rbf_sigma=args.learnable_rbf_sigma,
+            neighbor_backend=args.neighbor_backend,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":

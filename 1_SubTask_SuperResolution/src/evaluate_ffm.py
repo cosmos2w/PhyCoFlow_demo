@@ -211,6 +211,12 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             mlp_dropout=cfg.get("mlp_dropout", 0),
             rbf_sigma=cfg.get("rbf_sigma", 0.05),
             summary_type=cfg.get("summary_type", "cls"),
+
+            gather_mode=cfg.get("gather_mode", "rbf"),
+            gather_topk=cfg.get("gather_topk", 32),
+            gather_query_chunk_size=cfg.get("gather_query_chunk_size", None),
+            learnable_rbf_sigma=cfg.get("learnable_rbf_sigma", False),
+            neighbor_backend=cfg.get("neighbor_backend", "torch"),
         )
         model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model

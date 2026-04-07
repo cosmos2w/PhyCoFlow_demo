@@ -8,6 +8,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from neuralop.models import FNO as NeuralOpFNO  # pip install neuraloperator
+from pykeops.torch import LazyTensor
 
 FIELD_NAMES = ("CH4", "CO", "T", "U_1", "p")
 
@@ -23,6 +24,27 @@ def make_mlp(in_dim: int, hidden_dim: int, out_dim: int, depth: int = 3, act=nn.
     layers.append(nn.Linear(dim, out_dim))
     return nn.Sequential(*layers)
 
+# ------------------------------
+# for gathering in GL_rbf
+# ------------------------------
+def batched_gather_2d(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+    """
+    Gather from x with shape [B, M] using idx with shape [B, N, K].
+    Returns shape [B, N, K].
+    """
+    bsz = x.shape[0]
+    batch_idx = torch.arange(bsz, device=x.device).view(bsz, 1, 1).expand_as(idx)
+    return x[batch_idx, idx]
+
+
+def batched_gather_3d(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+    """
+    Gather from x with shape [B, M, C] using idx with shape [B, N, K].
+    Returns shape [B, N, K, C].
+    """
+    bsz = x.shape[0]
+    batch_idx = torch.arange(bsz, device=x.device).view(bsz, 1, 1).expand_as(idx)
+    return x[batch_idx, idx]
 
 class ConditionalPointFFM(nn.Module):
     """
@@ -561,20 +583,28 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
     """
     Hybrid local-global backbone for conditional point-cloud FFM.
 
-    Core idea:
-      1) Build sparse sensor tokens from (obs_coords, obs_values, obs_field_ids)
-      2) Let a learned latent array attend to those sensor tokens
-      3) Let the sparse sensor tokens attend back to the processed latents
-         ("double dip") to get globally enriched local sensor tokens
-      4) Gather those refined local sensor tokens to query points with the
-         same RBF distance-based aggregation used by the current baseline
-      5) Extract one global summary from the latent array and concatenate it
-         separately to every query point
+    Core Pipeline:
+      1) Tokenization: Build sparse sensor tokens from (obs_coords, obs_values, obs_field_ids).
+      2) Global Latent Encoding: A learned latent array cross-attends to the sparse sensor tokens,
+         processing the field globally.
+      3) Double-Dip Refinement: The sparse sensor tokens cross-attend back to the processed latents,
+         yielding globally enriched local sensor tokens.
+      4) Query Point Aggregation: Gather these enriched sensor tokens to arbitrary query points.
+         Supported gather modes:
+           - "rbf": Full dense RBF distance-based aggregation.
+           - "topk_rbf": Sparse K-Nearest Neighbor RBF aggregation.
+           - "topk_rbf_gate": Top-K RBF aggregation modulated by a learned query-sensor content gate.
+      5) Global Summary: Extract a global summary from the latents (via 'cls' or 'mean') and 
+         concatenate it separately to every query point.
+         The latent summary / CLS-like token acts strictly as a concatenated global feature 
 
-    Important design choice:
-      - The latent summary / CLS-like token is NOT appended into the RBF gather.
-        It has no physical coordinates, so it should be used as a separate global
-        feature rather than a fake spatial sensor.
+    Hardware & Optimization Context:
+      - neighbor_backend: Supports "torch" (standard pairwise matrices) and "keops" (LazyTensors).
+      - KeOps Integration: The "keops" backend fundamentally eliminates the O(B * N * M) memory 
+        bottleneck during pairwise distance computations, reducing it to O(N + M). This allows 
+        for massive point clouds and largely removes the need for 'gather_query_chunk_size' loops.
+      - Memory Layout: Inputs to KeOps routines are strictly enforced as `.contiguous()` to 
+        prevent silent C++ reallocation bottlenecks.
     """
     def __init__(
         self,
@@ -591,7 +621,13 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         attn_dropout: float = 0.0,
         mlp_dropout: float = 0.0,
         rbf_sigma: float = 0.05,
-        summary_type: str = "cls",   # choices: ["cls", "mean"]
+        summary_type: str = "cls",   # ["cls", "mean"]
+
+        gather_mode: str = "rbf",    # ["rbf", "topk_rbf", "topk_rbf_gate"]
+        gather_topk: int = 32,
+        gather_query_chunk_size: Optional[int] = None,
+        learnable_rbf_sigma: bool = False,
+        neighbor_backend: str = "torch",      # ["auto", "torch", "keops"]
     ) -> None:
         super().__init__()
 
@@ -604,6 +640,44 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         self.latent_dim = latent_dim
         self.num_latents = num_latents
         self.summary_type = summary_type
+
+        if gather_mode not in ["rbf", "topk_rbf", "topk_rbf_gate"]:
+            raise ValueError(
+                f"gather_mode must be one of ['rbf', 'topk_rbf', 'topk_rbf_gate'], got {gather_mode}"
+            )
+        if neighbor_backend not in ["auto", "torch", "keops"]:
+            raise ValueError(
+                f"neighbor_backend must be one of ['auto', 'torch', 'keops'], got {neighbor_backend}"
+            )
+        self.gather_mode = gather_mode
+        self.gather_topk = int(gather_topk)
+        self.gather_query_chunk_size = gather_query_chunk_size
+        self.learnable_rbf_sigma = learnable_rbf_sigma
+        self.neighbor_backend = neighbor_backend
+
+        if self.gather_mode == "rbf": print(f"\nThe gather mode is {gather_mode} as default choice.\n")
+        else: 
+            print(f"\nNOTICE: The gather mode is {gather_mode} with top-k {gather_topk} !!!\n")
+            # Project query features to the same local-conditioning space so a
+            # lightweight content gate can compare query state and refined sensors.
+            self.query_to_cond = nn.Linear(hidden_dim, cond_dim, bias=False)
+            # Small gate used only in the optional "topk_rbf_gate" mode.
+            # Input = [projected query feat, refined sensor feat, relative coord, distance]
+            gate_in_dim = cond_dim + cond_dim + coord_dim + 1
+            self.gather_gate = nn.Sequential(
+                nn.Linear(gate_in_dim, cond_dim),
+                nn.GELU(),
+                nn.Linear(cond_dim, 1),
+            )
+
+        if self.gather_topk < 1:
+            raise ValueError(f"gather_topk must be >= 1, got {self.gather_topk}")
+        # Optional learnable locality scale
+        if learnable_rbf_sigma:
+            self.log_rbf_sigma = nn.Parameter(torch.log(torch.tensor(float(rbf_sigma))))
+        # else:
+        #     self.register_buffer("_fixed_rbf_sigma", torch.tensor(float(rbf_sigma)))
+        #     self.log_rbf_sigma = None
 
         # -------------------------
         # Point/query branch
@@ -761,24 +835,264 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
         return self.summary_proj(summary)    # [B, H]
 
-    def aggregate_sparse_obs(
+    def _use_keops(self) -> bool:
+        """
+        Decide whether to use KeOps.
+
+        - rbf mode can benefit a lot from KeOps soft reductions
+        - topk modes can use KeOps KNN search
+        """
+        if self.neighbor_backend == "torch":
+            return False
+
+        if self.neighbor_backend == "keops":
+            if LazyTensor is None:
+                raise ImportError(
+                    "neighbor_backend='keops' was requested, but pykeops is not installed."
+                )
+            return True
+
+        # auto
+        return LazyTensor is not None
+
+    def _aggregate_rbf_keops(
+        self,
+        query_coords: torch.Tensor,         # [B, N, D]
+        obs_coords: torch.Tensor,           # [B, M, D]
+        refined_sensor_feat: torch.Tensor,  # [B, M, Cc]
+        obs_mask: torch.Tensor,             # [B, M]
+    ) -> torch.Tensor:
+        """
+        Full RBF gather using KeOps sumsoftmaxweight, without building the dense [B, N, M] matrix.
+        """
+        sigma = torch.exp(self.log_rbf_sigma).clamp_min(1e-6) if self.learnable_rbf_sigma else self.rbf_sigma
+        gamma = 1.0 / (2 * sigma ** 2 + 1e-12)
+
+        # --- Force contiguous memory for KeOps ---
+        query_coords = query_coords.contiguous()
+        obs_coords = obs_coords.contiguous()
+        refined_sensor_feat = refined_sensor_feat.contiguous()
+        # -----------------------------------------
+
+        # KeOps symbolic tensors
+        x_i = LazyTensor(query_coords[:, :, None, :])                 # [B, N, 1, D]
+        y_j = LazyTensor(obs_coords[:, None, :, :])                   # [B, 1, M, D]
+        v_j = LazyTensor(refined_sensor_feat[:, None, :, :])          # [B, 1, M, Cc]
+
+        # Scalar logits: -gamma * ||x_i - y_j||^2
+        sqdist_ij = ((x_i - y_j) ** 2).sum(-1)                        # [B, N, M, 1]
+        logits_ij = -gamma * sqdist_ij
+
+        # Mask invalid sensor slots by adding a large negative number
+        mask_j = LazyTensor(obs_mask[:, None, :, None].to(query_coords.dtype).contiguous())   # [B, 1, M, 1]
+        logits_ij = logits_ij + (mask_j - 1.0) * 1e6
+
+        # Softmax-weighted sum over the sensor axis.
+        # With one batch dimension, the j-axis is dim=2.
+        local_cond = logits_ij.sumsoftmaxweight(v_j, dim=2)           # [B, N, Cc]
+        return local_cond
+
+    def _knn_search_keops(
+        self,
+        query_coords: torch.Tensor,         # [B, N, D]
+        obs_coords: torch.Tensor,           # [B, M, D]
+        refined_sensor_feat: torch.Tensor,  # [B, M, Cc]
+        obs_mask: torch.Tensor,             # [B, M]
+        k: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Top-k neighbor search using KeOps Kmin_argKmin.
+        """
+
+        # --- Force contiguous memory for KeOps ---
+        query_coords = query_coords.contiguous()
+        obs_coords = obs_coords.contiguous()
+        # -----------------------------------------
+
+        x_i = LazyTensor(query_coords[:, :, None, :])                 # [B, N, 1, D]
+        y_j = LazyTensor(obs_coords[:, None, :, :])                   # [B, 1, M, D]
+
+        sqdist_ij = ((x_i - y_j) ** 2).sum(-1)                        # [B, N, M, 1]
+
+        # Mask invalid sensor slots
+        mask_j = LazyTensor(obs_mask[:, None, :, None].to(query_coords.dtype).contiguous())
+        sqdist_ij = sqdist_ij + (1.0 - mask_j) * 1e6
+
+        # With one batch dimension, the j-axis is dim=2.
+        topk_d2, topk_idx = sqdist_ij.Kmin_argKmin(K=k, dim=2)
+
+        # KeOps can return indices in a non-long dtype; convert explicitly.
+        topk_idx = topk_idx.long()
+
+        topk_sensor_feat = batched_gather_3d(refined_sensor_feat, topk_idx)
+        topk_sensor_coords = batched_gather_3d(obs_coords, topk_idx)
+        topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
+
+        return topk_d2, topk_sensor_feat, topk_sensor_coords, topk_valid
+
+    def _knn_search_torch(
         self,
         query_coords: torch.Tensor,
         obs_coords: torch.Tensor,
         refined_sensor_feat: torch.Tensor,
         obs_mask: torch.Tensor,
-    ) -> torch.Tensor:
+        k: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Gather the globally enriched local sensor features back to query points
-        using the same RBF distance-based weighting as the original baseline.
+        Fallback KNN search using torch.cdist + torch.topk.
         """
-        d2 = torch.cdist(query_coords, obs_coords, p=2.0) ** 2        # [B, N, M]
+        d2 = torch.cdist(query_coords, obs_coords, p=2.0) ** 2
         large = torch.full_like(d2, 1e6)
         d2 = torch.where(obs_mask.unsqueeze(1) > 0, d2, large)
 
-        weights = torch.softmax(-d2 / (2 * self.rbf_sigma ** 2 + 1e-12), dim=-1)
-        local_cond = torch.einsum("bnm,bmd->bnd", weights, refined_sensor_feat)
+        topk_d2, topk_idx = torch.topk(d2, k=k, dim=-1, largest=False)
+
+        topk_sensor_feat = batched_gather_3d(refined_sensor_feat, topk_idx)
+        topk_sensor_coords = batched_gather_3d(obs_coords, topk_idx)
+        topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
+
+        return topk_d2, topk_sensor_feat, topk_sensor_coords, topk_valid
+
+    def _get_topk_neighbors(
+        self,
+        query_coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        refined_sensor_feat: torch.Tensor,
+        obs_mask: torch.Tensor,
+        k: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Unified top-k neighbor retrieval.
+        """
+        if self._use_keops():
+            return self._knn_search_keops(
+                query_coords=query_coords,
+                obs_coords=obs_coords,
+                refined_sensor_feat=refined_sensor_feat,
+                obs_mask=obs_mask,
+                k=k,
+            )
+
+        return self._knn_search_torch(
+            query_coords=query_coords,
+            obs_coords=obs_coords,
+            refined_sensor_feat=refined_sensor_feat,
+            obs_mask=obs_mask,
+            k=k,
+        )
+
+    def _aggregate_chunk(
+        self,
+        query_coords: torch.Tensor,         # [B, Nc, D]
+        query_feat: torch.Tensor,           # [B, Nc, H]
+        obs_coords: torch.Tensor,           # [B, M, D]
+        refined_sensor_feat: torch.Tensor,  # [B, M, Cc]
+        obs_mask: torch.Tensor,             # [B, M]
+    ) -> torch.Tensor:
+        """
+        Aggregate one query chunk.
+        """
+        # sigma = self._get_rbf_sigma()
+        sigma = torch.exp(self.log_rbf_sigma).clamp_min(1e-6) if self.learnable_rbf_sigma else self.rbf_sigma
+
+        # --------------------------------------------------
+        # Default: full RBF gather
+        # --------------------------------------------------
+        if self.gather_mode == "rbf":
+            if self._use_keops():
+                return self._aggregate_rbf_keops(
+                    query_coords=query_coords,
+                    obs_coords=obs_coords,
+                    refined_sensor_feat=refined_sensor_feat,
+                    obs_mask=obs_mask,
+                )
+
+            d2 = torch.cdist(query_coords, obs_coords, p=2.0) ** 2
+            large = torch.full_like(d2, 1e6)
+            d2 = torch.where(obs_mask.unsqueeze(1) > 0, d2, large)
+
+            logits = -d2 / (2 * sigma ** 2 + 1e-12)
+            weights = torch.softmax(logits, dim=-1)
+            return torch.einsum("bnm,bmd->bnd", weights, refined_sensor_feat)
+
+        # --------------------------------------------------
+        # top-k modes
+        # --------------------------------------------------
+        k = min(self.gather_topk, obs_coords.shape[1])
+
+        topk_d2, topk_sensor_feat, topk_sensor_coords, topk_valid = self._get_topk_neighbors(
+            query_coords=query_coords,
+            obs_coords=obs_coords,
+            refined_sensor_feat=refined_sensor_feat,
+            obs_mask=obs_mask,
+            k=k,
+        )
+
+        logits = -topk_d2 / (2 * sigma ** 2 + 1e-12)
+
+        if self.gather_mode == "topk_rbf_gate":
+            query_cond = self.query_to_cond(query_feat)                    # [B, Nc, Cc]
+            query_cond = query_cond.unsqueeze(2).expand(-1, -1, k, -1)    # [B, Nc, k, Cc]
+
+            rel = query_coords.unsqueeze(2) - topk_sensor_coords           # [B, Nc, k, D]
+            rel_dist = torch.sqrt(topk_d2.clamp_min(0.0)).unsqueeze(-1)    # [B, Nc, k, 1]
+
+            gate_in = torch.cat([query_cond, topk_sensor_feat, rel, rel_dist], dim=-1)
+            gate_logits = self.gather_gate(gate_in).squeeze(-1)            # [B, Nc, k]
+
+            logits = logits + gate_logits
+
+        logits = logits.masked_fill(~topk_valid, -1e9)
+        weights = torch.softmax(logits, dim=-1)
+        local_cond = torch.sum(weights.unsqueeze(-1) * topk_sensor_feat, dim=2)
         return local_cond
+
+    def aggregate_sparse_obs(
+        self,
+        query_coords: torch.Tensor,
+        query_feat: torch.Tensor,
+        obs_coords: torch.Tensor,
+        refined_sensor_feat: torch.Tensor,
+        obs_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Gather the globally enriched local sensor features back to query points.
+
+        Policy:
+          - rbf: with KeOps, chunking can usually be disabled
+          - topk_rbf: with KeOps, chunking can usually be disabled
+          - topk_rbf_gate: still keep optional chunking because gate tensors are [B, N, K, U]
+        """
+        n_query = query_coords.shape[1]
+
+        if self.gather_mode == "topk_rbf_gate":
+            chunk_size = self.gather_query_chunk_size if self.gather_query_chunk_size is not None else 2048
+        else:
+            chunk_size = self.gather_query_chunk_size
+
+        if chunk_size is None or n_query <= chunk_size:
+            return self._aggregate_chunk(
+                query_coords=query_coords,
+                query_feat=query_feat,
+                obs_coords=obs_coords,
+                refined_sensor_feat=refined_sensor_feat,
+                obs_mask=obs_mask,
+            )
+
+        outputs = []
+        for start in range(0, n_query, chunk_size):
+            end = min(start + chunk_size, n_query)
+
+            local_chunk = self._aggregate_chunk(
+                query_coords=query_coords[:, start:end],
+                query_feat=query_feat[:, start:end],
+                obs_coords=obs_coords,
+                refined_sensor_feat=refined_sensor_feat,
+                obs_mask=obs_mask,
+            )
+            outputs.append(local_chunk)
+
+        return torch.cat(outputs, dim=1)
 
     def forward(
         self,
@@ -835,10 +1149,11 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         refined_sensor_feat = refined_sensor_feat * obs_mask.unsqueeze(-1)
 
         # -------------------------
-        # RBF gather back to queries
+        # Gather back to queries
         # -------------------------
         local_cond = self.aggregate_sparse_obs(
             query_coords=coords,
+            query_feat=point_feat,
             obs_coords=obs_coords,
             refined_sensor_feat=refined_sensor_feat,
             obs_mask=obs_mask,
