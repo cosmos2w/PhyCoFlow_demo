@@ -5,14 +5,15 @@
 # if later we push M very high, the next improvement would be a top-k nearest-sensor gather instead of full gather
 
 #----------------------------------------------------------
-# Test new GL_rbf with top_k gated gathering & using keops gathering
+# Leave any notes here
 #----------------------------------------------------------
 
-Demo_Num: 10
-device_ids: [1]
+Demo_Num: 0
+device_ids: [0]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+RELOAD: false
 
 seed : 42
 epochs : 10000
