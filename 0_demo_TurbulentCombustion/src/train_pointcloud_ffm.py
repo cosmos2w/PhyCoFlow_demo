@@ -61,6 +61,8 @@ def parse_args():
                    default="Dataset/Merged_CH4COTU1P.h5")
     p.add_argument("--save-dir", type=str, 
                    default=f"Save_TrainedModel/ffm_tc_pointcloud")
+    p.add_argument("--RELOAD", action="store_true",
+                   help="If set, try to reload the latest matching checkpoint and continue training.")
     
     # ------------------------------
     # Backbone selection
@@ -319,6 +321,53 @@ def run_epoch(
 
     return total / max(count, 1)
 
+
+def find_latest_run_dir(demo_dir: str, save_dir: str, demo_num: int) -> Optional[Path]:
+    save_root = Path(demo_dir) / Path(save_dir).parent
+    run_prefix = f"{Path(save_dir).name}_DemoN{demo_num}_"
+    if not save_root.exists():
+        return None
+
+    candidates = [
+        path for path in save_root.glob(f"{run_prefix}*")
+        if path.is_dir()
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda p: p.name)[-1]
+
+
+def extract_run_timestamp(run_dir: Path, save_dir: str, demo_num: int) -> str:
+    run_prefix = f"{Path(save_dir).name}_DemoN{demo_num}_"
+    run_name = run_dir.name
+    if run_name.startswith(run_prefix):
+        return run_name[len(run_prefix):]
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def backup_path(path: Path, suffix: str = "_bk") -> Path:
+    candidate = path.with_name(f"{path.stem}{suffix}{path.suffix}")
+    if not candidate.exists():
+        return candidate
+
+    idx = 1
+    while True:
+        candidate = path.with_name(f"{path.stem}{suffix}{idx}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        idx += 1
+
+
+def backup_existing_artifact(path: Path) -> None:
+    if not path.exists():
+        return
+
+    target = backup_path(path)
+    if path.is_dir():
+        shutil.copytree(path, target)
+    else:
+        shutil.copy2(path, target)
+
 def main():
 
     args = parse_args()
@@ -355,23 +404,49 @@ def main():
     
     # Setup the Dynamic Directories with Demo_Num
     set_seed(args.seed)
-    
-    # Update Model Save Dir
+
+    start_epoch = 1
+    best_val = float("inf")
+    reload_ckpt = None
+    run_timestamp = timestamp
     save_dir = Path(os.path.join(demo_dir, args.save_dir + f"_DemoN{args.Demo_Num}" + f"_{timestamp}"))
+
+    if args.RELOAD:
+        latest_run_dir = find_latest_run_dir(demo_dir=demo_dir, save_dir=args.save_dir, demo_num=args.Demo_Num)
+        if latest_run_dir is not None and (latest_run_dir / "best.pt").exists():
+            save_dir = latest_run_dir
+            run_timestamp = extract_run_timestamp(latest_run_dir, args.save_dir, args.Demo_Num)
+            reload_ckpt = torch.load(latest_run_dir / "best.pt", map_location="cpu")
+            start_epoch = int(reload_ckpt.get("epoch", 0)) + 1
+            best_val = float(reload_ckpt.get("val_loss", float("inf")))
+
+            backup_existing_artifact(latest_run_dir / "best.pt")
+            print(f"[*] RELOAD=True, resuming from: {latest_run_dir / 'best.pt'}")
+            print(f"[*] Resume will start from epoch {start_epoch}\n")
+        else:
+            print("[*] RELOAD=True, but no matching best.pt was found. Training will start from scratch.\n")
+
     save_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Save the final parsed args to a JSON in the model folder just to be safe
     with open(save_dir / "args.json", "w") as f:
         import json
         json.dump(vars(args), f, indent=2)
-    
+
     # Setup CSV and Recon Dirs
     csv_base_dir = os.path.join(demo_dir, f"Save_loss_csv")
     recon_base_dir = os.path.join(demo_dir, f"Save_reconstruction_files")
-    
+
+    if args.RELOAD and reload_ckpt is not None:
+        loss_dir = Path(csv_base_dir) / f"Loss_DemoN{args.Demo_Num}_{run_timestamp}"
+        recon_dir_existing = Path(recon_base_dir) / "ffm_tc_pointcloud" / f"demo_N{args.Demo_Num}_{run_timestamp}"
+
+        backup_existing_artifact(loss_dir)
+        backup_existing_artifact(recon_dir_existing)
+
     # Initialize helpers
-    logger = MetricsLogger(base_dir=csv_base_dir, Demo_Num=args.Demo_Num, timestamp=timestamp)
-    recon_dir = create_recon_dir(base_dir=recon_base_dir, Demo_Num=args.Demo_Num, timestamp=timestamp)
+    logger = MetricsLogger(base_dir=csv_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
+    recon_dir = create_recon_dir(base_dir=recon_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
     
     print(f"[*] Model checkpoints will save to: {save_dir}")
     print(f"[*] Logging losses to: {logger.save_dir}")
@@ -502,8 +577,13 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-    best_val = float("inf")
-    for epoch in range(1, args.epochs + 1):
+    if reload_ckpt is not None:
+        model.load_state_dict(reload_ckpt["model"])
+        if "optimizer" in reload_ckpt:
+            optimizer.load_state_dict(reload_ckpt["optimizer"])
+        print("[*] Reloaded model state from best.pt")
+
+    for epoch in range(start_epoch, args.epochs + 1):
         tr_loss = run_epoch(
             model=model,
             loader=train_loader,

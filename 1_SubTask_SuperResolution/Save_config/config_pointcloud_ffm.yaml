@@ -25,18 +25,18 @@
 # Case_Truncate_Ratio >= 1 or < 0 → raise error
 
 #----------------------------------------------------------
-# Demo-4: repeat demo-3 tests on 1:1:1 for CFD, changed to field 0 (vx), but use upgraded top_k rbf gathering
+# leave any notes here
 #----------------------------------------------------------
 
-Demo_Num: 4
+Demo_Num: 0
 device_ids: [0]
 
-# data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+RELOAD: false
 
 seed : 42
 epochs : 10000
-batch_size : 512
+batch_size : 256
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -50,7 +50,7 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 # PDEBench multi-resolution settings
 # ----------------------------------------------------------
-pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
+pdebench_dataset_name: "RD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: Species_0 ; CFD: 0 - Vx
 multires_ratio: "1:1:1"             # one of "1:1:1", "1:1:0", "2:1:0"
@@ -86,7 +86,7 @@ decode_chunk_size: 4096
 share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
-gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
+gather_mode: "topk_rbf_gate"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
 gather_topk: 32
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
@@ -135,4 +135,4 @@ vis_n_obs_list: [256]
 
 # ===== Rectified Flow generation controls =====
 ode_solver : "euler"
-benchmark_n_steps : [2, 4, 16]
+benchmark_n_steps : [2, 4, 8]
