@@ -136,7 +136,7 @@ class TurbulentCombustionH5Dataset(Dataset):
     def _load_or_compute_stats(self, train_indices: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
         stats_path = Path(self.stats_path)
         if stats_path.exists():
-            obj = torch.load(stats_path, map_location="cpu")
+            obj = torch.load(stats_path, map_location="cpu", weights_only=True)
             return obj["mean"].float(), obj["std"].float()
 
         h5 = self._require_h5()
@@ -340,112 +340,6 @@ def build_sparse_condition(
 
     return obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids
 
-@torch.no_grad()
-def _visualize_reconstruction(
-    model: torch.nn.Module,
-    dataset: torch.utils.data.Dataset,
-    epoch: int,
-    device: torch.device,
-    save_dir: str,
-    cond_fields: Union[int, Sequence[int]] = (2,),
-    n_obs: Union[int, Sequence[int]] = 256,
-    n_steps: int = 100,
-    snapshot_index: int = 0,
-
-    ode_solver: str = "euler",
-    file_tag: Optional[str] = None,
-):
-    """
-    Reconstruct full fields from arbitrary sparse sensors.
-
-    Example:
-        cond_fields=[0, 2], n_obs=[128, 256]
-    """
-    model.eval()
-
-    cond_fields = _to_int_list(cond_fields)
-    n_obs = _broadcast_per_field(n_obs, cond_fields, "n_obs")
-
-    sample = dataset[snapshot_index]
-    coords = sample["coords"].unsqueeze(0).to(device)   # [1, N, D]
-    truth = sample["fields"].unsqueeze(0).to(device)    # [1, N, C]
-
-    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
-        coords_full=coords,
-        fields_full=truth,
-        cond_fields=cond_fields,
-        n_obs_min=n_obs,
-        n_obs_max=n_obs,   # exact sensor counts for visualization
-    )
-
-    recon = model.sample(
-        coords=coords,
-        obs_coords=obs_coords,
-        obs_values=obs_values,
-        obs_mask=obs_mask,
-        obs_field_ids=obs_field_ids,
-        n_steps=n_steps,
-        clamp_indices=obs_indices,
-    )
-
-    mean = dataset.mean.to(device)
-    std = dataset.std.to(device)
-    recon_phys = recon * std.view(1, 1, -1) + mean.view(1, 1, -1)
-    truth_phys = truth * std.view(1, 1, -1) + mean.view(1, 1, -1)
-
-    recon_phys = recon_phys[0].cpu().numpy()
-    truth_phys = truth_phys[0].cpu().numpy()
-
-    valid = obs_mask[0].bool()
-    obs_indices_cpu = obs_indices[0, valid].cpu().numpy()
-    obs_field_ids_cpu = obs_field_ids[0, valid].cpu().numpy()
-
-    coords_np = coords[0].cpu().numpy()
-    x_coords = coords_np[:, 0]
-    y_coords = coords_np[:, 1]
-    tri = mtri.Triangulation(x_coords, y_coords)
-
-    metrics = {}
-    for c, name in enumerate(FIELD_NAMES):
-        fig, axs = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
-
-        true_f = truth_phys[:, c]
-        pred_f = recon_phys[:, c]
-        l2_error = np.linalg.norm(true_f - pred_f) / (np.linalg.norm(true_f) + 1e-8)
-        metrics[name] = float(l2_error)
-
-        vmin = min(true_f.min(), pred_f.min())
-        vmax = max(true_f.max(), pred_f.max())
-
-        im0 = axs[0].tricontourf(tri, true_f, levels=200, cmap="coolwarm", vmin=vmin, vmax=vmax)
-        axs[0].set_title(f"Truth: {name}")
-        axs[0].set_aspect("equal")
-        axs[0].set_xlabel("x")
-        axs[0].set_ylabel("y")
-        plt.colorbar(im0, ax=axs[0], fraction=0.046, pad=0.04)
-
-        im1 = axs[1].tricontourf(tri, pred_f, levels=200, cmap="coolwarm", vmin=vmin, vmax=vmax)
-        axs[1].set_title(f"Recon: {name} | L2 Err: {l2_error:.4f}")
-        axs[1].set_aspect("equal")
-        axs[1].set_xlabel("x")
-        axs[1].set_ylabel("y")
-        plt.colorbar(im1, ax=axs[1], fraction=0.046, pad=0.04)
-
-        # overlay only the sensors belonging to this field
-        sel = (obs_field_ids_cpu == c)
-        if np.any(sel):
-            sensor_x = x_coords[obs_indices_cpu[sel]]
-            sensor_y = y_coords[obs_indices_cpu[sel]]
-            axs[1].scatter(sensor_x, sensor_y, s=15, c="white",
-                           edgecolors="black", linewidth=0.5)
-            
-        suffix = f"_{file_tag}" if file_tag else ""
-        save_path = os.path.join(save_dir, f"epoch_{epoch:04d}{suffix}_field_{c}_{name}.png")
-        fig.savefig(save_path, dpi=120)
-        plt.close(fig)
-    
-    return metrics
-
 
 def _normalized_l2(u_true: np.ndarray, u_pred: np.ndarray) -> float:
     return float(np.linalg.norm(u_true - u_pred) / (np.linalg.norm(u_true) + 1e-8))
@@ -571,6 +465,8 @@ def visualize_reconstruction(
     snapshot_index: int = 0,
     file_tag: Optional[str] = None,
     save_metrics_json: bool = True,
+
+    return_payload: bool = False,
 ):
     """
     Reconstruct full fields from arbitrary sparse sensors and save improved plots.
@@ -631,9 +527,10 @@ def visualize_reconstruction(
     coords_np = coords_raw[0].cpu().numpy()
     coords_xy = coords_np[:, :2]
 
+    field_names = tuple(getattr(dataset, "field_names", FIELD_NAMES))
     metrics = {}
 
-    for c, name in enumerate(FIELD_NAMES):
+    for c, name in enumerate(field_names):
         true_f = truth_phys[:, c]
         pred_f = recon_phys[:, c]
 
@@ -668,6 +565,21 @@ def visualize_reconstruction(
         }
         with open(metrics_path, "w") as f:
             json.dump(payload, f, indent=2)
+
+    if return_payload:
+        payload = {
+            "coords_xy": coords_xy,
+            "truth_phys": truth_phys,
+            "recon_phys": recon_phys,
+            "obs_indices": obs_indices_cpu,
+            "obs_field_ids": obs_field_ids_cpu,
+            "field_names": list(field_names),
+            "snapshot_index": int(snapshot_index),
+            "cond_fields": [int(v) for v in cond_fields],
+            "n_obs": [int(v) for v in n_obs],
+            "n_steps": int(n_steps),
+        }
+        return metrics, payload
 
     return metrics
 

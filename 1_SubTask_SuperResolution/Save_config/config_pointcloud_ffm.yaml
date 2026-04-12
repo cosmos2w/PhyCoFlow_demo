@@ -25,14 +25,14 @@
 # Case_Truncate_Ratio >= 1 or < 0 → raise error
 
 #----------------------------------------------------------
-# leave any notes here
+# Demo-8: repeat demo-6, but test on 1:1:2 for RD, use upgraded topk_rbf_gate rbf gathering
 #----------------------------------------------------------
 
-Demo_Num: 0
+Demo_Num: 8
 device_ids: [0]
 
+# data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
-RELOAD: false
 
 seed : 42
 epochs : 10000
@@ -53,7 +53,7 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 pdebench_dataset_name: "RD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: Species_0 ; CFD: 0 - Vx
-multires_ratio: "1:1:1"             # one of "1:1:1", "1:1:0", "2:1:0"
+multires_ratio: "1:1:2"             # L:M:H, like "1:1:2", "1:1:1", "1:1:0", "2:1:0"
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0

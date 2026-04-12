@@ -5,19 +5,18 @@
 # if later we push M very high, the next improvement would be a top-k nearest-sensor gather instead of full gather
 
 #----------------------------------------------------------
-# Leave any notes here
+# Repeat 10, only GL_rbf + topk_rbf, with top_k = 64
 #----------------------------------------------------------
 
-Demo_Num: 0
-device_ids: [0]
+Demo_Num: 11
+device_ids: [1]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
-RELOAD: false
 
 seed : 42
 epochs : 10000
-batch_size : 128
+batch_size : 192
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -53,8 +52,8 @@ share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
 
-gather_mode: "topk_rbf_gate"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
-gather_topk: 24
+gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
+gather_topk: 64
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
 neighbor_backend: "keops" # choices: ["auto", "torch", "keops"], keops is more efficient
@@ -77,7 +76,7 @@ fno_n_layers: 4
 # ----------------------------------------------------------
 # These are hyperparameters for the training process
 # ----------------------------------------------------------
-n_query_points : 4096    # Number of query points to be evaluated in training process
+n_query_points : 2048    # Number of query points to be evaluated in training process
 prior : "rff"            # choices=["iid", "rff"]; idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
 rff_features : 256
 rff_lengthscale : 0.15

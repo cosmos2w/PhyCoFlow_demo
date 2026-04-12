@@ -208,7 +208,7 @@ class TurbulentCombustionH5Dataset(Dataset):
     def _load_or_compute_stats(self, train_indices: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
         stats_path = Path(self.stats_path)
         if stats_path.exists():
-            obj = torch.load(stats_path, map_location="cpu")
+            obj = torch.load(stats_path, map_location="cpu", weights_only=True)
             return obj["mean"].float(), obj["std"].float()
 
         h5 = self._require_h5()
@@ -373,7 +373,7 @@ class PDEBenchMultiResDataset(Dataset):
     def _load_or_compute_stats(self) -> Tuple[torch.Tensor, torch.Tensor]:
         stats_path = Path(self.stats_path)
         if stats_path.exists():
-            obj = torch.load(stats_path, map_location="cpu")
+            obj = torch.load(stats_path, map_location="cpu", weights_only=True)
             return obj["mean"].float(), obj["std"].float()
 
         # Important:
