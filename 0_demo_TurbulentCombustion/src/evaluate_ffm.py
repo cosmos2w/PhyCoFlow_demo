@@ -50,7 +50,7 @@ def parse_args():
     p.add_argument("--device", type=str, default=None, help="e.g. cuda:0 or cpu")
     
     # Added extra metrics for evaluation
-    # Run like; python src/evaluate_ffm.py --Demo-Num 0 --split test --snapshot-index 0  --extra-metrics ssim grad spectrum --save-analysis-npz
+    # Run like: python src/evaluate_ffm.py --Demo-Num 0 --split test --snapshot-index 0  --extra-metrics ssim grad spectrum --save-analysis-npz
     p.add_argument("--extra-metrics", type=str, nargs="*", default=[], choices=["ssim", "grad", "spectrum"], 
                    help="Optional extra metrics to compute on structured 2D grids.",)
     # SSIM: higher is better; SSIM = 1.0 → perfect structural match
@@ -204,6 +204,9 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             gather_query_chunk_size=cfg.get("gather_query_chunk_size", None),
             learnable_rbf_sigma=cfg.get("learnable_rbf_sigma", False),
             neighbor_backend=cfg.get("neighbor_backend", "torch"),
+
+            sensor_local_topk=cfg.get("sensor_local_topk", 32),
+            sensor_local_dropout=cfg.get("sensor_local_dropout", 0.0),
         )
         model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model

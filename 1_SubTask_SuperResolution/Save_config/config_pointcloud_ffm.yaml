@@ -25,10 +25,10 @@
 # Case_Truncate_Ratio >= 1 or < 0 → raise error
 
 #----------------------------------------------------------
-# Demo-8: repeat demo-6, but test on 1:1:2 for RD, use upgraded topk_rbf_gate rbf gathering
+# Zero-shot super-resolution: test on 1:1:0 for RD, use upgraded topk_rbf gathering
 #----------------------------------------------------------
 
-Demo_Num: 8
+Demo_Num: 11
 device_ids: [0]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
@@ -53,7 +53,7 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 pdebench_dataset_name: "RD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: Species_0 ; CFD: 0 - Vx
-multires_ratio: "1:1:2"             # L:M:H, like "1:1:2", "1:1:1", "1:1:0", "2:1:0"
+multires_ratio: "1:1:0"             # L:M:H, like "1:1:2", "1:1:1", "1:1:0", "2:1:0"
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
@@ -86,7 +86,7 @@ decode_chunk_size: 4096
 share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
-gather_mode: "topk_rbf_gate"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
+gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
 gather_topk: 32
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
@@ -126,7 +126,7 @@ n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_ste
 # Here, n_obs_min_list and n_obs_max_list are default for High-Resolution data, 
 # and will down scale automatically for others automatically in training
 cond_fields: [0]
-n_obs_min_list: [256]
+n_obs_min_list: [512]
 n_obs_max_list: [512]
 
 vis_cond_fields:

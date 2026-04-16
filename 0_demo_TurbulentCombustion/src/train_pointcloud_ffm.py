@@ -117,7 +117,7 @@ def parse_args():
     # Hybrid local-global gather options
     # ----------------------------------------------------------
     p.add_argument(
-        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate"],
+        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal"],
         help="Gather mode used by ConditionalPointHybridLocalGlobalRBF. 'rbf' preserves the current full gather as default.",
     )
     p.add_argument(
@@ -136,6 +136,13 @@ def parse_args():
         "--neighbor-backend", type=str, default="torch", choices=["auto", "torch", "keops"],
         help="Neighbor / kernel backend for the hybrid gather. "
             "'auto' uses KeOps if available, otherwise falls back to pure PyTorch.",)
+    p.add_argument(
+        "--sensor-local-topk", type=int, default=8,
+        help="Number of local sensor neighbors used by the sensor-side Point-Transformer refinement in gather_mode='topk_rbf_ptlocal'.",)
+    p.add_argument(
+        "--sensor-local-dropout", type=float, default=0.0,
+        help="Dropout used inside the sensor-side local refinement block for gather_mode='topk_rbf_ptlocal'.",
+    )
 
     # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
@@ -541,6 +548,9 @@ def main():
             gather_query_chunk_size=args.gather_query_chunk_size,
             learnable_rbf_sigma=args.learnable_rbf_sigma,
             neighbor_backend=args.neighbor_backend,
+
+            sensor_local_topk=args.sensor_local_topk,
+            sensor_local_dropout=args.sensor_local_dropout,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":

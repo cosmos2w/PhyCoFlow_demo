@@ -25,5 +25,6 @@ ForOfflineEvaluation/
 *.svg
 *.json
 *.codex
+*.npz
 
 !config_pointcloud_ffm.yaml

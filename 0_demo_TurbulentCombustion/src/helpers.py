@@ -453,6 +453,85 @@ def _save_single_field_plot(
     return l2_error
 
 @torch.no_grad()
+def reconstruct_snapshot(
+    model: torch.nn.Module,
+    dataset: torch.utils.data.Dataset,
+    device: torch.device,
+    snapshot_index: int,
+    cond_fields: Union[int, Sequence[int]] = (2,),
+    n_obs_list: Union[int, Sequence[int]] = 256,
+    n_steps: int = 100,
+    ode_solver: Optional[str] = None,
+):
+    """
+    Reconstruct one snapshot under arbitrary sparse conditioning.
+
+    This utility is intended for evaluation scripts (e.g. physical coherence
+    auditing) so they can reuse the exact same reconstruction logic without
+    duplicating code from visualize_reconstruction().
+
+    Returns normalized truth and reconstruction tensors so downstream metrics
+    can decide whether to work in normalized or physical-unit space.
+    """
+    import inspect
+
+    model.eval()
+
+    cond_fields = _to_int_list(cond_fields)
+    n_obs_list = _broadcast_per_field(n_obs_list, cond_fields, "n_obs_list")
+
+    sample = dataset[snapshot_index]
+    coords = sample["coords"].unsqueeze(0).to(device)   # [1, N, D]
+    truth = sample["fields"].unsqueeze(0).to(device)    # [1, N, C]
+
+    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+        coords_full=coords,
+        fields_full=truth,
+        cond_fields=cond_fields,
+        n_obs_min=n_obs_list,
+        n_obs_max=n_obs_list,   # exact sensor counts for evaluation
+    )
+
+    # Compatibility wrapper: support both newer generalized checkpoints and
+    # older single-field checkpoints if needed.
+    sig = inspect.signature(model.sample)
+    sample_kwargs = dict(
+        coords=coords,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        n_steps=n_steps,
+        clamp_indices=obs_indices,
+    )
+
+    if "obs_field_ids" in sig.parameters:
+        sample_kwargs["obs_field_ids"] = obs_field_ids
+    elif "cond_field_idx" in sig.parameters:
+        unique = torch.unique(obs_field_ids[obs_mask.bool()])
+        if unique.numel() != 1:
+            raise ValueError(
+                "Loaded checkpoint expects single-field conditioning (cond_field_idx), "
+                "but reconstruct_snapshot received multiple conditioned fields."
+            )
+        sample_kwargs["cond_field_idx"] = unique.view(1).to(obs_field_ids.device)
+
+    if "ode_solver" in sig.parameters and ode_solver is not None:
+        sample_kwargs["ode_solver"] = ode_solver
+
+    recon = model.sample(**sample_kwargs)
+
+    return {
+        "coords": coords,
+        "truth": truth,                  # normalized truth
+        "recon": recon,                  # normalized reconstruction
+        "obs_coords": obs_coords,
+        "obs_values": obs_values,
+        "obs_mask": obs_mask,
+        "obs_indices": obs_indices,
+        "obs_field_ids": obs_field_ids,
+    }
+
+@torch.no_grad()
 def visualize_reconstruction(
     model: torch.nn.Module,
     dataset: torch.utils.data.Dataset,

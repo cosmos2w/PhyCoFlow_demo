@@ -1,14 +1,15 @@
 
 #----------------------------------------------------------
 
-# Notes: Changing to V5 version: multi-field sparse encoding + Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
-# if later we push M very high, the next improvement would be a top-k nearest-sensor gather instead of full gather
+# Notes: Changing to V5 version: multi-field sparse encoding + 
+#                         Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
 
 #----------------------------------------------------------
-# Repeat 10, only GL_rbf + topk_rbf, with top_k = 64
+# try gathering choice topk_rbf_ptlocal for GL_rbf
+# new hyperparameter: sensor_local_topk = 16
 #----------------------------------------------------------
 
-Demo_Num: 11
+Demo_Num: 12
 device_ids: [1]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
@@ -16,8 +17,8 @@ save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
 epochs : 10000
-batch_size : 192
-lr : 2.0e-4
+batch_size : 128
+lr : 1.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
 time_stride : 1
@@ -52,11 +53,13 @@ share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
 
-gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
-gather_topk: 64
-gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
+gather_mode: "topk_rbf_ptlocal"  # choices: choices=["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal"]
+gather_topk: 32                # query-side top-k gather
+sensor_local_topk: 16           # sensor-side local graph neighborhood
+gather_query_chunk_size: null  # keep null first; set to 1024 if needed
 learnable_rbf_sigma: true
-neighbor_backend: "keops" # choices: ["auto", "torch", "keops"], keops is more efficient
+neighbor_backend: "keops"
+sensor_local_dropout: 0.0
 
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline
