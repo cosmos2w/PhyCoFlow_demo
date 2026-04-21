@@ -178,6 +178,9 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             n_modes_y=cfg.get("fno_modes_y", 8),
             hidden_channels=cfg.get("fno_hidden_channels", 64),
             n_layers=cfg.get("fno_n_layers", 4),
+            condition_blur=cfg.get("condition_blur", False),
+            condition_blur_kernel=cfg.get("condition_blur_kernel", 5),
+            condition_blur_sigma=cfg.get("condition_blur_sigma", 1.0),
         )
         model = FNOFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
@@ -660,17 +663,18 @@ def main():
     )
 
     try:
-        model = _build_model(cfg, dataset).to(device)
+        # Build and restore on CPU first to avoid temporarily holding both the
+        # checkpoint tensors and the live model weights on the target device.
+        model = _build_model(cfg, dataset)
     except Exception as e:
         print(f"[Warning: !] Model construction failed: {e}")
         raise SystemExit(1)
 
-    # ckpt = torch.load(ckpt_path, map_location=device)
     try:
-        ckpt = torch.load(ckpt_path, map_location=device)
+        ckpt = torch.load(ckpt_path, map_location="cpu")
     except pickle.UnpicklingError:
         print("[Warning: !] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     
     state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
 
@@ -686,6 +690,11 @@ def main():
         print(f"[Warning: !] Checkpoint is incompatible with the reconstructed model: {e}")
         raise SystemExit(1)
 
+    epoch = int(ckpt.get("epoch", 0)) if isinstance(ckpt, dict) else 0
+    del state_dict
+    del ckpt
+
+    model = model.to(device)
     model.eval()
 
     vis_cond_fields = args.vis_cond_fields if args.vis_cond_fields is not None else cfg["vis_cond_fields"]
@@ -710,7 +719,7 @@ def main():
     result = visualize_reconstruction(
         model=model,
         dataset=dataset,
-        epoch=int(ckpt.get("epoch", 0)) if isinstance(ckpt, dict) else 0,
+        epoch=epoch,
         device=device,
         save_dir=str(out_dir),
         cond_fields=vis_cond_fields,

@@ -303,11 +303,21 @@ def main():
     if cfg.get("dataset_mode", "default") == "pdebench_multires":
         manifest_path = build_or_find_multires_manifest_for_eval(demo_root, cfg)
 
+        # FNO is a fixed-grid backbone. For the PDEBench multires task, we evaluate it
+        # on the same forced H grid used during training.
+        force_resolution = "H" if cfg.get("backbone", "mlp_rbf") == "fno" else None
+
+        if force_resolution == "H" and args.eval_resolution != "H":
+            print(
+                f"[Warning: !] backbone='fno' uses a fixed H grid. "
+                f"Requested eval_resolution={args.eval_resolution} will be overridden to H."
+            )
+
         dataset = PDEBenchMultiResDataset(
             manifest_path=manifest_path,
             split=args.split,
-            eval_resolution=args.eval_resolution,
-            force_resolution=None,
+            eval_resolution="H" if force_resolution == "H" else args.eval_resolution,
+            force_resolution=force_resolution,
             stats_path=str(model_root / "dataset_stats.pt"),
         )
     else:

@@ -25,10 +25,10 @@
 # Case_Truncate_Ratio >= 1 or < 0 → raise error
 
 #----------------------------------------------------------
-# Zero-shot super-resolution: test on 1:1:0 for RD, use upgraded topk_rbf gathering
+# Zero-shot super-resolution: test on 1:2:0 for CFD, use Perceiver
 #----------------------------------------------------------
 
-Demo_Num: 11
+Demo_Num: 14
 device_ids: [0]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
@@ -36,7 +36,7 @@ save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
 epochs : 10000
-batch_size : 256
+batch_size : 384
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -50,10 +50,10 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 # PDEBench multi-resolution settings
 # ----------------------------------------------------------
-pdebench_dataset_name: "RD"         # ["RD", "CFD"]
+pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: Species_0 ; CFD: 0 - Vx
-multires_ratio: "1:1:0"             # L:M:H, like "1:1:2", "1:1:1", "1:1:0", "2:1:0"
+multires_ratio: "1:2:0"             # L:M:H, like "1:1:2", "1:1:1", "1:1:0", "2:1:0"
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
@@ -61,7 +61,7 @@ Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "perceiver" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -110,7 +110,7 @@ fno_n_layers: 4
 # ----------------------------------------------------------
 # These are hyperparameters for the training process
 # ----------------------------------------------------------
-n_query_points : 1024    # Number of query points to be evaluated in training process
+n_query_points : 2048    # Number of query points to be evaluated in training process
 prior : "rff"            # choices=["iid", "rff"]; idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
 rff_features : 256
 rff_lengthscale : 0.15

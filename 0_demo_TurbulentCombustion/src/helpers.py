@@ -568,7 +568,7 @@ def visualize_reconstruction(
     # Normalized coordinates go into the model.
     coords = sample["coords"].unsqueeze(0).to(device)   # [1, N, D]
     # Original coordinates are used only for plotting.
-    coords_raw = sample["coords_raw"].unsqueeze(0).to(device)
+    coords_raw = sample["coords_raw"].unsqueeze(0)
 
     truth = sample["fields"].unsqueeze(0).to(device)    # [1, N, C]
 

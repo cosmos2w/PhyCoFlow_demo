@@ -403,6 +403,9 @@ def build_model(cfg: Dict[str, Any], dataset: TurbulentCombustionH5Dataset) -> n
             n_modes_y=cfg.get("fno_modes_y", 8),
             hidden_channels=cfg.get("fno_hidden_channels", 64),
             n_layers=cfg.get("fno_n_layers", 4),
+            condition_blur=cfg.get("condition_blur", False),
+            condition_blur_kernel=cfg.get("condition_blur_kernel", 5),
+            condition_blur_sigma=cfg.get("condition_blur_sigma", 1.0),
         )
         return FNOFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
 

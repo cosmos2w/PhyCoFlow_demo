@@ -10,6 +10,7 @@ Loss_Demo*/
 ffm_tc_pointcloud*/
 ForViewDataset/
 ForOfflineEvaluation/
+bk/
 
 
 *.pt

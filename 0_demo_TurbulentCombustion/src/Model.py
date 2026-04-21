@@ -1280,6 +1280,12 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
 # ------------------------------
 # FNO backbone
+
+# Gaussian splatting condition: FNOs truncate the Fourier series to a specific number of low-frequency modes (n_modes_x, n_modes_y), 
+# they are inherently low-pass filters. They struggle to resolve sharp, single-pixel spikes. 
+# Feeding a grid of sharp spikes into an FNO often causes ringing artifacts (the Gibbs phenomenon) 
+# and makes it difficult for the network to understand the spatial influence of that sensor.
+
 # ------------------------------
 class FNO(nn.Module):
     """
@@ -1301,6 +1307,7 @@ class FNO(nn.Module):
     Notes:
     - The FNO operates on a regular mesh, so x_t is reshaped from point-cloud layout [B, N, C] to grid layout [B, C, Num_y, Num_x].
     - Sparse conditioning is rasterized into dense per-field observation maps and mask maps before being concatenated to the FNO input.
+    - Optional Gaussian splatting can soften one-pixel conditioning impulses before they are concatenated to the spectral input.
     """
 
     def __init__(
@@ -1313,12 +1320,31 @@ class FNO(nn.Module):
         hidden_channels: int = 64,
         n_layers: int = 4,
         use_grid_positional_embedding: bool = True,
+        condition_blur: bool = False,
+        condition_blur_kernel: int = 5,
+        condition_blur_sigma: float = 1.0,
     ) -> None:
         super().__init__()
 
         self.n_fields = n_fields
         self.Num_x = int(Num_x)
         self.Num_y = int(Num_y)
+        self.condition_blur = bool(condition_blur)
+        self.condition_blur_kernel = int(condition_blur_kernel)
+        self.condition_blur_sigma = float(condition_blur_sigma)
+
+        if self.condition_blur_kernel < 1 or self.condition_blur_kernel % 2 == 0:
+            raise ValueError(
+                f"condition_blur_kernel must be a positive odd integer, got {self.condition_blur_kernel}."
+            )
+        if self.condition_blur_sigma <= 0.0:
+            raise ValueError(
+                f"condition_blur_sigma must be > 0, got {self.condition_blur_sigma}."
+            )
+
+        # Keep the blur kernel off the persistent state dict so old checkpoints
+        # still load with strict=True.
+        self.register_buffer("_condition_blur_kernel_cache", torch.empty(0), persistent=False)
 
         # FNO input channels:
         #   current state x_t         -> C
@@ -1336,6 +1362,71 @@ class FNO(nn.Module):
             n_layers=n_layers,
             positional_embedding="grid" if use_grid_positional_embedding else None,
         )
+
+    def _get_condition_blur_kernel(
+        self,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """
+        Build and cache a depthwise 2D Gaussian kernel used to splat sparse
+        conditioning impulses into a small local neighborhood.
+        """
+        kernel = self._condition_blur_kernel_cache
+        if kernel.numel() > 0 and kernel.dtype == dtype and kernel.device == device:
+            return kernel
+
+        radius = self.condition_blur_kernel // 2
+        coords_1d = torch.arange(-radius, radius + 1, device=device, dtype=dtype)
+        kernel_1d = torch.exp(-0.5 * (coords_1d / self.condition_blur_sigma) ** 2)
+        kernel_1d = kernel_1d / kernel_1d.sum().clamp_min(1e-12)
+        kernel_2d = torch.outer(kernel_1d, kernel_1d)
+        kernel_2d = kernel_2d / kernel_2d.sum().clamp_min(1e-12)
+
+        kernel = kernel_2d.view(1, 1, self.condition_blur_kernel, self.condition_blur_kernel)
+        kernel = kernel.expand(self.n_fields, 1, -1, -1).contiguous()
+        self._condition_blur_kernel_cache = kernel
+        return kernel
+
+    def _blur_condition_maps(
+        self,
+        obs_value_maps: torch.Tensor,
+        obs_mask_maps: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Replace one-pixel conditioning maps with Gaussian splats.
+
+        The value map is normalized by the blurred support so sensor magnitudes
+        remain on the original field scale, while the mask becomes a soft
+        confidence/support map.
+        """
+        kernel = self._get_condition_blur_kernel(
+            dtype=obs_value_maps.dtype,
+            device=obs_value_maps.device,
+        )
+        padding = self.condition_blur_kernel // 2
+
+        blurred_mask_raw = F.conv2d(
+            obs_mask_maps,
+            kernel,
+            padding=padding,
+            groups=self.n_fields,
+        )
+        blurred_value_num = F.conv2d(
+            obs_value_maps,
+            kernel,
+            padding=padding,
+            groups=self.n_fields,
+        )
+
+        blurred_value_maps = blurred_value_num / blurred_mask_raw.clamp_min(1e-6)
+        blurred_value_maps = torch.where(
+            blurred_mask_raw > 0,
+            blurred_value_maps,
+            torch.zeros_like(blurred_value_maps),
+        )
+        blurred_mask_maps = blurred_mask_raw.clamp(max=1.0)
+        return blurred_value_maps, blurred_mask_maps
 
     def _pointcloud_to_grid(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -1402,6 +1493,12 @@ class FNO(nn.Module):
 
         obs_value_maps = obs_value_maps.reshape(bsz, self.n_fields, self.Num_y, self.Num_x)
         obs_mask_maps = obs_mask_maps.reshape(bsz, self.n_fields, self.Num_y, self.Num_x)
+
+        if self.condition_blur:
+            obs_value_maps, obs_mask_maps = self._blur_condition_maps(
+                obs_value_maps=obs_value_maps,
+                obs_mask_maps=obs_mask_maps,
+            )
 
         return obs_value_maps, obs_mask_maps
 
@@ -2021,4 +2118,3 @@ class _ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # -------------------------
         out = self.head(torch.cat([point_feat, global_feat, local_cond], dim=-1))
         return out
-

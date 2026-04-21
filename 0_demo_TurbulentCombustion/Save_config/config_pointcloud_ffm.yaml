@@ -5,19 +5,18 @@
 #                         Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
 
 #----------------------------------------------------------
-# try gathering choice topk_rbf_ptlocal for GL_rbf
-# new hyperparameter: sensor_local_topk = 16
+# try revised FNO baseline with condition_blur
 #----------------------------------------------------------
 
-Demo_Num: 12
-device_ids: [1]
+Demo_Num: 13
+device_ids: [0]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
 epochs : 10000
-batch_size : 128
+batch_size : 108
 lr : 1.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -27,7 +26,7 @@ num_workers : 4
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "fno" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -71,10 +70,13 @@ Num_y: 100
 # Hyperparameters for FNO backbone
 # The tensor fed to FNO is shaped [B, C, Num_y, Num_x], so modes are specified separately along x and y.
 # ----------------------------------------------------------
-fno_modes_x: 32
-fno_modes_y: 8
-fno_hidden_channels: 64
+fno_modes_x: 24
+fno_modes_y: 12
+fno_hidden_channels: 128
 fno_n_layers: 4
+condition_blur: true
+condition_blur_kernel: 5
+condition_blur_sigma: 1.0
 
 # ----------------------------------------------------------
 # These are hyperparameters for the training process

@@ -160,6 +160,23 @@ def parse_args():
         help="Hidden channel width of the neuraloperator FNO baseline.",)
     p.add_argument( "--fno-n-layers", type=int, default=4,
         help="Number of Fourier layers in the FNO baseline.",)
+    p.add_argument(
+        "--condition-blur",
+        action="store_true",
+        help="If set, Gaussian-splat sparse FNO conditioning maps before concatenation.",
+    )
+    p.add_argument(
+        "--condition-blur-kernel",
+        type=int,
+        default=5,
+        help="Odd Gaussian kernel size used to splat sparse FNO conditioning maps.",
+    )
+    p.add_argument(
+        "--condition-blur-sigma",
+        type=float,
+        default=1.0,
+        help="Gaussian sigma used to splat sparse FNO conditioning maps.",
+    )
 
     # ------------------------------
     # These are hyperparameters for training process
@@ -572,6 +589,9 @@ def main():
             n_modes_y=args.fno_modes_y,
             hidden_channels=args.fno_hidden_channels,
             n_layers=args.fno_n_layers,
+            condition_blur=args.condition_blur,
+            condition_blur_kernel=args.condition_blur_kernel,
+            condition_blur_sigma=args.condition_blur_sigma,
         )
         model = FNOFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
 
