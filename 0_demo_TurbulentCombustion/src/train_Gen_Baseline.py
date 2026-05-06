@@ -184,8 +184,12 @@ def main() -> None:
 
         val_loss = None
         if epoch % eval_every == 0 or epoch == 1:
-            with torch.no_grad():
-                val_loss = adapter.run_epoch(bundle, val_loader, training=False, epoch=epoch)
+            with adapter.evaluation_weights(bundle):
+                bundle.model.eval()
+                with torch.no_grad():
+                    val_loss = adapter.run_epoch(
+                        bundle, val_loader, training=False, epoch=epoch
+                    )
 
             checkpoint = adapter.build_checkpoint(
                 bundle=bundle,
