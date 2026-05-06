@@ -236,9 +236,9 @@ def main() -> None:
     # ------------------------------------------------------------------ plots
     tri = triangulation(X)
 
-    fmin, fmax = field.min(), field.max()
+    # fmin, fmax = field.min(), field.max()
     # print(f'\nUsing hand-set min-max range!!!\n')
-    # fmin, fmax = -1, 1
+    fmin, fmax = -0.3, 0.3
 
     t_indices = range(args.T_ini, args.T_ini + args.N_T)
 

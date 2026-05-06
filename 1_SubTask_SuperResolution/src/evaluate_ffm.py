@@ -3,14 +3,23 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Tuple, List
 
 import torch
 import yaml
 import pickle
 import numpy as np
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
-from helpers import TurbulentCombustionH5Dataset, PDEBenchMultiResDataset, visualize_reconstruction
+from helpers import (
+    TurbulentCombustionH5Dataset,
+    PDEBenchMultiResDataset,
+    visualize_reconstruction,
+    build_sparse_condition,
+    _save_single_field_plot,
+    FIELD_NAMES,
+)
 from organize_train_MultiRes import build_manifest, default_manifest_path
 
 from Model import (
@@ -61,6 +70,15 @@ def parse_args():
         help="Drop the first ratio fraction of time frames from each PDEBench case before organizing the dataset. "
              "0 means no truncation; must satisfy 0 <= ratio < 1.",
     )
+
+    # Added extra metrics for evaluation
+    # Run like: python src/evaluate_ffm.py --Demo-Num 0 --split test --snapshot-index 0 --extra-metrics ssim grad spectrum --save-analysis-npz
+    p.add_argument("--extra-metrics", type=str, nargs="*", default=[], choices=["ssim", "grad", "spectrum"],
+                   help="Optional extra metrics to compute on structured 2D grids.")
+    # SSIM: higher is better; SSIM = 1.0 -> perfect structural match
+    # grad_rel_l2: smaller is better, below ~0.3 are very good, above ~0.7 means local derivatives are poorly captured
+    p.add_argument("--save-analysis-npz", action="store_true",
+                   help="If set, save per-field intermediate arrays (grids, gradients, spectra) to .npz files.")
     
     return p.parse_args()
 
@@ -217,6 +235,9 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             gather_query_chunk_size=cfg.get("gather_query_chunk_size", None),
             learnable_rbf_sigma=cfg.get("learnable_rbf_sigma", False),
             neighbor_backend=cfg.get("neighbor_backend", "torch"),
+            use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+            fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+            fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
         )
         model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
@@ -228,10 +249,51 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
         cond_dim=cfg.get("cond_dim", 128),
         field_embed_dim=cfg.get("field_embed_dim", 128),
         rbf_sigma=cfg.get("rbf_sigma", 0.05),
+        use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+        fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+        fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
     )
     model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
 
     return model
+
+
+def _apply_checkpoint_fourier_pe_to_cfg(cfg: dict, ckpt) -> dict:
+    state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    has_fourier_state = False
+    num_bands = None
+    max_freq = None
+
+    if isinstance(state_dict, dict):
+        for key, value in state_dict.items():
+            if key.endswith("pos_enc.freqs"):
+                has_fourier_state = True
+                if torch.is_tensor(value):
+                    num_bands = int(value.numel())
+                    if value.numel() > 0:
+                        max_freq = float(value.reshape(-1)[-1].item() * 2.0)
+                break
+
+    if has_fourier_state:
+        checkpoint_value = True
+    elif isinstance(ckpt, dict) and "USE_FOURIER_PE" in ckpt:
+        checkpoint_value = bool(ckpt["USE_FOURIER_PE"])
+    else:
+        checkpoint_value = False
+
+    if bool(cfg.get("USE_FOURIER_PE", False)) != checkpoint_value:
+        print(
+            f"[*] Checkpoint architecture sets USE_FOURIER_PE={checkpoint_value}; "
+            f"overriding YAML value {cfg.get('USE_FOURIER_PE', False)} for compatibility."
+        )
+
+    cfg = dict(cfg)
+    cfg["USE_FOURIER_PE"] = checkpoint_value
+    if num_bands is not None:
+        cfg["fourier_pe_num_bands"] = num_bands
+    if max_freq is not None:
+        cfg["fourier_pe_max_freq"] = max_freq
+    return cfg
 
 
 def build_or_find_multires_manifest_for_eval(demo_root: Path, cfg: dict) -> str:
@@ -242,13 +304,15 @@ def build_or_find_multires_manifest_for_eval(demo_root: Path, cfg: dict) -> str:
         return str(Path(demo_root) / explicit)
     
     case_truncate_ratio = cfg.get("Case_Truncate_Ratio", 0.0)
+    multires_train_case_fraction = cfg.get("multires_train_case_fraction", 1.0)
 
     path = default_manifest_path(
         processed_root=processed_root,
         dataset_name=cfg["pdebench_dataset_name"],
         selected_field_idx=cfg["selected_field_idx_raw"],
         multires_ratio=cfg["multires_ratio"],
-        case_truncate_ratio = cfg.get("Case_Truncate_Ratio", 0.0)
+        case_truncate_ratio=case_truncate_ratio,
+        multires_train_case_fraction=multires_train_case_fraction,
     )
     if not path.exists():
         manifest = build_manifest(
@@ -258,11 +322,499 @@ def build_or_find_multires_manifest_for_eval(demo_root: Path, cfg: dict) -> str:
             multires_ratio=cfg["multires_ratio"],
             train_fraction=cfg.get("train_ratio", 0.9),
             case_truncate_ratio=case_truncate_ratio,
+            multires_train_case_fraction=multires_train_case_fraction,
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
             json.dump(manifest, f, indent=2)
     return str(path)
+
+
+def _to_int_list(x):
+    if x is None:
+        return []
+    if isinstance(x, (list, tuple)):
+        return [int(v) for v in x]
+    return [int(x)]
+
+
+def _broadcast_per_field(values, cond_fields, name: str) -> List[int]:
+    values = _to_int_list(values)
+    if len(values) == 1:
+        values = values * len(cond_fields)
+    if len(values) != len(cond_fields):
+        raise ValueError(
+            f"{name} must have length 1 or match len(cond_fields). "
+            f"Got {len(values)} vs {len(cond_fields)}."
+        )
+    return values
+
+
+@torch.no_grad()
+def _visualize_reconstruction_with_payload(
+    model: torch.nn.Module,
+    dataset: torch.utils.data.Dataset,
+    epoch: int,
+    device: torch.device,
+    save_dir: str,
+    cond_fields=(2,),
+    n_obs=256,
+    n_steps: int = 32,
+    snapshot_index: int = 0,
+    file_tag: Optional[str] = None,
+    save_metrics_json: bool = True,
+):
+    """
+    Local copy of the plotting reconstruction path that also returns arrays
+    needed by the structured-grid metrics. Kept here so only this evaluator
+    changes.
+    """
+    model.eval()
+
+    cond_fields = _to_int_list(cond_fields)
+    n_obs = _broadcast_per_field(n_obs, cond_fields, "n_obs")
+
+    sample = dataset[snapshot_index]
+    coords = sample["coords"].unsqueeze(0).to(device)
+    coords_raw = sample["coords_raw"].unsqueeze(0).to(device)
+    truth = sample["fields"].unsqueeze(0).to(device)
+
+    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+        coords_full=coords,
+        fields_full=truth,
+        cond_fields=cond_fields,
+        n_obs_min=n_obs,
+        n_obs_max=n_obs,
+    )
+
+    recon = model.sample(
+        coords=coords,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_field_ids=obs_field_ids,
+        n_steps=n_steps,
+        clamp_indices=obs_indices,
+    )
+
+    mean = dataset.mean.to(device)
+    std = dataset.std.to(device)
+    recon_phys = recon * std.view(1, 1, -1) + mean.view(1, 1, -1)
+    truth_phys = truth * std.view(1, 1, -1) + mean.view(1, 1, -1)
+
+    recon_phys = recon_phys[0].cpu().numpy()
+    truth_phys = truth_phys[0].cpu().numpy()
+
+    valid = obs_mask[0].bool()
+    obs_indices_cpu = obs_indices[0, valid].cpu().numpy()
+    obs_field_ids_cpu = obs_field_ids[0, valid].cpu().numpy()
+
+    coords_np = coords_raw[0].cpu().numpy()
+    coords_xy = coords_np[:, :2]
+
+    field_names = tuple(getattr(dataset, "field_names", FIELD_NAMES))
+    metrics = {}
+
+    for c, name in enumerate(field_names):
+        true_f = truth_phys[:, c]
+        pred_f = recon_phys[:, c]
+
+        sensor_coords = None
+        field_sensor_mask = (obs_field_ids_cpu == c)
+        if np.any(field_sensor_mask):
+            sensor_coords = coords_xy[obs_indices_cpu[field_sensor_mask]]
+
+        l2_error = _save_single_field_plot(
+            true_f=true_f,
+            pred_f=pred_f,
+            coords_xy=coords_xy,
+            sensor_coords=sensor_coords,
+            field_name=name,
+            epoch=epoch,
+            save_dir=save_dir,
+            file_prefix=file_tag,
+        )
+        metrics[name] = l2_error
+
+    if save_metrics_json:
+        prefix = file_tag if file_tag is not None else f"epoch_{epoch:04d}"
+        metrics_path = os.path.join(save_dir, f"{prefix}_metrics.json")
+        json_payload = {
+            "epoch": int(epoch),
+            "snapshot_index": int(snapshot_index),
+            "cond_fields": [int(v) for v in cond_fields],
+            "n_obs": [int(v) for v in n_obs],
+            "n_steps": int(n_steps),
+            "metrics": metrics,
+        }
+        with open(metrics_path, "w") as f:
+            json.dump(json_payload, f, indent=2)
+
+    payload = {
+        "coords_xy": coords_xy,
+        "truth_phys": truth_phys,
+        "recon_phys": recon_phys,
+        "field_names": field_names,
+        "resolution_tag": str(sample.get("resolution_tag", "")),
+    }
+    return metrics, payload
+
+
+def _extract_num_xy_for_payload(dataset, payload: dict):
+    res_tag = payload.get("resolution_tag", "")
+    if hasattr(dataset, "resolutions") and res_tag in getattr(dataset, "resolutions", {}):
+        res_meta = dataset.resolutions[res_tag]
+        return res_meta.get("Num_x", None), res_meta.get("Num_y", None)
+    return None, None
+
+
+def _infer_structured_grid_from_coords(
+    coords_xy: np.ndarray,
+    decimals: int = 8,
+    num_x: Optional[int] = None,
+    num_y: Optional[int] = None,
+):
+    """
+    Recover a structured 2D grid description from point coordinates.
+    """
+    x = np.round(coords_xy[:, 0], decimals=decimals)
+    y = np.round(coords_xy[:, 1], decimals=decimals)
+    n_pts = coords_xy.shape[0]
+
+    if num_x is not None and num_y is not None:
+        nx = int(num_x)
+        ny = int(num_y)
+
+        if nx > 0 and ny > 0 and nx * ny == n_pts:
+            sort_idx = np.lexsort((x, y))
+            unique_x = np.unique(x)
+            unique_y = np.unique(y)
+            dx = float(np.mean(np.diff(unique_x))) if len(unique_x) > 1 else 1.0
+            dy = float(np.mean(np.diff(unique_y))) if len(unique_y) > 1 else 1.0
+
+            return {
+                "nx": nx,
+                "ny": ny,
+                "sort_idx": sort_idx,
+                "x_unique": unique_x,
+                "y_unique": unique_y,
+                "dx": dx,
+                "dy": dy,
+            }
+        elif nx > 0 and ny > 0:
+            print(
+                f"[Warning: !] Provided Num_x={nx}, Num_y={ny} are inconsistent with "
+                f"N={n_pts}; falling back to coordinate inference."
+            )
+
+    unique_x = np.unique(x)
+    unique_y = np.unique(y)
+
+    nx = len(unique_x)
+    ny = len(unique_y)
+
+    if nx * ny != n_pts:
+        raise ValueError(
+            f"Coordinates do not form a complete structured 2D grid and no valid "
+            f"(Num_x, Num_y) was provided. "
+            f"Inferred nx={nx}, ny={ny}, nx*ny={nx*ny}, N={n_pts}"
+        )
+
+    sort_idx = np.lexsort((x, y))
+    dx = float(np.mean(np.diff(unique_x))) if nx > 1 else 1.0
+    dy = float(np.mean(np.diff(unique_y))) if ny > 1 else 1.0
+
+    return {
+        "nx": nx,
+        "ny": ny,
+        "sort_idx": sort_idx,
+        "x_unique": unique_x,
+        "y_unique": unique_y,
+        "dx": dx,
+        "dy": dy,
+    }
+
+
+def _reshape_flat_field_to_grid(field_flat: np.ndarray, grid_info: dict) -> np.ndarray:
+    vals = field_flat[grid_info["sort_idx"]]
+    return vals.reshape(grid_info["ny"], grid_info["nx"])
+
+
+def _gaussian_kernel(window_size: int = 11, sigma: float = 1.5, device: str = "cpu"):
+    ax = torch.arange(window_size, dtype=torch.float32, device=device) - window_size // 2
+    g = torch.exp(-(ax ** 2) / (2 * sigma ** 2))
+    kernel = torch.outer(g, g)
+    kernel = kernel / kernel.sum()
+    return kernel.view(1, 1, window_size, window_size)
+
+
+def _ssim2d(u: np.ndarray, v: np.ndarray, data_range: Optional[float] = None,
+            window_size: int = 11, sigma: float = 1.5) -> float:
+    device = "cpu"
+    x = torch.from_numpy(u).float().unsqueeze(0).unsqueeze(0).to(device)
+    y = torch.from_numpy(v).float().unsqueeze(0).unsqueeze(0).to(device)
+
+    if data_range is None:
+        data_range = float(max(u.max(), v.max()) - min(u.min(), v.min()))
+    data_range = max(float(data_range), 1e-8)
+
+    c1 = (0.01 * data_range) ** 2
+    c2 = (0.03 * data_range) ** 2
+
+    kernel = _gaussian_kernel(window_size=window_size, sigma=sigma, device=device)
+    pad = window_size // 2
+
+    mu_x = F.conv2d(x, kernel, padding=pad)
+    mu_y = F.conv2d(y, kernel, padding=pad)
+
+    mu_x2 = mu_x * mu_x
+    mu_y2 = mu_y * mu_y
+    mu_xy = mu_x * mu_y
+
+    sigma_x2 = F.conv2d(x * x, kernel, padding=pad) - mu_x2
+    sigma_y2 = F.conv2d(y * y, kernel, padding=pad) - mu_y2
+    sigma_xy = F.conv2d(x * y, kernel, padding=pad) - mu_xy
+
+    ssim_map = ((2 * mu_xy + c1) * (2 * sigma_xy + c2)) / (
+        (mu_x2 + mu_y2 + c1) * (sigma_x2 + sigma_y2 + c2) + 1e-12
+    )
+    return float(ssim_map.mean().item())
+
+
+def _gradient_metrics(u: np.ndarray, v: np.ndarray, dx: float, dy: float) -> Tuple[Dict[str, float], Dict[str, np.ndarray]]:
+    uy, ux = np.gradient(u, dy, dx, edge_order=2)
+    vy, vx = np.gradient(v, dy, dx, edge_order=2)
+
+    diff_x = vx - ux
+    diff_y = vy - uy
+
+    grad_mse = float(np.mean(diff_x ** 2 + diff_y ** 2))
+    grad_rel_l2 = float(
+        np.sqrt(np.sum(diff_x ** 2 + diff_y ** 2)) /
+        (np.sqrt(np.sum(ux ** 2 + uy ** 2)) + 1e-12)
+    )
+
+    val_diff = v - u
+    h1_num = np.sum(val_diff ** 2) + np.sum(diff_x ** 2 + diff_y ** 2)
+    h1_den = np.sum(u ** 2) + np.sum(ux ** 2 + uy ** 2)
+    h1_rel = float(np.sqrt(h1_num) / (np.sqrt(h1_den) + 1e-12))
+
+    metrics = {
+        "grad_mse": grad_mse,
+        "grad_rel_l2": grad_rel_l2,
+        "h1_rel": h1_rel,
+    }
+    payload = {
+        "grad_true_x": ux,
+        "grad_true_y": uy,
+        "grad_pred_x": vx,
+        "grad_pred_y": vy,
+        "grad_abs_err": np.sqrt(diff_x ** 2 + diff_y ** 2),
+    }
+    return metrics, payload
+
+
+def _radial_spectrum(u: np.ndarray, dx: float, dy: float):
+    ny, nx = u.shape
+    uu = u - np.mean(u)
+
+    fft = np.fft.fftshift(np.fft.fft2(uu))
+    psd2 = (np.abs(fft) ** 2) / (nx * ny)
+
+    kx = 2.0 * np.pi * np.fft.fftshift(np.fft.fftfreq(nx, d=dx))
+    ky = 2.0 * np.pi * np.fft.fftshift(np.fft.fftfreq(ny, d=dy))
+    kx_unique = np.unique(kx)
+    ky_unique = np.unique(ky)
+    kx_diff = np.diff(kx_unique)
+    ky_diff = np.diff(ky_unique)
+    dkx = np.min(np.abs(kx_diff[kx_diff != 0])) if np.any(kx_diff != 0) else 1.0
+    dky = np.min(np.abs(ky_diff[ky_diff != 0])) if np.any(ky_diff != 0) else 1.0
+    dk = float(min(abs(dkx), abs(dky))) if (nx > 1 and ny > 1) else 1.0
+    dk = max(dk, 1e-12)
+
+    kx_grid, ky_grid = np.meshgrid(kx, ky)
+    kmag = np.sqrt(kx_grid ** 2 + ky_grid ** 2)
+    shell_id = np.rint(kmag / dk).astype(np.int64)
+    n_shells = int(shell_id.max()) + 1
+
+    shell_sum = np.bincount(shell_id.ravel(), weights=psd2.ravel(), minlength=n_shells)
+    shell_count = np.bincount(shell_id.ravel(), minlength=n_shells)
+    shell_k_sum = np.bincount(shell_id.ravel(), weights=kmag.ravel(), minlength=n_shells)
+
+    radial = shell_sum / np.maximum(shell_count, 1)
+    k = shell_k_sum / np.maximum(shell_count, 1)
+
+    valid = shell_count > 0
+    k = k[valid]
+    radial = radial[valid]
+
+    if len(k) > 1:
+        k = k[1:]
+        radial = radial[1:]
+
+    return {
+        "k": k,
+        "psd2": psd2,
+        "radial_spectrum": radial,
+    }
+
+
+def _trapz(y: np.ndarray, x: np.ndarray) -> float:
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
+
+
+def _band_energy_breakdown(k: np.ndarray, spectrum: np.ndarray):
+    if len(k) == 0:
+        return {
+            "band_names": ["large", "medium", "small"],
+            "band_edges": [0.0, 0.0, 0.0, 0.0],
+            "band_energy": np.array([0.0, 0.0, 0.0], dtype=np.float64),
+            "band_fraction": np.array([0.0, 0.0, 0.0], dtype=np.float64),
+        }
+
+    kmax = float(np.max(k))
+    e1 = kmax / 3.0
+    e2 = 2.0 * kmax / 3.0
+
+    masks = [
+        (k <= e1),
+        ((k > e1) & (k <= e2)),
+        (k > e2),
+    ]
+
+    energies = []
+    for mask in masks:
+        if np.count_nonzero(mask) >= 2:
+            energies.append(_trapz(spectrum[mask], k[mask]))
+        elif np.count_nonzero(mask) == 1:
+            energies.append(float(spectrum[mask][0]))
+        else:
+            energies.append(0.0)
+
+    energies = np.asarray(energies, dtype=np.float64)
+    total = float(np.sum(energies)) + 1e-12
+    fractions = energies / total
+
+    return {
+        "band_names": ["large", "medium", "small"],
+        "band_edges": [0.0, e1, e2, kmax],
+        "band_energy": energies,
+        "band_fraction": fractions,
+    }
+
+
+def _spectral_metrics(u: np.ndarray, v: np.ndarray, dx: float, dy: float):
+    su = _radial_spectrum(u, dx=dx, dy=dy)
+    sv = _radial_spectrum(v, dx=dx, dy=dy)
+
+    eps = 1e-12
+    k = su["k"]
+    ru = su["radial_spectrum"]
+    rv = sv["radial_spectrum"]
+
+    n = min(len(ru), len(rv))
+    k = k[:n]
+    ru = ru[:n]
+    rv = rv[:n]
+
+    spectral_lsd = float(np.sqrt(np.mean((np.log(rv + eps) - np.log(ru + eps)) ** 2)))
+
+    gt_band = _band_energy_breakdown(k, ru)
+    pr_band = _band_energy_breakdown(k, rv)
+
+    band_ratio = pr_band["band_energy"] / (gt_band["band_energy"] + eps)
+    band_rel_err = np.abs(pr_band["band_energy"] - gt_band["band_energy"]) / (gt_band["band_energy"] + eps)
+
+    metrics = {
+        "spectral_lsd": spectral_lsd,
+        "spectral_ratio_large": float(band_ratio[0]),
+        "spectral_ratio_medium": float(band_ratio[1]),
+        "spectral_ratio_small": float(band_ratio[2]),
+        "spectral_relerr_large": float(band_rel_err[0]),
+        "spectral_relerr_medium": float(band_rel_err[1]),
+        "spectral_relerr_small": float(band_rel_err[2]),
+    }
+
+    payload = {
+        "k": k,
+        "spectrum_true": ru,
+        "spectrum_pred": rv,
+        "psd2_true": su["psd2"],
+        "psd2_pred": sv["psd2"],
+        "band_names": np.array(gt_band["band_names"]),
+        "band_edges": np.array(gt_band["band_edges"], dtype=np.float64),
+        "band_energy_true": gt_band["band_energy"],
+        "band_energy_pred": pr_band["band_energy"],
+        "band_fraction_true": gt_band["band_fraction"],
+        "band_fraction_pred": pr_band["band_fraction"],
+        "band_ratio_pred_over_true": band_ratio,
+    }
+    return metrics, payload
+
+
+def _save_spectrum_plot(
+    k: np.ndarray,
+    s_true: np.ndarray,
+    s_pred: np.ndarray,
+    band_edges: np.ndarray,
+    save_path: Path,
+    title: str,
+):
+    fig, ax = plt.subplots(figsize=(7.2, 4.6))
+
+    ax.axvspan(band_edges[0], band_edges[1], color="#c9c9f5", alpha=0.25)
+    ax.axvspan(band_edges[1], band_edges[2], color="#cfe8cf", alpha=0.25)
+    ax.axvspan(band_edges[2], band_edges[3], color="#f3d6d6", alpha=0.25)
+
+    ax.semilogy(k + 1e-12, s_true + 1e-12, color="black", linewidth=2.5, label="Ground Truth")
+    ax.semilogy(k + 1e-12, s_pred + 1e-12, color="red", linewidth=2.2, label="Reconstruction")
+
+    ax.set_xlabel(r"$k$")
+    ax.set_ylabel(r"$E(k)$")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.25)
+
+    ymax = max(np.max(s_true), np.max(s_pred)) + 1e-12
+    ymin = max(min(np.min(s_true[s_true > 0]) if np.any(s_true > 0) else 1e-12,
+                   np.min(s_pred[s_pred > 0]) if np.any(s_pred > 0) else 1e-12), 1e-12)
+    ax.set_ylim(bottom=ymin * 0.7, top=ymax * 1.25)
+
+    ax.text(0.5 * (band_edges[0] + band_edges[1]), ymin * 1.2, "large scales",
+            color="#303080", fontsize=12, ha="center", va="bottom", fontstyle="italic")
+    ax.text(0.5 * (band_edges[1] + band_edges[2]), ymin * 1.2, "medium scales",
+            color="#2f6f2f", fontsize=12, ha="center", va="bottom", fontstyle="italic")
+    ax.text(0.5 * (band_edges[2] + band_edges[3]), ymin * 1.2, "small scales",
+            color="#7a3030", fontsize=12, ha="center", va="bottom", fontstyle="italic")
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=220)
+    plt.close(fig)
+
+
+def _save_band_energy_plot(
+    band_names: np.ndarray,
+    band_ratio: np.ndarray,
+    save_path: Path,
+    title: str,
+):
+    fig, ax = plt.subplots(figsize=(6.2, 4.2))
+    x = np.arange(len(band_names))
+
+    ax.bar(x, band_ratio, width=0.6)
+    ax.axhline(1.0, linestyle=":", linewidth=1.8, color="black")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(v).capitalize() for v in band_names])
+    ax.set_ylabel(r"$E_{\mathrm{pred}} / E_{\mathrm{GT}}$")
+    ax.set_title(title)
+    ax.set_ylim(bottom=0.0)
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=220)
+    plt.close(fig)
 
 
 def main():
@@ -300,6 +852,15 @@ def main():
 
     device = torch.device(args.device if args.device is not None else ("cuda:0" if torch.cuda.is_available() else "cpu"))
 
+    try:
+        ckpt = torch.load(ckpt_path, map_location=device)
+    except pickle.UnpicklingError:
+        print("[Warning: !] Restricted torch.load failed; retrying with weights_only=False "
+            "for a trusted local checkpoint.")
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+
+    cfg = _apply_checkpoint_fourier_pe_to_cfg(cfg, ckpt)
+
     if cfg.get("dataset_mode", "default") == "pdebench_multires":
         manifest_path = build_or_find_multires_manifest_for_eval(demo_root, cfg)
 
@@ -336,14 +897,6 @@ def main():
         print(f"[Warning: !] Model construction failed: {e}")
         raise SystemExit(1)
 
-    # ckpt = torch.load(ckpt_path, map_location=device)
-    try:
-        ckpt = torch.load(ckpt_path, map_location=device)
-    except pickle.UnpicklingError:
-        print("[Warning: !] Restricted torch.load failed; retrying with weights_only=False "
-            "for a trusted local checkpoint.")
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    
     state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
 
     # Some checkpoints may carry "_metadata" as a literal key after serialization.
@@ -378,19 +931,123 @@ def main():
     out_dir = demo_root / "Save_reconstruction_files" / "ForOfflineEvaluation" / f"eval_N{args.Demo_Num}_{eval_timestamp}_from_{train_timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    metrics = visualize_reconstruction(
-        model=model,
-        dataset=dataset,
-        epoch=int(ckpt.get("epoch", 0)) if isinstance(ckpt, dict) else 0,
-        device=device,
-        save_dir=str(out_dir),
-        cond_fields=vis_cond_fields,
-        n_obs=vis_n_obs_list,
-        n_steps=n_steps_generation,
-        snapshot_index=args.snapshot_index,
-        file_tag=f"snapshot_{args.snapshot_index:04d}",
-        save_metrics_json=True,
-    )
+    epoch = int(ckpt.get("epoch", 0)) if isinstance(ckpt, dict) else 0
+    need_payload = (len(args.extra_metrics) > 0) or args.save_analysis_npz
+
+    if need_payload:
+        metrics, payload = _visualize_reconstruction_with_payload(
+            model=model,
+            dataset=dataset,
+            epoch=epoch,
+            device=device,
+            save_dir=str(out_dir),
+            cond_fields=vis_cond_fields,
+            n_obs=vis_n_obs_list,
+            n_steps=n_steps_generation,
+            snapshot_index=args.snapshot_index,
+            file_tag=f"snapshot_{args.snapshot_index:04d}",
+            save_metrics_json=True,
+        )
+    else:
+        metrics = visualize_reconstruction(
+            model=model,
+            dataset=dataset,
+            epoch=epoch,
+            device=device,
+            save_dir=str(out_dir),
+            cond_fields=vis_cond_fields,
+            n_obs=vis_n_obs_list,
+            n_steps=n_steps_generation,
+            snapshot_index=args.snapshot_index,
+            file_tag=f"snapshot_{args.snapshot_index:04d}",
+            save_metrics_json=True,
+        )
+        payload = None
+
+    extra_metrics = {}
+
+    if payload is not None and len(args.extra_metrics) > 0:
+        num_x, num_y = _extract_num_xy_for_payload(dataset, payload)
+        if num_x is None or num_y is None:
+            num_x = cfg.get("Num_x", None)
+            num_y = cfg.get("Num_y", None)
+
+        try:
+            grid_info = _infer_structured_grid_from_coords(
+                payload["coords_xy"],
+                num_x=num_x,
+                num_y=num_y,
+            )
+        except ValueError as e:
+            print(f"[Warning: !] Extra structured-grid metrics skipped: {e}")
+            grid_info = None
+
+        if grid_info is not None:
+            field_names = payload["field_names"]
+            truth_phys = payload["truth_phys"]
+            recon_phys = payload["recon_phys"]
+
+            prefix = f"snapshot_{args.snapshot_index:04d}"
+
+            for c, name in enumerate(field_names):
+                u = _reshape_flat_field_to_grid(truth_phys[:, c], grid_info)
+                v = _reshape_flat_field_to_grid(recon_phys[:, c], grid_info)
+
+                field_metrics = {}
+                analysis_payload = {
+                    "true_grid": u,
+                    "pred_grid": v,
+                    "abs_err_grid": np.abs(v - u),
+                    "x_unique": grid_info["x_unique"],
+                    "y_unique": grid_info["y_unique"],
+                }
+
+                if "ssim" in args.extra_metrics:
+                    field_metrics["ssim"] = _ssim2d(
+                        u, v,
+                        data_range=float(u.max() - u.min()),
+                    )
+
+                if "grad" in args.extra_metrics:
+                    grad_metrics, grad_payload = _gradient_metrics(
+                        u, v,
+                        dx=grid_info["dx"],
+                        dy=grid_info["dy"],
+                    )
+                    field_metrics.update(grad_metrics)
+                    analysis_payload.update(grad_payload)
+
+                if "spectrum" in args.extra_metrics:
+                    spec_metrics, spec_payload = _spectral_metrics(
+                        u, v,
+                        dx=grid_info["dx"],
+                        dy=grid_info["dy"],
+                    )
+                    field_metrics.update(spec_metrics)
+                    analysis_payload.update(spec_payload)
+
+                    spec_plot_path = out_dir / f"{prefix}_field_{name}_spectrum.png"
+                    _save_spectrum_plot(
+                        spec_payload["k"],
+                        spec_payload["spectrum_true"],
+                        spec_payload["spectrum_pred"],
+                        band_edges=spec_payload["band_edges"],
+                        save_path=spec_plot_path,
+                        title=f"{name} spectrum",
+                    )
+                    band_plot_path = out_dir / f"{prefix}_field_{name}_band_energy_ratio.png"
+                    _save_band_energy_plot(
+                        spec_payload["band_names"],
+                        spec_payload["band_ratio_pred_over_true"],
+                        save_path=band_plot_path,
+                        title=f"{name} band energy ratio",
+                    )
+
+                extra_metrics[name] = field_metrics
+
+                if args.save_analysis_npz:
+                    npz_path = out_dir / f"{prefix}_field_{name}_analysis.npz"
+                    np.savez_compressed(npz_path, **analysis_payload)
 
     summary = {
         "demo_num": int(args.Demo_Num),
@@ -403,6 +1060,8 @@ def main():
         "vis_n_obs_list": [int(v) for v in vis_n_obs_list],
         "n_steps_generation": int(n_steps_generation),
         "metrics": metrics,
+        "extra_metric_names": list(args.extra_metrics),
+        "extra_metrics": extra_metrics,
     }
 
     with open(out_dir / "evaluation_summary.json", "w") as f:
@@ -412,7 +1071,9 @@ def main():
     print(f"[*] YAML      : {yaml_path}")
     print(f"[*] Checkpoint: {ckpt_path}")
     print(f"[*] Output dir : {out_dir}")
-    print(f"[*] Metrics    : {json.dumps(metrics, indent=2)}")
+    print(f"[*] Metrics         : {json.dumps(metrics, indent=2)}")
+    if len(extra_metrics) > 0:
+        print(f"[*] Extra metrics   : {json.dumps(extra_metrics, indent=2)}")
 
 
 if __name__ == "__main__":

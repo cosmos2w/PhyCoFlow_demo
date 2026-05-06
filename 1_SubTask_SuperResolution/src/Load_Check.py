@@ -39,7 +39,7 @@ def main():
     # Determine the HDF5 file path relative to this script
     script_dir  = Path(__file__).resolve().parent          # project/src
     project_root = script_dir.parent                        # project/
-    h5_path     = project_root / "Dataset" / "PDE_Bench" / "Processed" / "CFD_L_res.h5"
+    h5_path     = project_root / "Dataset" / "PDE_Bench" / "Processed" / "RD_L_Res.h5"
 
     # Dataset/PDE_Bench/Processed/RD_H_Res.h5
     # Dataset/PDE_Bench/Processed/RD_M_Res.h5

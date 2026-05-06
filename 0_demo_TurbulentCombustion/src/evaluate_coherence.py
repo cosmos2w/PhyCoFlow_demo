@@ -432,6 +432,9 @@ def build_model(cfg: Dict[str, Any], dataset: TurbulentCombustionH5Dataset) -> n
             neighbor_backend=cfg.get("neighbor_backend", "torch"),
             sensor_local_topk=cfg.get("sensor_local_topk", 32),
             sensor_local_dropout=cfg.get("sensor_local_dropout", 0.0),
+            use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+            fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+            fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
         )
         return PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
 
@@ -443,6 +446,9 @@ def build_model(cfg: Dict[str, Any], dataset: TurbulentCombustionH5Dataset) -> n
         cond_dim=cfg.get("cond_dim", 128),
         field_embed_dim=cfg.get("field_embed_dim", 128),
         rbf_sigma=cfg.get("rbf_sigma", 0.05),
+        use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+        fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+        fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
     )
     return PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
 

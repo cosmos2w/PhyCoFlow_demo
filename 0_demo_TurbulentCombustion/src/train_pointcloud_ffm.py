@@ -87,6 +87,12 @@ def parse_args():
     p.add_argument("--cond-dim", type=int, default=128)
     p.add_argument("--field-embed-dim", type=int, default=64)
     p.add_argument("--rbf-sigma", type=float, default=0.05)
+    p.add_argument("--USE-FOURIER-PE", "--USE_FOURIER_PE", dest="USE_FOURIER_PE", action="store_true",
+                   help="If set, feed Fourier positional coordinate features to point_encoder.")
+    p.add_argument("--fourier-pe-num-bands", type=int, default=32,
+                   help="Number of frequency bands for Fourier positional coordinate encoding.")
+    p.add_argument("--fourier-pe-max-freq", type=float, default=64.0,
+                   help="Maximum frequency scale for Fourier positional coordinate encoding.")
 
     # ------------------------------
     # These are hyperparameters for Perceiver backbone or part of GL_rbf
@@ -117,7 +123,7 @@ def parse_args():
     # Hybrid local-global gather options
     # ----------------------------------------------------------
     p.add_argument(
-        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal"],
+        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal", "topk_rbf_glres"],
         help="Gather mode used by ConditionalPointHybridLocalGlobalRBF. 'rbf' preserves the current full gather as default.",
     )
     p.add_argument(
@@ -182,6 +188,10 @@ def parse_args():
     # These are hyperparameters for training process
     # ------------------------------
     p.add_argument("--n-query-points", type=int, default=4096)
+    p.add_argument("--query-sampling", type=str, default="uniform", choices=["uniform", "obs_mix"])
+    p.add_argument("--query-sample-near-ratio", type=float, default=0.25)
+    p.add_argument("--query-sample-far-ratio", type=float, default=0.25)
+    p.add_argument("--query-sample-sigma-ratio", type=float, default=0.05)
     p.add_argument("--prior", type=str, default="rff", choices=["iid", "rff"])
     p.add_argument("--rff-features", type=int, default=256)
     p.add_argument("--rff-lengthscale", type=float, default=0.15)
@@ -278,11 +288,93 @@ def collate_snapshots(batch):
     }
 
 
-def random_query_subset(coords: torch.Tensor, fields: torch.Tensor, n_query: Optional[int]):
+def sample_query_subset(
+    coords: torch.Tensor,
+    fields: torch.Tensor,
+    n_query: Optional[int],
+    mode: str = "uniform",
+    obs_coords: Optional[torch.Tensor] = None,
+    obs_mask: Optional[torch.Tensor] = None,
+    near_ratio: float = 0.25,
+    far_ratio: float = 0.25,
+    sigma_ratio: float = 0.05,
+):
     if n_query is None or n_query >= coords.shape[1]:
         return coords, fields, None
-    idx = torch.randperm(coords.shape[1], device=coords.device)[:n_query].sort().values
-    return coords[:, idx], fields[:, idx], idx
+
+    bsz, n_pts, coord_dim = coords.shape
+    n_query = int(n_query)
+
+    def take_weighted(weights: torch.Tensor, count: int, selected: torch.Tensor) -> torch.Tensor:
+        count = min(int(count), int((~selected).sum().item()))
+        if count <= 0:
+            return torch.empty(0, device=coords.device, dtype=torch.long)
+
+        weights = weights.to(dtype=coords.dtype).clamp_min(0.0)
+        weights = weights.masked_fill(selected, 0.0)
+        pieces = []
+
+        positive = weights > 0
+        if positive.any():
+            n_weighted = min(count, int(positive.sum().item()))
+            sampled = torch.multinomial(weights, num_samples=n_weighted, replacement=False)
+            pieces.append(sampled)
+            selected[sampled] = True
+            count -= n_weighted
+
+        if count > 0:
+            available = (~selected).nonzero(as_tuple=False).squeeze(-1)
+            fill = available[torch.randperm(available.numel(), device=coords.device)[:count]]
+            pieces.append(fill)
+            selected[fill] = True
+
+        return torch.cat(pieces, dim=0) if pieces else torch.empty(0, device=coords.device, dtype=torch.long)
+
+    all_idx = []
+    for b in range(bsz):
+        if mode == "obs_mix" and obs_coords is not None and obs_mask is not None:
+            valid = obs_mask[b].bool()
+        else:
+            valid = None
+
+        if mode != "obs_mix" or valid is None or not valid.any():
+            idx = torch.randperm(n_pts, device=coords.device)[:n_query].sort().values
+            all_idx.append(idx)
+            continue
+
+        d_min = torch.cdist(coords[b:b + 1], obs_coords[b, valid].unsqueeze(0), p=2.0).squeeze(0).amin(dim=-1)
+        bbox_diag = (coords[b].amax(dim=0) - coords[b].amin(dim=0)).norm().clamp_min(1e-6)
+        sigma = (sigma_ratio * bbox_diag).clamp_min(1e-6)
+
+        near_count = min(n_query, max(0, int(round(n_query * near_ratio))))
+        far_count = min(n_query - near_count, max(0, int(round(n_query * far_ratio))))
+        uniform_count = n_query - near_count - far_count
+
+        selected = torch.zeros(n_pts, device=coords.device, dtype=torch.bool)
+        near_weights = torch.exp(-(d_min ** 2) / (2 * sigma ** 2 + 1e-12))
+        far_weights = d_min.clamp_min(0.0)
+
+        pieces = [
+            take_weighted(near_weights, near_count, selected),
+            take_weighted(far_weights, far_count, selected),
+            take_weighted(torch.ones(n_pts, device=coords.device, dtype=coords.dtype), uniform_count, selected),
+        ]
+        if int(selected.sum().item()) < n_query:
+            pieces.append(
+                take_weighted(
+                    torch.ones(n_pts, device=coords.device, dtype=coords.dtype),
+                    n_query - int(selected.sum().item()),
+                    selected,
+                )
+            )
+
+        idx = torch.cat([p for p in pieces if p.numel() > 0], dim=0).sort().values
+        all_idx.append(idx)
+
+    idx = torch.stack(all_idx, dim=0)
+    coord_idx = idx.unsqueeze(-1).expand(-1, -1, coord_dim)
+    field_idx = idx.unsqueeze(-1).expand(-1, -1, fields.shape[-1])
+    return torch.gather(coords, dim=1, index=coord_idx), torch.gather(fields, dim=1, index=field_idx), idx
 
 def run_epoch(
     model: nn.Module,
@@ -293,6 +385,10 @@ def run_epoch(
     n_obs_min_list: Sequence[int],
     n_obs_max_list: Sequence[int],
     n_query_points: Optional[int],
+    query_sampling: str = "uniform",
+    query_sample_near_ratio: float = 0.25,
+    query_sample_far_ratio: float = 0.25,
+    query_sample_sigma_ratio: float = 0.05,
     epoch: int = 0,
 ) -> float:
     training = optimizer is not None
@@ -320,7 +416,18 @@ def run_epoch(
         # for models that must operate on the full regular grid like FNO, 
         # point subsampling will be disabled.
         effective_n_query = None if getattr(model, "requires_full_grid", False) else n_query_points
-        coords_q, fields_q, _ = random_query_subset(coords_full, fields_full, effective_n_query)
+        sampling_mode = query_sampling if training else "uniform"
+        coords_q, fields_q, _ = sample_query_subset(
+            coords=coords_full,
+            fields=fields_full,
+            n_query=effective_n_query,
+            mode=sampling_mode,
+            obs_coords=obs_coords,
+            obs_mask=obs_mask,
+            near_ratio=query_sample_near_ratio,
+            far_ratio=query_sample_far_ratio,
+            sigma_ratio=query_sample_sigma_ratio,
+        )
 
         loss, _ = model.training_loss(
             x1=fields_q,
@@ -525,6 +632,9 @@ def main():
             cond_dim=args.cond_dim,
             field_embed_dim=args.field_embed_dim,
             rbf_sigma=args.rbf_sigma,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "perceiver":
@@ -568,6 +678,9 @@ def main():
 
             sensor_local_topk=args.sensor_local_topk,
             sensor_local_dropout=args.sensor_local_dropout,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":
@@ -623,6 +736,10 @@ def main():
             n_obs_min_list=args.n_obs_min_list,
             n_obs_max_list=args.n_obs_max_list,
             n_query_points=args.n_query_points,
+            query_sampling=args.query_sampling,
+            query_sample_near_ratio=args.query_sample_near_ratio,
+            query_sample_far_ratio=args.query_sample_far_ratio,
+            query_sample_sigma_ratio=args.query_sample_sigma_ratio,
             epoch=epoch,
         )
         scheduler.step()
@@ -640,6 +757,10 @@ def main():
                     n_obs_min_list=args.n_obs_min_list,
                     n_obs_max_list=args.n_obs_max_list,
                     n_query_points=args.n_query_points,
+                    query_sampling=args.query_sampling,
+                    query_sample_near_ratio=args.query_sample_near_ratio,
+                    query_sample_far_ratio=args.query_sample_far_ratio,
+                    query_sample_sigma_ratio=args.query_sample_sigma_ratio,
                     epoch=epoch,
                 )
             print(f"[valid] epoch={epoch:04d} loss={val_loss:.6e}")

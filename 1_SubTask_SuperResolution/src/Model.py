@@ -24,6 +24,24 @@ def make_mlp(in_dim: int, hidden_dim: int, out_dim: int, depth: int = 3, act=nn.
     layers.append(nn.Linear(dim, out_dim))
     return nn.Sequential(*layers)
 
+
+class FourierPositionalEncoding(nn.Module):
+    """Sine-cosine frequency encoding for spatial coordinates."""
+
+    def __init__(self, coord_dim: int, num_bands: int = 32, max_freq: float = 64.0):
+        super().__init__()
+        self.coord_dim = coord_dim
+        self.num_bands = num_bands
+        self.out_dim = coord_dim * num_bands * 2
+        freqs = torch.linspace(1.0, max_freq / 2.0, num_bands)
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        coords = coords[..., : self.coord_dim] * 2.0 - 1.0
+        x = coords.unsqueeze(-1) * self.freqs * math.pi
+        enc = torch.cat([x.sin(), x.cos()], dim=-1)
+        return enc.reshape(*coords.shape[:-1], self.out_dim)
+
 # ------------------------------
 # for gathering in GL_rbf
 # ------------------------------
@@ -60,15 +78,23 @@ class ConditionalPointFFM(nn.Module):
         cond_dim: int = 128,
         field_embed_dim: int = 32,
         rbf_sigma: float = 0.05,
+        use_fourier_pe: bool = False,
+        fourier_pe_num_bands: int = 32,
+        fourier_pe_max_freq: float = 64.0,
     ) -> None:
         super().__init__()
         self.n_fields = n_fields
         self.coord_dim = coord_dim
         self.rbf_sigma = rbf_sigma
+        self.use_fourier_pe = use_fourier_pe
+        self.pos_enc = FourierPositionalEncoding(
+            coord_dim, num_bands=fourier_pe_num_bands, max_freq=fourier_pe_max_freq
+        ) if use_fourier_pe else None
+        self.coord_feat_dim = self.pos_enc.out_dim if self.pos_enc is not None else coord_dim
 
         self.field_embed = nn.Embedding(n_fields, field_embed_dim)
 
-        self.point_encoder = make_mlp(coord_dim + n_fields + 1, hidden_dim, hidden_dim, depth=3)
+        self.point_encoder = make_mlp(self.coord_feat_dim + n_fields + 1, hidden_dim, hidden_dim, depth=3)
         self.obs_encoder = make_mlp(coord_dim + 1 + field_embed_dim, cond_dim, cond_dim, depth=3)
         self.global_encoder = make_mlp(hidden_dim, hidden_dim, hidden_dim, depth=2)
 
@@ -119,7 +145,8 @@ class ConditionalPointFFM(nn.Module):
         bsz, n_pts, _ = x_t.shape
         t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
 
-        point_feat = self.point_encoder(torch.cat([coords, x_t, t_feat], dim=-1))
+        coord_feat = self.pos_enc(coords) if self.pos_enc is not None else coords
+        point_feat = self.point_encoder(torch.cat([coord_feat, x_t, t_feat], dim=-1))
         local_cond = self.aggregate_sparse_obs(coords, obs_coords, obs_values, obs_mask, obs_field_ids)
         global_feat = self.global_encoder(point_feat.mean(dim=1)).unsqueeze(1).expand(bsz, n_pts, -1)
 
@@ -146,15 +173,23 @@ class ConditionalPointMLPRBF(nn.Module):
         cond_dim: int = 128,
         field_embed_dim: int = 32,
         rbf_sigma: float = 0.05,
+        use_fourier_pe: bool = False,
+        fourier_pe_num_bands: int = 32,
+        fourier_pe_max_freq: float = 64.0,
     ) -> None:
         super().__init__()
         self.n_fields = n_fields
         self.coord_dim = coord_dim
         self.rbf_sigma = rbf_sigma
+        self.use_fourier_pe = use_fourier_pe
+        self.pos_enc = FourierPositionalEncoding(
+            coord_dim, num_bands=fourier_pe_num_bands, max_freq=fourier_pe_max_freq
+        ) if use_fourier_pe else None
+        self.coord_feat_dim = self.pos_enc.out_dim if self.pos_enc is not None else coord_dim
 
         self.field_embed = nn.Embedding(n_fields, field_embed_dim)
 
-        self.point_encoder = make_mlp(coord_dim + n_fields + 1, hidden_dim, hidden_dim, depth=3)
+        self.point_encoder = make_mlp(self.coord_feat_dim + n_fields + 1, hidden_dim, hidden_dim, depth=3)
         self.obs_encoder = make_mlp(coord_dim + 1 + field_embed_dim, cond_dim, cond_dim, depth=3)
         self.global_encoder = make_mlp(hidden_dim, hidden_dim, hidden_dim, depth=2)
 
@@ -205,7 +240,8 @@ class ConditionalPointMLPRBF(nn.Module):
         bsz, n_pts, _ = x_t.shape
         t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
 
-        point_feat = self.point_encoder(torch.cat([coords, x_t, t_feat], dim=-1))
+        coord_feat = self.pos_enc(coords) if self.pos_enc is not None else coords
+        point_feat = self.point_encoder(torch.cat([coord_feat, x_t, t_feat], dim=-1))
         local_cond = self.aggregate_sparse_obs(coords, obs_coords, obs_values, obs_mask, obs_field_ids)
         global_feat = self.global_encoder(point_feat.mean(dim=1)).unsqueeze(1).expand(bsz, n_pts, -1)
 
@@ -628,6 +664,9 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         gather_query_chunk_size: Optional[int] = None,
         learnable_rbf_sigma: bool = False,
         neighbor_backend: str = "torch",      # ["auto", "torch", "keops"]
+        use_fourier_pe: bool = False,
+        fourier_pe_num_bands: int = 32,
+        fourier_pe_max_freq: float = 64.0,
     ) -> None:
         super().__init__()
 
@@ -640,6 +679,11 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         self.latent_dim = latent_dim
         self.num_latents = num_latents
         self.summary_type = summary_type
+        self.use_fourier_pe = use_fourier_pe
+        self.pos_enc = FourierPositionalEncoding(
+            coord_dim, num_bands=fourier_pe_num_bands, max_freq=fourier_pe_max_freq
+        ) if use_fourier_pe else None
+        self.coord_feat_dim = self.pos_enc.out_dim if self.pos_enc is not None else coord_dim
 
         if gather_mode not in ["rbf", "topk_rbf", "topk_rbf_gate"]:
             raise ValueError(
@@ -684,7 +728,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # -------------------------
         # Query point token from [coords, x_t, t]
         self.point_encoder = make_mlp(
-            in_dim=coord_dim + n_fields + 1,
+            in_dim=self.coord_feat_dim + n_fields + 1,
             hidden_dim=hidden_dim,
             out_dim=hidden_dim,
             depth=3,
@@ -1114,7 +1158,8 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # Query-point features
         # -------------------------
         t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
-        point_feat = self.point_encoder(torch.cat([coords, x_t, t_feat], dim=-1))  # [B, N, H]
+        coord_feat = self.pos_enc(coords) if self.pos_enc is not None else coords
+        point_feat = self.point_encoder(torch.cat([coord_feat, x_t, t_feat], dim=-1))  # [B, N, H]
 
         # -------------------------
         # Local sensor tokens
@@ -1613,4 +1658,3 @@ class FNOFFM(PointCloudFFM):
         return x
 
 # -----------------------------------------------------
-

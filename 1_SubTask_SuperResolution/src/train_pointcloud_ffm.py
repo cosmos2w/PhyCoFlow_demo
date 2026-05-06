@@ -64,6 +64,10 @@ def parse_args():
                    default="Dataset/Merged_CH4COTU1P.h5")
     p.add_argument("--save-dir", type=str, 
                    default=f"Save_TrainedModel/ffm_tc_pointcloud")
+    p.add_argument("--RELOAD", action="store_true",
+                   help="If set, try to reload the latest matching checkpoint and continue training.")
+    p.add_argument("--reload-checkpoint", type=str, default="best", choices=["best", "last"],
+                   help="Checkpoint name to load when RELOAD is true. 'best' loads best.pt; 'last' loads last.pt.")
     
     # ----------------------------------------------------------
     # Dataset mode
@@ -94,6 +98,12 @@ def parse_args():
         help="Drop the first ratio fraction of time frames from each PDEBench case before organizing the dataset. "
              "0 means no truncation; must satisfy 0 <= ratio < 1.",
     )
+    p.add_argument(
+        "--multires-train-case-fraction", type=float, default=1.0,
+        help="Fraction of PDEBench training cases to keep before applying multires_ratio. "
+             "Default 1.0 preserves the original behavior. For a high-only ablation "
+             "matched to the H bucket of 1:1:1, use multires_ratio=0:0:1 and 0.3333333333.",
+    )
 
     # ------------------------------
     # Backbone selection
@@ -118,6 +128,12 @@ def parse_args():
     p.add_argument("--cond-dim", type=int, default=128)
     p.add_argument("--field-embed-dim", type=int, default=64)
     p.add_argument("--rbf-sigma", type=float, default=0.05)
+    p.add_argument("--USE-FOURIER-PE", "--USE_FOURIER_PE", dest="USE_FOURIER_PE", action="store_true",
+                   help="If set, feed Fourier positional coordinate features to point_encoder.")
+    p.add_argument("--fourier-pe-num-bands", type=int, default=32,
+                   help="Number of frequency bands for Fourier positional coordinate encoding.")
+    p.add_argument("--fourier-pe-max-freq", type=float, default=64.0,
+                   help="Maximum frequency scale for Fourier positional coordinate encoding.")
 
     # ------------------------------
     # These are hyperparameters for Perceiver backbone
@@ -254,7 +270,21 @@ def build_or_find_multires_manifest(demo_dir: str, args) -> str:
     or reuse an existing one if provided.
     """
     if args.multires_manifest_path not in [None, ""]:
-        return os.path.join(demo_dir, args.multires_manifest_path)
+        manifest_path = os.path.join(demo_dir, args.multires_manifest_path)
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r") as f:
+                manifest = json.load(f)
+            manifest_case_fraction = float(manifest.get("multires_train_case_fraction", 1.0))
+            if (
+                manifest.get("multires_ratio") != args.multires_ratio
+                or abs(manifest_case_fraction - float(args.multires_train_case_fraction)) > 1e-12
+            ):
+                print(
+                    "[Warning] multires_manifest_path is set, so the manifest controls "
+                    "case sampling. YAML multires_ratio / multires_train_case_fraction "
+                    "will not rebuild it."
+                )
+        return manifest_path
 
     processed_root = Path(os.path.join(demo_dir, args.pdebench_processed_root))
     default_path = default_manifest_path(
@@ -263,6 +293,7 @@ def build_or_find_multires_manifest(demo_dir: str, args) -> str:
         selected_field_idx=args.selected_field_idx_raw,
         multires_ratio=args.multires_ratio,
         case_truncate_ratio=args.Case_Truncate_Ratio,
+        multires_train_case_fraction=args.multires_train_case_fraction,
     )
 
     if not default_path.exists():
@@ -273,6 +304,7 @@ def build_or_find_multires_manifest(demo_dir: str, args) -> str:
             multires_ratio=args.multires_ratio,
             train_fraction=args.train_ratio,
             case_truncate_ratio=args.Case_Truncate_Ratio,
+            multires_train_case_fraction=args.multires_train_case_fraction,
         )
         default_path.parent.mkdir(parents=True, exist_ok=True)
         with open(default_path, "w") as f:
@@ -374,6 +406,90 @@ def get_resolution_scaled_obs_budget(
     max_scaled = [max(mn, int(round(v * scale))) for mn, v in zip(min_scaled, n_obs_max_list)]
 
     return min_scaled, max_scaled
+
+
+def find_latest_run_dir(demo_dir: str, save_dir: str, demo_num: int) -> Optional[Path]:
+    save_root = Path(demo_dir) / Path(save_dir).parent
+    run_prefix = f"{Path(save_dir).name}_DemoN{demo_num}_"
+    if not save_root.exists():
+        return None
+
+    candidates = [
+        path for path in save_root.glob(f"{run_prefix}*")
+        if path.is_dir()
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda p: p.name)[-1]
+
+
+def extract_run_timestamp(run_dir: Path, save_dir: str, demo_num: int) -> str:
+    run_prefix = f"{Path(save_dir).name}_DemoN{demo_num}_"
+    run_name = run_dir.name
+    if run_name.startswith(run_prefix):
+        return run_name[len(run_prefix):]
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def backup_path(path: Path, suffix: str = "_bk") -> Path:
+    candidate = path.with_name(f"{path.stem}{suffix}{path.suffix}")
+    if not candidate.exists():
+        return candidate
+
+    idx = 1
+    while True:
+        candidate = path.with_name(f"{path.stem}{suffix}{idx}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        idx += 1
+
+
+def backup_existing_artifact(path: Path) -> None:
+    if not path.exists():
+        return
+
+    target = backup_path(path)
+    if path.is_dir():
+        shutil.copytree(path, target)
+    else:
+        shutil.copy2(path, target)
+
+
+def infer_fourier_pe_from_checkpoint(ckpt: dict) -> Tuple[bool, Optional[int], Optional[float]]:
+    state_dict = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
+    has_fourier_state = False
+    num_bands = None
+    max_freq = None
+
+    if isinstance(state_dict, dict):
+        for key, value in state_dict.items():
+            if key.endswith("pos_enc.freqs"):
+                has_fourier_state = True
+                if torch.is_tensor(value):
+                    num_bands = int(value.numel())
+                    if value.numel() > 0:
+                        max_freq = float(value.reshape(-1)[-1].item() * 2.0)
+                break
+
+    if has_fourier_state:
+        return True, num_bands, max_freq
+    if isinstance(ckpt, dict) and "USE_FOURIER_PE" in ckpt:
+        return bool(ckpt["USE_FOURIER_PE"]), None, None
+    return False, None, None
+
+
+def apply_checkpoint_fourier_pe_to_args(args, ckpt: dict) -> None:
+    use_fourier_pe, num_bands, max_freq = infer_fourier_pe_from_checkpoint(ckpt)
+    if bool(args.USE_FOURIER_PE) != use_fourier_pe:
+        print(
+            f"[*] Checkpoint architecture sets USE_FOURIER_PE={use_fourier_pe}; "
+            f"overriding current config value {args.USE_FOURIER_PE} for compatibility."
+        )
+    args.USE_FOURIER_PE = use_fourier_pe
+    if num_bands is not None:
+        args.fourier_pe_num_bands = num_bands
+    if max_freq is not None:
+        args.fourier_pe_max_freq = max_freq
 
 
 def _run_epoch(
@@ -570,9 +686,54 @@ def main():
     
     # Setup the Dynamic Directories with Demo_Num
     set_seed(args.seed)
-    
-    # Update Model Save Dir
+
+    start_epoch = 1
+    best_val = float("inf")
+    reload_ckpt = None
+    reload_checkpoint_loaded_name = None
+    run_timestamp = timestamp
     save_dir = Path(os.path.join(demo_dir, args.save_dir + f"_DemoN{args.Demo_Num}" + f"_{timestamp}"))
+
+    if args.RELOAD:
+        latest_run_dir = find_latest_run_dir(demo_dir=demo_dir, save_dir=args.save_dir, demo_num=args.Demo_Num)
+        checkpoint_name = f"{args.reload_checkpoint}.pt"
+        if latest_run_dir is not None and (latest_run_dir / checkpoint_name).exists():
+            save_dir = latest_run_dir
+            run_timestamp = extract_run_timestamp(latest_run_dir, args.save_dir, args.Demo_Num)
+            reload_ckpt = torch.load(latest_run_dir / checkpoint_name, map_location="cpu")
+            reload_checkpoint_loaded_name = checkpoint_name
+            start_epoch = int(reload_ckpt.get("epoch", 0)) + 1
+            best_val = float(reload_ckpt.get("val_loss", float("inf")))
+
+            backup_existing_artifact(latest_run_dir / "best.pt")
+            backup_existing_artifact(latest_run_dir / "last.pt")
+            print(f"[*] RELOAD=True, resuming from: {latest_run_dir / checkpoint_name}")
+            print(f"[*] Resume will start from epoch {start_epoch}\n")
+        elif latest_run_dir is not None:
+            fallback_name = "last.pt" if args.reload_checkpoint == "best" else "best.pt"
+            fallback_path = latest_run_dir / fallback_name
+            if fallback_path.exists():
+                save_dir = latest_run_dir
+                run_timestamp = extract_run_timestamp(latest_run_dir, args.save_dir, args.Demo_Num)
+                reload_ckpt = torch.load(fallback_path, map_location="cpu")
+                reload_checkpoint_loaded_name = fallback_name
+                start_epoch = int(reload_ckpt.get("epoch", 0)) + 1
+                best_val = float(reload_ckpt.get("val_loss", float("inf")))
+
+                backup_existing_artifact(latest_run_dir / "best.pt")
+                backup_existing_artifact(latest_run_dir / "last.pt")
+                print(f"[*] RELOAD=True, requested {checkpoint_name} was not found.")
+                print(f"[*] Falling back to: {fallback_path}")
+                print(f"[*] Resume will start from epoch {start_epoch}\n")
+            else:
+                print(f"[*] RELOAD=True, but no matching {checkpoint_name} or {fallback_name} was found.")
+                print("[*] Training will start from scratch.\n")
+        else:
+            print("[*] RELOAD=True, but no matching run directory was found. Training will start from scratch.\n")
+
+    if reload_ckpt is not None:
+        apply_checkpoint_fourier_pe_to_args(args, reload_ckpt)
+
     save_dir.mkdir(parents=True, exist_ok=True)
     
     # Save the final parsed args to a JSON in the model folder just to be safe
@@ -583,10 +744,17 @@ def main():
     # Setup CSV and Recon Dirs
     csv_base_dir = os.path.join(demo_dir, f"Save_loss_csv")
     recon_base_dir = os.path.join(demo_dir, f"Save_reconstruction_files")
+
+    if args.RELOAD and reload_ckpt is not None:
+        loss_dir = Path(csv_base_dir) / f"Loss_DemoN{args.Demo_Num}_{run_timestamp}"
+        recon_dir_existing = Path(recon_base_dir) / "ffm_tc_pointcloud" / f"demo_N{args.Demo_Num}_{run_timestamp}"
+
+        backup_existing_artifact(loss_dir)
+        backup_existing_artifact(recon_dir_existing)
     
     # Initialize helpers
-    logger = MetricsLogger(base_dir=csv_base_dir, Demo_Num=args.Demo_Num, timestamp=timestamp)
-    recon_dir = create_recon_dir(base_dir=recon_base_dir, Demo_Num=args.Demo_Num, timestamp=timestamp)
+    logger = MetricsLogger(base_dir=csv_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
+    recon_dir = create_recon_dir(base_dir=recon_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
     
     print(f"[*] Model checkpoints will save to: {save_dir}")
     print(f"[*] Logging losses to: {logger.save_dir}")
@@ -623,6 +791,8 @@ def main():
         # print(f"[*] All fields   : {train_set.field_names}")
         print(f"[*] Target field : {train_set.field_names[0]}") # args.selected_field_idx_raw
         print(f"[*] Train ratio  : {args.multires_ratio}")
+        print(f"[*] Train cases  : fraction={args.multires_train_case_fraction} counts="
+              f"{ {k: len(v) for k, v in train_set.manifest['split']['train_cases_by_res'].items()} }")
         print(f"[*] Val res      : H")
         if force_resolution is not None:
             print(f"[*] force_resolution={force_resolution} because backbone='{args.backbone}' requires a fixed grid.")
@@ -690,6 +860,9 @@ def main():
             cond_dim=args.cond_dim,
             field_embed_dim=args.field_embed_dim,
             rbf_sigma=args.rbf_sigma,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "perceiver":
@@ -730,6 +903,9 @@ def main():
             gather_query_chunk_size=args.gather_query_chunk_size,
             learnable_rbf_sigma=args.learnable_rbf_sigma,
             neighbor_backend=args.neighbor_backend,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":
@@ -766,8 +942,15 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
-    best_val = float("inf")
-    for epoch in range(1, args.epochs + 1):
+    if reload_ckpt is not None:
+        model.load_state_dict(reload_ckpt["model"])
+        if "optimizer" in reload_ckpt:
+            optimizer.load_state_dict(reload_ckpt["optimizer"])
+        if "scheduler" in reload_ckpt:
+            scheduler.load_state_dict(reload_ckpt["scheduler"])
+        print(f"[*] Reloaded model state from {reload_checkpoint_loaded_name}")
+
+    for epoch in range(start_epoch, args.epochs + 1):
         tr_loss = run_epoch(
             model=model,
             loader=train_loader,
@@ -801,6 +984,7 @@ def main():
             ckpt = {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
                 "epoch": epoch,
                 "train_loss": tr_loss,
                 "val_loss": val_loss,
@@ -810,6 +994,9 @@ def main():
                 "method": "1_rectified_flow",
                 "backbone": args.backbone,
                 "summary_type": args.summary_type,
+                "USE_FOURIER_PE": bool(args.USE_FOURIER_PE),
+                "fourier_pe_num_bands": int(args.fourier_pe_num_bands),
+                "fourier_pe_max_freq": float(args.fourier_pe_max_freq),
                 "ode_solver": args.ode_solver,
                 "Num_x": args.Num_x,
                 "Num_y": args.Num_y,

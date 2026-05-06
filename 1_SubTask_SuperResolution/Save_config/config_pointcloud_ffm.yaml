@@ -13,7 +13,8 @@
 #     --processed-root ./Dataset/PDE_Bench/Processed \
 #     --dataset-name CFD \
 #     --selected-field-idx 0 \
-#     --multires-ratio 1:1:1
+#     --multires-ratio 1:1:1 \
+#     --multires-train-case-fraction 1.0
 # That creates a manifest JSON, for example something like: Dataset/PDE_Bench/Processed/manifests/CFD_field0_ratio_1-1-1.json 
 
 # Then in YAML set: multires_manifest_path: "Dataset/PDE_Bench/Processed/manifests/CFD_field0_ratio_1-1-1.json"
@@ -23,20 +24,31 @@
 # Added Case_Truncate_Ratio
 # 0 < Case_Truncate_Ratio < 1 → drop the first floor(ratio * N_time) frames of every case
 # Case_Truncate_Ratio >= 1 or < 0 → raise error
+#
+# Added multires_train_case_fraction
+# 0 < multires_train_case_fraction <= 1 controls the total training case budget
+# BEFORE splitting active cases by multires_ratio. Default 1.0 preserves the
+# old behavior. For a high-resolution-only ablation matched to the H case count
+# in 1:1:1, use:
+#   multires_ratio: "0:0:1"
+#   multires_train_case_fraction: 0.3333333333
 
 #----------------------------------------------------------
-# Zero-shot super-resolution: test on 1:2:0 for CFD, use Perceiver
+# Test Using Fourier positional encoding for RD 1:1:1
+# Use GL_rbf
 #----------------------------------------------------------
 
-Demo_Num: 14
-device_ids: [0]
+Demo_Num: 21
+device_ids: [2]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+RELOAD: false                       # If true, continue from latest matching Demo_Num run.
+reload_checkpoint: "best"           # ["best", "last"]
 
 seed : 42
 epochs : 10000
-batch_size : 384
+batch_size : 512
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -50,10 +62,11 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 # PDEBench multi-resolution settings
 # ----------------------------------------------------------
-pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
+pdebench_dataset_name: "RD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
-selected_field_idx_raw: 0           # RD: Species_0 ; CFD: 0 - Vx
-multires_ratio: "1:2:0"             # L:M:H, like "1:1:2", "1:1:1", "1:1:0", "2:1:0"
+selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
+multires_ratio: "1:1:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
+multires_train_case_fraction: 1     # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
@@ -61,7 +74,7 @@ Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "perceiver" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -71,6 +84,9 @@ cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
+USE_FOURIER_PE: false  # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf
@@ -110,7 +126,7 @@ fno_n_layers: 4
 # ----------------------------------------------------------
 # These are hyperparameters for the training process
 # ----------------------------------------------------------
-n_query_points : 2048    # Number of query points to be evaluated in training process
+n_query_points : 1024    # Number of query points to be evaluated in training process
 prior : "rff"            # choices=["iid", "rff"]; idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
 rff_features : 256
 rff_lengthscale : 0.15
@@ -130,7 +146,7 @@ n_obs_min_list: [512]
 n_obs_max_list: [512]
 
 vis_cond_fields:
-vis_n_obs_list: [256]
+vis_n_obs_list: [512]
 # ----------------------------------------------------------
 
 # ===== Rectified Flow generation controls =====

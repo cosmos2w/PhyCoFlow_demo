@@ -25,6 +25,16 @@ def validate_case_truncate_ratio(case_truncate_ratio: float) -> float:
         )
     return ratio
 
+
+def validate_multires_train_case_fraction(multires_train_case_fraction: float) -> float:
+    fraction = float(multires_train_case_fraction)
+    if fraction <= 0.0 or fraction > 1.0:
+        raise ValueError(
+            "multires_train_case_fraction must satisfy 0 < fraction <= 1, "
+            f"got {fraction}."
+        )
+    return fraction
+
 def parse_ratio(ratio: str) -> Tuple[int, int, int]:
     """
     Parses a string ratio (e.g., "1:2:1") into a tuple of integers representing
@@ -161,6 +171,7 @@ def build_manifest(
     multires_ratio: str,
     train_fraction: float = 0.9,
     case_truncate_ratio: float = 0.0,
+    multires_train_case_fraction: float = 1.0,
 ) -> Dict:
     """
     Constructs the overall manifest dictionary detailing how the dataset is split 
@@ -169,6 +180,7 @@ def build_manifest(
     info = infer_dataset_info(processed_root, dataset_name)
     n_cases = info["n_cases"]
     case_truncate_ratio = validate_case_truncate_ratio(case_truncate_ratio)
+    multires_train_case_fraction = validate_multires_train_case_fraction(multires_train_case_fraction)
 
     if not (0 <= selected_field_idx < info["n_fields"]):
         raise ValueError(
@@ -177,8 +189,17 @@ def build_manifest(
 
     # Simple chronological/sequential split for Train vs Validation
     n_train = int(n_cases * train_fraction)
-    train_cases = list(range(0, n_train))
+    train_cases_all = list(range(0, n_train))
     val_cases = list(range(n_train, n_cases))
+
+    # Optional ablation knob:
+    # First choose the usual train/val split, then keep only an initial fraction
+    # of the training cases before applying the L:M:H ratio.  The default 1.0
+    # preserves all previous manifests.  For a high-only matched-budget ablation
+    # against 1:1:1, use multires_ratio=0:0:1 and fraction ~= 1/3.
+    n_active_train = int(round(len(train_cases_all) * multires_train_case_fraction))
+    n_active_train = max(1, min(len(train_cases_all), n_active_train))
+    train_cases = train_cases_all[:n_active_train]
 
     # Split the training cases into Low, Medium, and High resolutions based on ratio
     weights = parse_ratio(multires_ratio)
@@ -205,8 +226,11 @@ def build_manifest(
         "selected_field_idx": int(selected_field_idx),
         "selected_field_name": info["field_names"][selected_field_idx],
         "multires_ratio": multires_ratio,
+        "multires_train_case_fraction": float(multires_train_case_fraction),
         "train_fraction": train_fraction,
         "n_cases": info["n_cases"],
+        "n_train_cases_before_budget": int(len(train_cases_all)),
+        "n_train_cases_active": int(len(train_cases)),
         # "n_time": info["n_time"],
 
         "case_truncate_ratio" : float(case_truncate_ratio),
@@ -223,7 +247,7 @@ def build_manifest(
             "val_cases": val_cases, # Validation is kept entirely at high-res by default
         },
         "notes": {
-            "train_sampling": "All frames from the listed train cases are used.",
+            "train_sampling": "All usable frames from the listed train cases are used. multires_train_case_fraction reduces the case budget before the L:M:H ratio is applied.",
             "val_sampling": "All frames from val cases are reserved for validation/evaluation; high resolution is the default.",
             "sensor_comparison_across_resolutions": "Use canonical physical sensor coordinates and snap them to nearest grid nodes at each resolution.",
         },
@@ -231,13 +255,24 @@ def build_manifest(
     return manifest
 
 
-def default_manifest_path(processed_root: Path, dataset_name: str, selected_field_idx: int, multires_ratio: str, case_truncate_ratio: float = 0.0) -> Path:
+def default_manifest_path(
+    processed_root: Path,
+    dataset_name: str,
+    selected_field_idx: int,
+    multires_ratio: str,
+    case_truncate_ratio: float = 0.0,
+    multires_train_case_fraction: float = 1.0,
+) -> Path:
     """Generates a default file path to save the JSON manifest based on its parameters."""
     safe_ratio = multires_ratio.replace(":", "-")
     out_dir = processed_root / "manifests"
     out_dir.mkdir(parents=True, exist_ok=True)
     truncate_tag = str(case_truncate_ratio).replace(".", "p")
-    return out_dir / f"{dataset_name.upper()}_field{selected_field_idx}_ratio_{safe_ratio}_truncate_{truncate_tag}.json"
+    filename = f"{dataset_name.upper()}_field{selected_field_idx}_ratio_{safe_ratio}_truncate_{truncate_tag}"
+    if float(multires_train_case_fraction) != 1.0:
+        budget_tag = str(multires_train_case_fraction).replace(".", "p")
+        filename += f"_casefrac_{budget_tag}"
+    return out_dir / f"{filename}.json"
 
 
 def main():
@@ -260,6 +295,12 @@ def main():
         "--Case-Truncate-Ratio", dest="Case_Truncate_Ratio", type=float, default=0.0,
         help="Drop the first ratio fraction of time frames from each case before organizing the dataset. "
              "0 means no truncation; must satisfy 0 <= ratio < 1.",)
+    p.add_argument(
+        "--multires-train-case-fraction", type=float, default=1.0,
+        help="Fraction of training cases to keep before applying --multires-ratio. "
+             "Default 1.0 preserves the old behavior. For a high-only budget matched "
+             "to 1:1:1, use --multires-ratio 0:0:1 and this value near 0.3333333333.",
+    )
 
     args = p.parse_args()
 
@@ -271,10 +312,16 @@ def main():
         multires_ratio=args.multires_ratio,
         train_fraction=args.train_fraction,
         case_truncate_ratio=args.Case_Truncate_Ratio,
+        multires_train_case_fraction=args.multires_train_case_fraction,
     )
 
     out_path = Path(args.output) if args.output is not None else default_manifest_path(
-        processed_root, args.dataset_name, args.selected_field_idx, args.multires_ratio, args.case_truncate_ratio,
+        processed_root,
+        args.dataset_name,
+        args.selected_field_idx,
+        args.multires_ratio,
+        args.Case_Truncate_Ratio,
+        args.multires_train_case_fraction,
     )
     
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -286,6 +333,8 @@ def main():
         "dataset_name": manifest["dataset_name"],
         "selected_field_name": manifest["selected_field_name"],
         "multires_ratio": manifest["multires_ratio"],
+        "multires_train_case_fraction": manifest["multires_train_case_fraction"],
+        "n_train_cases_active": manifest["n_train_cases_active"],
         "train_cases_by_res": {k: len(v) for k, v in manifest["split"]["train_cases_by_res"].items()},
         "val_cases": len(manifest["split"]["val_cases"]),
     }, indent=2))

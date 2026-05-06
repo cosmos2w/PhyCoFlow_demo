@@ -5,10 +5,11 @@
 #                         Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
 
 #----------------------------------------------------------
-# try revised FNO baseline with condition_blur
+# try revised GL_rbf with improved topk_rbf_glres mode
+# Repeat 14, Try Fourier Positional Encoding
 #----------------------------------------------------------
 
-Demo_Num: 13
+Demo_Num: 16
 device_ids: [0]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
@@ -16,7 +17,7 @@ save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
 epochs : 10000
-batch_size : 108
+batch_size : 144
 lr : 1.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -26,7 +27,7 @@ num_workers : 4
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "fno" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -36,6 +37,9 @@ cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
+USE_FOURIER_PE: true   # If true, point_encoder uses Fourier positional coordinate features instead of raw coords.
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf
@@ -50,12 +54,12 @@ mlp_dropout: 0.0
 decode_chunk_size: 4096
 share_query_proj: false
 
-summary_type: "cls" # Only for GL_rbf, mean or cls
+summary_type: "mean" # Only for GL_rbf, mean or cls
 
-gather_mode: "topk_rbf_ptlocal"  # choices: choices=["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal"]
+gather_mode: "topk_rbf_glres"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal", "topk_rbf_glres"]
 gather_topk: 32                # query-side top-k gather
 sensor_local_topk: 16           # sensor-side local graph neighborhood
-gather_query_chunk_size: null  # keep null first; set to 1024 if needed
+gather_query_chunk_size: 2048  # chunks query-side global readout/gather to keep memory bounded
 learnable_rbf_sigma: true
 neighbor_backend: "keops"
 sensor_local_dropout: 0.0
@@ -72,16 +76,20 @@ Num_y: 100
 # ----------------------------------------------------------
 fno_modes_x: 24
 fno_modes_y: 12
-fno_hidden_channels: 128
+fno_hidden_channels: 96
 fno_n_layers: 4
 condition_blur: true
-condition_blur_kernel: 5
-condition_blur_sigma: 1.0
+condition_blur_kernel: 11
+condition_blur_sigma: 1.75
 
 # ----------------------------------------------------------
 # These are hyperparameters for the training process
 # ----------------------------------------------------------
-n_query_points : 2048    # Number of query points to be evaluated in training process
+n_query_points : 4096       # Number of query points to be evaluated in training process
+query_sampling: "obs_mix"   # "obs_mix" or "uniform"
+query_sample_near_ratio: 0.25
+query_sample_far_ratio: 0.25
+query_sample_sigma_ratio: 0.05
 prior : "rff"            # choices=["iid", "rff"]; idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
 rff_features : 256
 rff_lengthscale : 0.15
@@ -93,17 +101,11 @@ n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_ste
 # Setting up the conditioning process
 cond_fields :   [2, 3]      # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
 n_obs_min_list: [128, 128]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
-n_obs_max_list: [512, 512]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
+n_obs_max_list: [384, 384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
 
 vis_cond_fields:            # help="Visualization conditioned fields. Defaults to cond_fields if None
 vis_n_obs_list: [256, 256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
 
 # ===== Rectified Flow generation controls =====
 ode_solver : "euler"
-benchmark_n_steps : [2, 4, 16]
-
-# From older version in V0 ---------------------
-n_obs_min : 128
-n_obs_max : 512
-cond_field : 2  # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
-# ----------------------------------------------
+benchmark_n_steps : [2, 4, 8]
