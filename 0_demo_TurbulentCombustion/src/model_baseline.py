@@ -3816,6 +3816,7 @@ import copy
 import csv
 import json
 import os
+import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -3869,9 +3870,11 @@ def save_yaml(path: Path, payload: dict) -> None:
 
 def safe_torch_load(path: Path, map_location: str | torch.device = "cpu") -> dict:
     try:
-        return torch.load(path, map_location=map_location)
+        return torch.load(path, map_location=map_location, weights_only=True)
     except TypeError:
         return torch.load(path, map_location=map_location)
+    except (pickle.UnpicklingError, RuntimeError):
+        return torch.load(path, map_location=map_location, weights_only=False)
 
 
 def set_seed(seed: int) -> None:
