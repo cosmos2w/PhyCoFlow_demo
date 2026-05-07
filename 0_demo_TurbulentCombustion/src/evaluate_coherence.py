@@ -5,29 +5,69 @@ Current supported mode:
     - global_dist : global distributional coherence
 
 Design goal:
-    This script is written to be extensible. 
-    In the future, other coherence terms (e.g. spectral or topological) can be added to coherence_dist.py 
+    This script is written to be extensible.
+    In the future, other coherence terms (e.g. spectral or topological) can be added to coherence_dist.py
     and exposed here through the same command-line interface and save-directory pattern:
 
         Save_PhyCoEval/{coherence_mode}/{timestamp}/
 
-The script is intentionally evaluation-only. 
-It loads a trained checkpoint, reconstructs one or more validation snapshots under sparse conditioning, 
-then computes / visualizes coherence discrepancies between the generated and reference fields.
+Usage
+-----
+1) Single-snapshot diagnostic mode
 
-A typical run:
 python src/evaluate_coherence.py \
-  --checkpoint ../Save_TrainedModel/ffm_tc_pointcloud_DemoN10_20260406_215158 \
+  --checkpoint <checkpoint_or_run_dir> \
   --coherence-mode global_dist \
   --snapshot-indices 0 \
   --n-obs-list 256 256 \
   --n-steps 2
 
+This reconstructs the requested snapshot(s) and saves detailed per-snapshot coherence plots and metrics.
+
+2) Statistical-analysis mode
+
+python src/evaluate_coherence.py \
+  --checkpoint ./Save_TrainedModel/ffm_tc_pointcloud_DemoN15_20260501_124557/last.pt \
+  --coherence-mode global_dist \
+  --Statistical-Analysis CoL2_Scatter Aggregate_Violin \
+  --statistical-split test \
+  --stat-max-snapshots 100 \
+  --n-obs-list 256 256 \
+  --n-steps 2
+
+This scans many frames from the selected split, suppresses individual snapshot plots, and saves:
+    coherence_l2_scatter.png/pdf
+    aggregate_violin.png/pdf
+    statistical_coherence_table.csv
+    statistical_analysis_summary.json
+
+The script is intentionally evaluation-only.
+
+Checkpoint families
+-------------------
+By default this script assumes checkpoints trained by train_pointcloud_ffm.py.
+For generative baselines trained by train_Gen_Baseline.py, pass
+--baseline-model with one of:
+    latent_fm, s3gm, sit
+
+Example:
+python src/evaluate_coherence.py \
+  --baseline-model latent_fm \
+  --checkpoint-path ./Save_TrainedModel/Baseline_latent_fm_Stage2_DemoN0_20260423_083521/last.pt \
+  --coherence-mode global_dist \
+  --Statistical-Analysis both \
+  --stat-max-snapshots 20 \
+  --n-steps 8
+
+Baseline loading intentionally reuses model_baseline.py so this evaluator does
+not duplicate architecture/checkpoint construction logic from train_Gen_Baseline.py
+and evaluate_Gen_Baseline.py. O
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import inspect
 import json
 import os
@@ -37,13 +77,23 @@ import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import yaml
+
+try:
+    from tqdm.auto import tqdm
+except Exception:
+    tqdm = None
+
+try:
+    import model_baseline as baseline_lib
+except Exception:
+    baseline_lib = None
 
 # -----------------------------------------------------------------------------
 # Local imports
@@ -57,6 +107,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from coherence_dist import (
     GlobalDistConfig,
+    coherence_result_to_scalars,
     compute_coherence,
     project_channels,
 )
@@ -125,14 +176,63 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--coherence-space", type=str, default="normalized", choices=["normalized", "physical"],
                    help="Whether to evaluate coherence in normalized model space or physical-unit space.")
 
-    p.add_argument("--checkpoint", type=str, required=True,
+    p.add_argument("--checkpoint", type=str, required=False,
                    help="Path to a checkpoint file (.pt) or to a run directory containing best.pt/last.pt.")
+    p.add_argument("--checkpoint-path", type=str, default=None,
+                   help="Alias used by baseline evaluators; overrides --checkpoint when provided.")
+    p.add_argument("--baseline-model", type=str, default="pointcloud_ffm",
+                   choices=["pointcloud_ffm", "latent_fm", "s3gm", "sit"],
+                   help=(
+                       "Checkpoint family. Default 'pointcloud_ffm' uses train_pointcloud_ffm.py checkpoints. "
+                       "Use latent_fm/s3gm/sit for train_Gen_Baseline.py checkpoints."
+                   ))
     p.add_argument("--data", type=str, default=None,
                    help="Dataset path. Defaults to the training run's args.json value.")
     p.add_argument("--split", type=str, default="val", choices=["train", "val", "test"],
                    help="Dataset split used for evaluation.")
     p.add_argument("--snapshot-indices", type=int, nargs="+", default=[0],
                    help="Snapshot indices within the chosen split to reconstruct and evaluate.")
+    p.add_argument("--Statistical-Analysis", "--statistical-analysis",
+                   dest="statistical_analysis",
+                   type=str,
+                   nargs="+",
+                   default=None,
+                   choices=["CoL2_Scatter", "Aggregate_Violin", "both"],
+                   help=(
+                       "Enable dataset-level statistical analysis. Values: "
+                       "CoL2_Scatter, Aggregate_Violin, or both. In this mode "
+                       "--snapshot-indices is ignored and per-snapshot plotting is disabled."
+                   ))
+    p.add_argument("--statistical-split", type=str, default="test", choices=["train", "test", "all"],
+                   help="Split to scan in statistical-analysis mode.")
+    p.add_argument("--stat-max-snapshots", type=int, default=None,
+                   help="Optional maximum number of frames per split to process in statistical mode.")
+    p.add_argument("--stat-stride", type=int, default=1,
+                   help="Process every stat_stride-th frame in statistical mode.")
+    p.add_argument("--stat-seed", type=int, default=None,
+                   help="Random seed for statistical subsampling. Defaults to --seed.")
+    p.add_argument("--stat-save-csv", action="store_true", default=True,
+                   help="Save the raw statistical coherence table as CSV when statistical mode is active.")
+    p.add_argument("--stat-plot-style", type=str, default="paper", choices=["paper", "default"],
+                   help="Plot style for statistical aggregate figures.")
+    p.add_argument("--stat-plot-formats", type=str, nargs="+", default=["png", "pdf", "svg"],
+                   choices=["png", "pdf", "svg"],
+                   help="File formats for statistical aggregate figures.")
+    p.add_argument("--stat-dpi", type=int, default=400,
+                   help="Raster DPI for statistical PNG figures.")
+    p.add_argument("--stat-log-y", action=argparse.BooleanOptionalAction, default=True,
+                   help="Use a log y-axis for aggregate violin plots when all plotted values are positive.")
+    p.add_argument("--stat-panel-labels", action=argparse.BooleanOptionalAction, default=True,
+                   help="Add panel labels such as '(a)' and '(b)' to statistical figures.")
+    p.add_argument("--stat-show-regression", action=argparse.BooleanOptionalAction, default=True,
+                   help="Add a least-squares trend line to the Coherence-L2 scatter when enough samples exist.")
+    p.add_argument("--stat-color-by", type=str, default="obs_consistency_error",
+                   choices=["obs_consistency_error", "relative_l2", "none"],
+                   help="Metric used to color the Coherence-L2 scatter points.")
+    p.add_argument("--stat-jitter-alpha", type=float, default=0.55,
+                   help="Point alpha for aggregate violin/raincloud jittered samples.")
+    p.add_argument("--stat-point-size", type=float, default=26.0,
+                   help="Point size for the Coherence-L2 scatter.")
 
     p.add_argument("--cond-fields", type=int, nargs="+", default=None,
                    help="Override conditioned field ids used at evaluation time if wanted.")
@@ -311,6 +411,13 @@ def choose_checkpoint(path_str: str) -> Tuple[Path, Path]:
     if not pts:
         raise FileNotFoundError(f"No .pt checkpoint files found under: {path}")
     return pts[0], path
+
+
+def checkpoint_arg_from_args(args: argparse.Namespace) -> str:
+    checkpoint_arg = args.checkpoint_path or args.checkpoint
+    if checkpoint_arg is None:
+        raise ValueError("Pass --checkpoint for pointcloud FFM or --checkpoint-path/--checkpoint for baseline checkpoints.")
+    return str(checkpoint_arg)
 
 
 def load_run_args(run_dir: Path) -> Dict[str, Any]:
@@ -553,11 +660,301 @@ def reconstruct_snapshot_local(
     }
 
 
-def get_reconstruction_fn() -> Any:
+def _baseline_num_xy(cfg: Dict[str, Any]) -> Tuple[int, int]:
+    data_cfg = cfg["shared"]["data"]
+    return int(data_cfg["num_x"]), int(data_cfg["num_y"])
+
+
+def _baseline_sampling_defaults(cfg: Dict[str, Any]) -> Tuple[Optional[int], Optional[str]]:
+    stage_cfg = baseline_lib.resolve_stage_config(cfg)
+    sampling_cfg = stage_cfg.get("sampling", {})
+    if cfg["baseline_model"] == "latent_fm" and int(cfg["training_stage"]) == 2:
+        steps = sampling_cfg.get("benchmark_n_steps", [None])
+        if isinstance(steps, (list, tuple)):
+            steps = steps[0] if steps else None
+        return (None if steps is None else int(steps), str(sampling_cfg.get("ode_solver", "euler")))
+    if cfg["baseline_model"] in {"s3gm", "sit"}:
+        return (int(sampling_cfg.get("sampling_N", 50)), str(sampling_cfg.get("ode_solver", "euler")))
+    return None, None
+
+
+def _baseline_build_sparse(
+    *,
+    dataset: Any,
+    coords: torch.Tensor,
+    truth: torch.Tensor,
+    cond_fields: Sequence[int],
+    n_obs_list: Sequence[int],
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    sample_valid_mask = None
+    return baseline_lib.build_sparse_condition(
+        coords_full=coords,
+        fields_full=truth,
+        cond_fields=cond_fields,
+        n_obs_min=n_obs_list,
+        n_obs_max=n_obs_list,
+        valid_mask=sample_valid_mask,
+    )
+
+
+def _baseline_reconstruct_latentfm(
+    bundle: Any,
+    dataset: Any,
+    coords: torch.Tensor,
+    truth: torch.Tensor,
+    obs_values: torch.Tensor,
+    obs_mask: torch.Tensor,
+    obs_indices: torch.Tensor,
+    obs_field_ids: torch.Tensor,
+    n_steps: int,
+    ode_solver: Optional[str],
+) -> torch.Tensor:
+    num_x, num_y = _baseline_num_xy(bundle.config)
+    n_fields = dataset.num_fields
+    n_pts = dataset.num_points
+
+    if int(bundle.training_stage) == 1:
+        x_grid = baseline_lib.pointcloud_to_grid(truth, num_y, num_x)
+        x_hat, _ = bundle.model(x_grid)
+        x_hat = x_hat[:, :, :num_y, :num_x]
+        return baseline_lib.grid_to_pointcloud(x_hat, num_y, num_x)
+
+    obs_value_grid, obs_mask_grid = baseline_lib.build_obs_grid_mask(
+        obs_values,
+        obs_mask,
+        obs_field_ids,
+        obs_indices,
+        n_fields,
+        n_pts,
+        num_y,
+        num_x,
+        num_y,
+        num_x,
+    )
+    ix = (obs_indices % num_x).float() / max(num_x - 1, 1)
+    iy = (obs_indices.div(num_x, rounding_mode="floor")).float() / max(num_y - 1, 1)
+    obs_coords_2d = torch.stack([ix, iy], dim=-1)
+    cond_inputs = {
+        "obs_value_grid": obs_value_grid,
+        "obs_mask_grid": obs_mask_grid,
+        "obs_coords_2d": obs_coords_2d,
+        "obs_values": obs_values,
+        "obs_mask": obs_mask,
+        "obs_field_ids": obs_field_ids,
+    }
+    recon_grid = bundle.model.sample(cond_inputs, n_steps=n_steps, ode_solver=ode_solver or "euler")
+    return baseline_lib.grid_to_pointcloud(recon_grid, num_y, num_x)
+
+
+def _baseline_reconstruct_sit(
+    bundle: Any,
+    dataset: Any,
+    coords: torch.Tensor,
+    truth: torch.Tensor,
+    obs_values: torch.Tensor,
+    obs_mask: torch.Tensor,
+    obs_indices: torch.Tensor,
+    obs_field_ids: torch.Tensor,
+    n_steps: int,
+    ode_solver: Optional[str],
+) -> torch.Tensor:
+    num_x, num_y = _baseline_num_xy(bundle.config)
+    h_pad = int(bundle.components["H_pad"])
+    w_pad = int(bundle.components["W_pad"])
+    n_fields = int(bundle.components["n_fields"])
+    n_pts = dataset.num_points
+    tokenizer = str(bundle.components["tokenizer"])
+    cond_mode = str(bundle.components["cond_mode"])
+
+    if tokenizer == "pointnet":
+        obs_value_nodes, obs_mask_nodes = baseline_lib.scatter_sensors_to_nodes(
+            obs_values,
+            obs_mask,
+            obs_field_ids,
+            obs_indices,
+            1,
+            n_pts,
+            n_fields,
+            bundle.device,
+            truth.dtype,
+        )
+        return baseline_lib.sit_conditional_sample(
+            net=bundle.model,
+            transport=bundle.components["transport"],
+            shape=(1, n_pts, n_fields),
+            coords=coords,
+            obs_value_nodes=obs_value_nodes,
+            obs_mask_nodes=obs_mask_nodes,
+            device=bundle.device,
+            n_steps=n_steps,
+            sampler_type=ode_solver or "euler",
+        )
+
+    obs_value_grid, obs_mask_grid = baseline_lib.build_obs_grid_mask(
+        obs_values,
+        obs_mask,
+        obs_field_ids,
+        obs_indices,
+        n_fields,
+        n_pts,
+        num_y,
+        num_x,
+        h_pad,
+        w_pad,
+    )
+    if cond_mode == "interp":
+        obs_value_grid = baseline_lib.nearest_fill_grid(obs_value_grid, obs_mask_grid)
+    recon_grid = baseline_lib.sit_conditional_sample(
+        net=bundle.model,
+        transport=bundle.components["transport"],
+        shape=(1, n_fields, h_pad, w_pad),
+        obs_value_grid=obs_value_grid,
+        obs_mask_grid=obs_mask_grid,
+        device=bundle.device,
+        n_steps=n_steps,
+        sampler_type=ode_solver or "euler",
+    )
+    return baseline_lib.grid_to_pointcloud(recon_grid, num_y, num_x)
+
+
+def _baseline_reconstruct_s3gm(
+    bundle: Any,
+    dataset: Any,
+    truth: torch.Tensor,
+    obs_values: torch.Tensor,
+    obs_mask: torch.Tensor,
+    obs_indices: torch.Tensor,
+    obs_field_ids: torch.Tensor,
+    n_steps: int,
+) -> torch.Tensor:
+    stage_cfg = baseline_lib.resolve_stage_config(bundle.config)
+    sampling_cfg = stage_cfg["sampling"]
+    num_x, num_y = _baseline_num_xy(bundle.config)
+    h_pad = int(bundle.components["H_pad"])
+    w_pad = int(bundle.components["W_pad"])
+    n_fields = dataset.num_fields
+    n_pts = dataset.num_points
+    obs_value_grid, obs_mask_grid = baseline_lib.build_obs_grid_mask(
+        obs_values,
+        obs_mask,
+        obs_field_ids,
+        obs_indices,
+        n_fields,
+        n_pts,
+        num_y,
+        num_x,
+        h_pad,
+        w_pad,
+    )
+    recon_grid = baseline_lib.dps_sample(
+        net=bundle.model,
+        sde=bundle.components["sde"],
+        shape_5d=(1, 1, n_fields, h_pad, w_pad),
+        obs_value_grid=obs_value_grid,
+        obs_mask_grid=obs_mask_grid,
+        device=bundle.device,
+        N_steps=n_steps,
+        snr=float(sampling_cfg["snr"]),
+        n_corrector_steps=int(sampling_cfg["n_corrector_steps"]),
+        alpha_obs=float(sampling_cfg["alpha_obs"]),
+    )
+    return baseline_lib.grid_to_pointcloud(recon_grid, num_y, num_x)
+
+
+def reconstruct_baseline_snapshot(
+    model: Any,
+    dataset: Any,
+    device: torch.device,
+    snapshot_index: int,
+    cond_fields: Sequence[int],
+    n_obs_list: Sequence[int],
+    n_steps: int,
+    ode_solver: Optional[str] = None,
+) -> Dict[str, torch.Tensor]:
+    """
+    Reconstruct one snapshot for train_Gen_Baseline.py checkpoints.
+
+    model is a BaselineBundle from model_baseline.py. The return contract
+    mirrors reconstruct_snapshot_local so the coherence code can stay shared.
+    """
+    bundle = model
+    sample = dataset[snapshot_index]
+    coords = sample["coords"].unsqueeze(0).to(device)
+    truth = sample["fields"].unsqueeze(0).to(device)
+
+    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = _baseline_build_sparse(
+        dataset=dataset,
+        coords=coords,
+        truth=truth,
+        cond_fields=cond_fields,
+        n_obs_list=n_obs_list,
+    )
+
+    with bundle.adapter.evaluation_weights(bundle):
+        bundle.model.eval()
+        if bundle.baseline_model == "latent_fm":
+            with torch.no_grad():
+                recon = _baseline_reconstruct_latentfm(
+                    bundle,
+                    dataset,
+                    coords,
+                    truth,
+                    obs_values,
+                    obs_mask,
+                    obs_indices,
+                    obs_field_ids,
+                    n_steps,
+                    ode_solver,
+                )
+        elif bundle.baseline_model == "sit":
+            with torch.no_grad():
+                recon = _baseline_reconstruct_sit(
+                    bundle,
+                    dataset,
+                    coords,
+                    truth,
+                    obs_values,
+                    obs_mask,
+                    obs_indices,
+                    obs_field_ids,
+                    n_steps,
+                    ode_solver,
+                )
+        elif bundle.baseline_model == "s3gm":
+            # S3GM DPS sampling differentiates through an observation residual,
+            # so this branch intentionally cannot be wrapped in torch.no_grad().
+            recon = _baseline_reconstruct_s3gm(
+                bundle,
+                dataset,
+                truth,
+                obs_values,
+                obs_mask,
+                obs_indices,
+                obs_field_ids,
+                n_steps,
+            )
+        else:
+            raise ValueError(f"Unsupported baseline_model for coherence reconstruction: {bundle.baseline_model}")
+
+    return {
+        "coords": coords,
+        "truth": truth,
+        "recon": recon.detach(),
+        "obs_coords": obs_coords,
+        "obs_values": obs_values,
+        "obs_mask": obs_mask,
+        "obs_indices": obs_indices,
+        "obs_field_ids": obs_field_ids,
+    }
+
+
+def get_reconstruction_fn(model_family: str = "pointcloud_ffm") -> Any:
     """
     Use the helper-provided reconstruct_snapshot if the repo has been patched,
     otherwise fall back to the local compatible implementation.
     """
+    if model_family != "pointcloud_ffm":
+        return reconstruct_baseline_snapshot
     return helpers_reconstruct_snapshot or reconstruct_snapshot_local
 
 
@@ -569,6 +966,785 @@ def save_json(path: Path, obj: Dict[str, Any]) -> None:
 def save_text(path: Path, text: str) -> None:
     with open(path, "w") as f:
         f.write(text)
+
+
+def normalize_statistical_modes(raw_modes: Optional[Sequence[str]]) -> List[str]:
+    if raw_modes is None:
+        return []
+    modes = list(raw_modes)
+    if "both" in modes:
+        return ["CoL2_Scatter", "Aggregate_Violin"]
+    ordered = []
+    for mode in modes:
+        if mode not in ordered:
+            ordered.append(mode)
+    return ordered
+
+
+def compute_relative_l2(pred: torch.Tensor, ref: torch.Tensor, eps: float = 1e-12) -> float:
+    """
+    Relative L2 reconstruction error over all query points and channels.
+    """
+    if pred.shape != ref.shape:
+        raise ValueError(f"compute_relative_l2 shape mismatch: {tuple(pred.shape)} vs {tuple(ref.shape)}")
+    diff = pred.reshape(-1) - ref.reshape(-1)
+    denom = ref.reshape(-1).norm() + eps
+    return float(diff.norm().detach().cpu() / denom.detach().cpu())
+
+
+def compute_observation_consistency_error(
+    pred_full: torch.Tensor,
+    obs_coords: torch.Tensor,
+    obs_values: torch.Tensor,
+    obs_mask: torch.Tensor,
+    coords_full: torch.Tensor,
+    obs_indices: Optional[torch.Tensor] = None,
+    obs_field_ids: Optional[torch.Tensor] = None,
+    field_mean: Optional[torch.Tensor] = None,
+    field_std: Optional[torch.Tensor] = None,
+    eps: float = 1e-12,
+) -> float:
+    """
+    Relative L2 error on valid conditioned sensor values only.
+
+    The preferred path uses obs_indices from build_sparse_condition. A nearest
+    neighbor coordinate lookup is kept as a fallback for older helper versions.
+    field_mean/field_std can be supplied when pred_full is in physical units
+    but obs_values are still normalized dataset values.
+    """
+    if pred_full.ndim == 2:
+        pred_full = pred_full.unsqueeze(0)
+    if coords_full.ndim == 2:
+        coords_full = coords_full.unsqueeze(0)
+    if obs_coords.ndim == 2:
+        obs_coords = obs_coords.unsqueeze(0)
+    if obs_values.ndim == 2:
+        obs_values = obs_values.unsqueeze(0)
+    if obs_mask.ndim == 1:
+        obs_mask = obs_mask.unsqueeze(0)
+
+    if obs_field_ids is None:
+        raise ValueError("obs_field_ids is required to compute observation consistency across conditioned fields.")
+    if obs_field_ids.ndim == 1:
+        obs_field_ids = obs_field_ids.unsqueeze(0)
+
+    valid = obs_mask.bool()
+    if valid.sum().item() == 0:
+        return float("nan")
+
+    if obs_indices is not None:
+        if obs_indices.ndim == 1:
+            obs_indices = obs_indices.unsqueeze(0)
+        gather_indices = obs_indices.long()
+    else:
+        # Fallback for older observation builders: map each observation coordinate
+        # back onto the full point cloud by nearest neighbor.
+        gather_indices = torch.zeros_like(obs_field_ids, dtype=torch.long)
+        for b in range(obs_coords.shape[0]):
+            vb = valid[b]
+            if vb.any():
+                dist = torch.cdist(obs_coords[b, vb].unsqueeze(0), coords_full[b].unsqueeze(0))[0]
+                gather_indices[b, vb] = torch.argmin(dist, dim=1)
+
+    batch_ids = torch.arange(pred_full.shape[0], device=pred_full.device).view(-1, 1).expand_as(gather_indices)
+    pred_obs = pred_full[batch_ids[valid], gather_indices[valid], obs_field_ids.long()[valid]]
+    target_obs = obs_values[..., 0][valid].to(pred_obs.device, dtype=pred_obs.dtype)
+
+    if field_mean is not None and field_std is not None:
+        fields = obs_field_ids.long()[valid].to(pred_obs.device)
+        mean = field_mean.to(pred_obs.device, dtype=pred_obs.dtype)[fields]
+        std = field_std.to(pred_obs.device, dtype=pred_obs.dtype)[fields]
+        target_obs = target_obs * std + mean
+
+    return float((pred_obs - target_obs).norm().detach().cpu() / (target_obs.norm().detach().cpu() + eps))
+
+
+def _select_stat_indices(n_items: int, stride: int, max_snapshots: Optional[int], seed: int) -> List[int]:
+    if stride <= 0:
+        raise ValueError(f"--stat-stride must be positive, got {stride}")
+    if max_snapshots is not None and max_snapshots <= 0:
+        raise ValueError(f"--stat-max-snapshots must be positive when supplied, got {max_snapshots}")
+
+    indices = list(range(0, n_items, stride))
+    if max_snapshots is not None and len(indices) > max_snapshots:
+        rng = np.random.default_rng(seed)
+        indices = sorted(int(v) for v in rng.choice(indices, size=max_snapshots, replace=False))
+    return indices
+
+
+def _stat_progress_iter(indices: Sequence[int], split_name: str) -> Any:
+    """
+    Progress helper for statistical mode.
+
+    tqdm is optional so the evaluator does not gain a required runtime
+    dependency. When unavailable, callers still emit periodic text progress.
+    """
+    if tqdm is None:
+        return enumerate(indices, start=1)
+    return enumerate(
+        tqdm(
+            indices,
+            total=len(indices),
+            desc=f"[stat] {split_name}",
+            unit="snapshot",
+            dynamic_ncols=True,
+            leave=True,
+        ),
+        start=1,
+    )
+
+
+def apply_paper_style() -> None:
+    """
+    Matplotlib defaults for paper-level aggregate diagnostic plots.
+
+    These settings keep the statistical figures compact, vector-friendly, and
+    readable in manuscript layouts without changing single-snapshot diagnostics.
+    """
+    import matplotlib as mpl
+
+    mpl.rcParams.update({
+        "font.family": "DejaVu Sans",
+        "font.size": 9,
+        "axes.labelsize": 10,
+        "axes.titlesize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "legend.fontsize": 8,
+        "figure.titlesize": 10,
+        "axes.linewidth": 0.8,
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "xtick.major.size": 3,
+        "ytick.major.size": 3,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+        "svg.fonttype": "none",
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.03,
+    })
+
+
+def save_figure_all_formats(fig: Any, stem_path: Path, formats: Sequence[str], dpi: int = 400) -> None:
+    stem_path.parent.mkdir(parents=True, exist_ok=True)
+    for fmt in formats:
+        suffix = str(fmt).lower().lstrip(".")
+        if suffix not in {"png", "pdf", "svg"}:
+            raise ValueError(f"Unsupported statistical plot format: {fmt}")
+        fig.savefig(stem_path.with_suffix(f".{suffix}"), dpi=dpi)
+
+
+def _finite_np(x: Any) -> np.ndarray:
+    vals = np.asarray(x, dtype=float).reshape(-1)
+    return vals[np.isfinite(vals)]
+
+
+def _finite_array(rows: Sequence[Dict[str, Any]], key: str) -> np.ndarray:
+    return _finite_np([float(row.get(key, np.nan)) for row in rows])
+
+
+def _stat_triplet(rows: Sequence[Dict[str, Any]], key: str) -> Dict[str, Optional[float]]:
+    vals = _finite_array(rows, key)
+    if vals.size == 0:
+        return {"finite_count": 0, "mean": None, "std": None, "median": None, "q25": None, "q75": None, "iqr": None}
+    q25, q75 = np.percentile(vals, [25, 75])
+    return {
+        "finite_count": int(vals.size),
+        "mean": float(np.mean(vals)),
+        "std": float(np.std(vals)),
+        "median": float(np.median(vals)),
+        "q25": float(q25),
+        "q75": float(q75),
+        "iqr": float(q75 - q25),
+    }
+
+
+def _compute_l2_metric_correlations(rows: Sequence[Dict[str, Any]], metric_key: str) -> Dict[str, Any]:
+    x = np.asarray([float(row.get("relative_l2", np.nan)) for row in rows], dtype=float)
+    y = np.asarray([float(row.get(metric_key, np.nan)) for row in rows], dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x = x[mask]
+    y = y[mask]
+
+    out: Dict[str, Any] = {
+        "pearson_r": None,
+        "spearman_rho": None,
+        "note": None,
+    }
+    if x.size < 2 or np.std(x) == 0.0 or np.std(y) == 0.0:
+        out["note"] = "Not enough non-constant finite samples to compute correlations."
+        return out
+
+    try:
+        from scipy import stats as scipy_stats  # type: ignore
+
+        pearson = scipy_stats.pearsonr(x, y)
+        spearman = scipy_stats.spearmanr(x, y)
+        out["pearson_r"] = float(pearson.statistic if hasattr(pearson, "statistic") else pearson[0])
+        out["spearman_rho"] = float(spearman.statistic if hasattr(spearman, "statistic") else spearman[0])
+    except Exception:
+        out["pearson_r"] = float(np.corrcoef(x, y)[0, 1])
+        out["spearman_rho"] = None
+        out["note"] = "scipy is unavailable; Pearson was computed with numpy and Spearman was set to null."
+    return out
+
+
+def _compute_l2_mode_correlations(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    return _compute_l2_metric_correlations(rows, "mode_score")
+
+
+def _robust_limits(values: np.ndarray, pad_frac: float = 0.04) -> Optional[Tuple[float, float]]:
+    vals = _finite_np(values)
+    if vals.size == 0:
+        return None
+    if vals.size >= 8:
+        lo, hi = np.percentile(vals, [1, 99])
+    else:
+        lo, hi = float(np.min(vals)), float(np.max(vals))
+    lo = float(lo)
+    hi = float(hi)
+    if lo == hi:
+        pad = max(abs(lo) * pad_frac, 1e-12)
+        return lo - pad, hi + pad
+    pad = (hi - lo) * pad_frac
+    return lo - pad, hi + pad
+
+
+def _safe_percentile_color_limits(values: np.ndarray, lo: float = 2, hi: float = 98, eps: float = 1e-12) -> Optional[Tuple[float, float]]:
+    vals = _finite_np(values)
+    if vals.size == 0:
+        return None
+    vmin, vmax = np.nanpercentile(vals, [lo, hi])
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or float(vmax - vmin) < eps:
+        return None
+    return float(vmin), float(vmax)
+
+
+def _add_panel_label(ax: Any, label: str) -> None:
+    ax.text(
+        -0.12,
+        1.04,
+        label,
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=10,
+        fontweight="bold",
+    )
+
+
+def _despine(ax: Any) -> None:
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def _format_metric_label(name: str) -> str:
+    return {
+        "marginal_score": "Marginal",
+        "joint_score": "Joint Max-SW",
+        "pairwise_mean": "Pairwise",
+        "mode_score": "Overall",
+        "relative_l2": r"Relative $L_2$ error",
+        "obs_consistency_error": "Observation consistency error",
+    }.get(name, name)
+
+
+def save_statistical_table_csv(path: Path, rows: Sequence[Dict[str, Any]]) -> None:
+    fieldnames = [
+        "split",
+        "snapshot_index",
+        "relative_l2",
+        "obs_consistency_error",
+        "marginal_score",
+        "joint_score",
+        "pairwise_mean",
+        "mode_score",
+        "n_steps",
+        "coherence_space",
+        "n_obs_total",
+    ]
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+
+def build_statistical_summary(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    split_selection: str,
+    requested_modes: Sequence[str],
+) -> Dict[str, Any]:
+    metrics = [
+        "relative_l2",
+        "obs_consistency_error",
+        "marginal_score",
+        "joint_score",
+        "pairwise_mean",
+        "mode_score",
+    ]
+    summary: Dict[str, Any] = {
+        "number_of_processed_snapshots": len(rows),
+        "split_selection": split_selection,
+        "requested_figures": list(requested_modes),
+        "metrics": {key: _stat_triplet(rows, key) for key in metrics},
+        "relative_l2_mode_score_correlation": _compute_l2_mode_correlations(rows),
+        "relative_l2_correlations": {
+            key: _compute_l2_metric_correlations(rows, key)
+            for key in ["marginal_score", "joint_score", "pairwise_mean", "mode_score"]
+        },
+    }
+    if _finite_array(rows, "pairwise_mean").size == 0:
+        summary["metrics"]["pairwise_mean"]["note"] = "pairwise_mean unavailable; pairwise diagnostics may be disabled."
+    return summary
+
+
+def save_coherence_l2_scatter(
+    rows: Sequence[Dict[str, Any]],
+    stem_path: Path,
+    args: argparse.Namespace,
+    correlations: Optional[Dict[str, Any]] = None,
+) -> None:
+    x = np.asarray([float(row.get("relative_l2", np.nan)) for row in rows], dtype=float)
+    y = np.asarray([float(row.get("mode_score", np.nan)) for row in rows], dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    color_key = str(args.stat_color_by)
+    color_values = None
+    if color_key != "none":
+        color_values = np.asarray([float(row.get(color_key, np.nan)) for row in rows], dtype=float)
+        mask = mask & np.isfinite(color_values)
+
+    has_colorbar = color_key != "none" and color_values is not None and _safe_percentile_color_limits(color_values[mask]) is not None
+    fig, ax = plt.subplots(figsize=(4.2, 3.2) if has_colorbar else (3.6, 3.0))
+    note_lines: List[str] = []
+    if mask.any():
+        x_plot = x[mask]
+        y_plot = y[mask]
+        if color_key == "none" or color_values is None:
+            ax.scatter(
+                x_plot,
+                y_plot,
+                marker="o",
+                s=float(args.stat_point_size),
+                alpha=0.72,
+                linewidths=0.25,
+                edgecolors="white",
+                color="#4C78A8",
+            )
+        else:
+            c_plot = color_values[mask]
+            clim = _safe_percentile_color_limits(c_plot)
+            if clim is None:
+                ax.scatter(
+                    x_plot,
+                    y_plot,
+                    marker="o",
+                    s=float(args.stat_point_size),
+                    alpha=0.72,
+                    linewidths=0.25,
+                    edgecolors="white",
+                    color="#4C78A8",
+                )
+                if color_key == "obs_consistency_error":
+                    note_lines.append("Obs. consistency nearly constant")
+            else:
+                cmap = "viridis" if color_key == "relative_l2" else "magma"
+                sc = ax.scatter(
+                    x_plot,
+                    y_plot,
+                    c=c_plot,
+                    vmin=clim[0],
+                    vmax=clim[1],
+                    cmap=cmap,
+                    marker="o",
+                    s=float(args.stat_point_size),
+                    alpha=0.72,
+                    linewidths=0.25,
+                    edgecolors="white",
+                )
+                cbar = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
+                cbar.set_label(_format_metric_label(color_key))
+
+        if bool(args.stat_show_regression) and x_plot.size >= 3 and np.std(x_plot) > 0.0:
+            coeff = np.polyfit(x_plot, y_plot, deg=1)
+            x_line = np.linspace(float(np.min(x_plot)), float(np.max(x_plot)), 100)
+            y_line = coeff[0] * x_line + coeff[1]
+            ax.plot(x_line, y_line, color="0.15", linewidth=1.2, alpha=0.8)
+
+        xlim = _robust_limits(x_plot, pad_frac=0.03)
+        ylim = _robust_limits(y_plot, pad_frac=0.03)
+        if xlim is not None:
+            ax.set_xlim(*xlim)
+        if ylim is not None:
+            y_finite = _finite_np(y_plot)
+            if y_finite.size > 0 and np.all(y_finite >= 0.0):
+                y_low_pct = float(np.percentile(y_finite, 5))
+                y_high_pct = float(np.percentile(y_finite, 95))
+                if y_low_pct <= 0.08 * max(y_high_pct, 1e-12):
+                    ylim = (0.0, ylim[1])
+            ax.set_ylim(*ylim)
+
+    correlations = correlations or _compute_l2_mode_correlations(rows)
+    pearson = correlations.get("pearson_r")
+    spearman = correlations.get("spearman_rho")
+    stat_lines = [f"n = {int(mask.sum())}"]
+    if int(mask.sum()) >= 3:
+        stat_lines.append(f"Pearson r = {pearson:.2f}" if pearson is not None else "Pearson r = n/a")
+        stat_lines.append(f"Spearman \u03c1 = {spearman:.2f}" if spearman is not None else "Spearman \u03c1 = n/a")
+    stat_lines.extend(note_lines)
+    ax.text(
+        0.04,
+        0.96,
+        "\n".join(stat_lines),
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=8,
+        bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.9),
+    )
+
+    ax.set_xlabel(r"Relative $L_2$ error")
+    ax.set_ylabel("Global coherence score")
+    if bool(args.stat_panel_labels):
+        _add_panel_label(ax, "(a)")
+    else:
+        ax.set_title("Coherence vs. reconstruction error")
+    ax.grid(axis="y", color="0.9", linewidth=0.5)
+    if args.stat_plot_style == "paper":
+        _despine(ax)
+    fig.text(0.52, -0.02, "Each point denotes one reconstructed snapshot.", ha="center", va="top", fontsize=7)
+    fig.tight_layout()
+    save_figure_all_formats(fig, stem_path, args.stat_plot_formats, dpi=int(args.stat_dpi))
+    plt.close(fig)
+
+
+def save_aggregate_violin(
+    rows: Sequence[Dict[str, Any]],
+    stem_path: Path,
+    args: argparse.Namespace,
+    *,
+    seed: int,
+) -> None:
+    metric_specs = [
+        ("marginal_score", "Marginal"),
+        ("joint_score", "Joint Max-SW"),
+        ("pairwise_mean", "Pairwise"),
+        ("mode_score", "Overall"),
+    ]
+    palette = {
+        "marginal_score": "#4C78A8",
+        "joint_score": "#F58518",
+        "pairwise_mean": "#54A24B",
+        "mode_score": "#B279A2",
+    }
+
+    keys: List[str] = []
+    labels: List[str] = []
+    data: List[np.ndarray] = []
+    for key, label in metric_specs:
+        vals = _finite_array(rows, key)
+        if vals.size == 0:
+            continue
+        keys.append(key)
+        labels.append(label)
+        data.append(vals)
+
+    fig, ax = plt.subplots(figsize=(4.0, 3.0))
+    if data:
+        positions = np.arange(1, len(data) + 1)
+        parts = ax.violinplot(data, positions=positions, showmeans=False, showmedians=False, showextrema=False)
+        for body, key in zip(parts["bodies"], keys):
+            body.set_facecolor(palette[key])
+            body.set_edgecolor("0.3")
+            body.set_linewidth(0.8)
+            body.set_alpha(0.28)
+
+        rng = np.random.default_rng(seed)
+        for pos, key, vals in zip(positions, keys, data):
+            jitter = rng.uniform(-0.075, 0.075, size=vals.size)
+            ax.scatter(
+                np.full(vals.size, pos) + jitter,
+                vals,
+                s=12,
+                alpha=float(args.stat_jitter_alpha),
+                edgecolor="none",
+                color=palette[key],
+                rasterized=vals.size > 250,
+            )
+            q25, med, q75 = np.percentile(vals, [25, 50, 75])
+            ax.plot([pos, pos], [q25, q75], color="black", lw=1.2, zorder=4)
+            ax.scatter([pos], [float(med)], s=26, marker="D", color="black", zorder=5)
+
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels, rotation=20, ha="right")
+
+        all_vals = np.concatenate(data)
+        if bool(args.stat_log_y) and np.all(all_vals > 0.0):
+            ax.set_yscale("log")
+            ax.set_ylabel("Score (log scale)")
+        else:
+            if bool(args.stat_log_y) and not np.all(all_vals > 0.0):
+                print("[stat] Aggregate violin uses linear y-scale because nonpositive scores are present.")
+            ax.set_ylabel("Score")
+    else:
+        ax.text(0.5, 0.5, "No finite coherence scores available", ha="center", va="center", transform=ax.transAxes)
+        ax.set_ylabel("Score")
+
+    ax.set_xlabel("")
+    if bool(args.stat_panel_labels):
+        _add_panel_label(ax, "(b)")
+    else:
+        ax.set_title("Distribution of coherence components")
+    ax.text(
+        0.98,
+        0.96,
+        f"n = {len(rows)} snapshots",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8,
+        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8),
+    )
+    ax.grid(axis="y", color="0.9", linewidth=0.5)
+    if args.stat_plot_style == "paper":
+        _despine(ax)
+    fig.tight_layout()
+    save_figure_all_formats(fig, stem_path, args.stat_plot_formats, dpi=int(args.stat_dpi))
+    plt.close(fig)
+
+
+def _build_eval_dataset(
+    *,
+    data_path: Path,
+    split: str,
+    cfg: Dict[str, Any],
+    stats_path: Path,
+) -> TurbulentCombustionH5Dataset:
+    return TurbulentCombustionH5Dataset(
+        h5_path=str(data_path),
+        split=split,
+        train_ratio=float(cfg.get("train_ratio", 0.9)),
+        seed=int(cfg.get("seed", 42)),
+        time_stride=int(cfg.get("time_stride", 1)),
+        stats_path=str(stats_path) if stats_path.exists() else None,
+    )
+
+
+def load_baseline_context(
+    *,
+    args: argparse.Namespace,
+    checkpoint_arg: str,
+    device: torch.device,
+) -> Tuple[Path, Path, Dict[str, Any], Any, Any, Callable[[str], Any], int, Optional[str]]:
+    """
+    Load a train_Gen_Baseline.py checkpoint using model_baseline.py adapters.
+    """
+    if baseline_lib is None:
+        raise ImportError("model_baseline.py could not be imported; baseline checkpoint evaluation is unavailable.")
+
+    checkpoint_path, run_dir = choose_checkpoint(checkpoint_arg)
+    checkpoint = baseline_lib.safe_torch_load(checkpoint_path, map_location="cpu")
+
+    run_cfg_path = run_dir / "run_config.yaml"
+    if run_cfg_path.exists():
+        cfg = baseline_lib.validate_and_normalize_config(baseline_lib.load_yaml(run_cfg_path))
+    elif isinstance(checkpoint, dict) and checkpoint.get("config") is not None:
+        cfg = baseline_lib.validate_and_normalize_config(checkpoint["config"])
+    else:
+        raise FileNotFoundError(
+            f"Baseline checkpoint needs {run_cfg_path} or an embedded 'config' entry."
+        )
+
+    requested_baseline = str(args.baseline_model).strip().lower()
+    if requested_baseline != cfg["baseline_model"]:
+        print(
+            f"[warning] --baseline-model={requested_baseline} does not match run_config baseline_model={cfg['baseline_model']}; "
+            "using the run_config value."
+        )
+
+    if cfg["baseline_model"] == "latent_fm" and int(cfg["training_stage"]) == 2:
+        ae_checkpoint = checkpoint.get("ae_checkpoint") if isinstance(checkpoint, dict) else None
+        if ae_checkpoint:
+            cfg["latent_fm_params"]["stage2"]["stage1_checkpoint"] = ae_checkpoint
+
+    stats_path = run_dir / "dataset_stats.pt"
+
+    def dataset_builder(split: str) -> Any:
+        return baseline_lib.build_dataset(cfg, split=split, stats_path=stats_path)
+
+    dataset = dataset_builder(args.split)
+    adapter = baseline_lib.get_baseline_adapter(cfg["baseline_model"])
+    bundle = adapter.build_for_training(
+        cfg=cfg,
+        device=device,
+        run_dir=run_dir,
+        train_set=dataset,
+        val_set=dataset,
+    )
+    adapter.load_checkpoint(bundle, checkpoint)
+    bundle.adapter = adapter
+    bundle.model.eval()
+
+    default_steps, default_solver = _baseline_sampling_defaults(cfg)
+    n_steps = int(args.n_steps if args.n_steps is not None else (default_steps if default_steps is not None else 1))
+    ode_solver = args.ode_solver or default_solver
+
+    return checkpoint_path, run_dir, cfg, dataset, bundle, dataset_builder, n_steps, ode_solver
+
+
+def run_statistical_analysis(
+    *,
+    args: argparse.Namespace,
+    model: nn.Module,
+    data_path: Path,
+    cfg: Dict[str, Any],
+    stats_path: Path,
+    eval_dir: Path,
+    device: torch.device,
+    cond_fields: Sequence[int],
+    n_obs_list: Sequence[int],
+    n_steps: int,
+    coherence_cfg: GlobalDistConfig,
+    reco_fn: Optional[Any] = None,
+    dataset_builder: Optional[Callable[[str], Any]] = None,
+    ode_solver: Optional[str] = None,
+) -> None:
+    """
+    Run dataset-level statistical coherence analysis.
+
+    Statistical mode is intended for paper-level evidence that coherence metrics
+    are not redundant with L2 and are stable across many frames. It intentionally
+    suppresses snapshot-level diagnostic plots and saves only aggregate artifacts.
+    """
+    if args.coherence_mode != "global_dist":
+        raise ValueError("Statistical analysis currently supports --coherence-mode global_dist only.")
+
+    if args.stat_plot_style == "paper":
+        apply_paper_style()
+
+    requested_modes = normalize_statistical_modes(args.statistical_analysis)
+    stat_dir = eval_dir / "statistical_analysis"
+    stat_dir.mkdir(parents=True, exist_ok=True)
+
+    split_names = ["train", "test"] if args.statistical_split == "all" else [args.statistical_split]
+    reco_fn = reco_fn or get_reconstruction_fn(args.baseline_model)
+    rows: List[Dict[str, Any]] = []
+
+    print("[stat] Statistical-analysis mode enabled.")
+    print("[stat] --snapshot-indices will be ignored; snapshot-level plotting is disabled.")
+
+    for split_name in split_names:
+        dataset = (
+            dataset_builder(split_name)
+            if dataset_builder is not None
+            else _build_eval_dataset(data_path=data_path, split=split_name, cfg=cfg, stats_path=stats_path)
+        )
+        selected = _select_stat_indices(
+            n_items=len(dataset),
+            stride=int(args.stat_stride),
+            max_snapshots=args.stat_max_snapshots,
+            seed=int(args.stat_seed),
+        )
+        print(f"[stat] split={split_name}: processing {len(selected)} of {len(dataset)} snapshots")
+
+        for pos, snapshot_index in _stat_progress_iter(selected, split_name):
+            rec = reco_fn(
+                model=model,
+                dataset=dataset,
+                device=device,
+                snapshot_index=int(snapshot_index),
+                    cond_fields=cond_fields,
+                    n_obs_list=n_obs_list,
+                    n_steps=n_steps,
+                    ode_solver=ode_solver if ode_solver is not None else args.ode_solver,
+                )
+
+            truth = rec["truth"]
+            recon = rec["recon"]
+            if args.coherence_space == "physical":
+                truth_eval = denormalize_fields(truth, dataset)
+                recon_eval = denormalize_fields(recon, dataset)
+                obs_field_mean = dataset.mean
+                obs_field_std = dataset.std
+            else:
+                truth_eval = truth
+                recon_eval = recon
+                obs_field_mean = None
+                obs_field_std = None
+
+            x_ref = truth_eval[0]
+            x_gen = recon_eval[0]
+            result = compute_coherence(args.coherence_mode, x_gen=x_gen, x_ref=x_ref, cfg=coherence_cfg)
+            scalars = coherence_result_to_scalars(result)
+
+            n_obs_total = int(rec["obs_mask"].bool().sum().detach().cpu())
+            row = {
+                "split": split_name,
+                "snapshot_index": int(snapshot_index),
+                "relative_l2": compute_relative_l2(x_gen, x_ref),
+                "obs_consistency_error": compute_observation_consistency_error(
+                    pred_full=recon_eval,
+                    obs_coords=rec["obs_coords"],
+                    obs_values=rec["obs_values"],
+                    obs_mask=rec["obs_mask"],
+                    coords_full=rec["coords"],
+                    obs_indices=rec.get("obs_indices"),
+                    obs_field_ids=rec.get("obs_field_ids"),
+                    field_mean=obs_field_mean,
+                    field_std=obs_field_std,
+                ),
+                "marginal_score": scalars["marginal_score"],
+                "joint_score": scalars["joint_score"],
+                "pairwise_mean": scalars["pairwise_mean"],
+                "mode_score": scalars["mode_score"],
+                "n_steps": int(n_steps),
+                "coherence_space": args.coherence_space,
+                "n_obs_total": n_obs_total,
+            }
+            rows.append(row)
+
+            if tqdm is None and (pos == 1 or pos == len(selected) or pos % 5 == 0):
+                print(f"[stat] processed {pos}/{len(selected)} for split={split_name}")
+
+            del rec, truth, recon, truth_eval, recon_eval, x_ref, x_gen, result
+
+    save_statistical_table_csv(stat_dir / "statistical_coherence_table.csv", rows)
+    summary = build_statistical_summary(
+        rows,
+        split_selection=args.statistical_split,
+        requested_modes=requested_modes,
+    )
+    save_json(stat_dir / "statistical_analysis_summary.json", summary)
+
+    if "CoL2_Scatter" in requested_modes:
+        save_coherence_l2_scatter(
+            rows,
+            stat_dir / "coherence_l2_scatter",
+            args,
+            correlations=summary["relative_l2_mode_score_correlation"],
+        )
+        # save_coherence_l2_scatter(
+        #     rows,
+        #     stat_dir / "fig_stat_coherence_l2_scatter",
+        #     args,
+        #     correlations=summary["relative_l2_mode_score_correlation"],
+        # )
+    if "Aggregate_Violin" in requested_modes:
+        save_aggregate_violin(
+            rows,
+            stat_dir / "aggregate_violin",
+            args,
+            seed=int(args.stat_seed),
+        )
+        # save_aggregate_violin(
+        #     rows,
+        #     stat_dir / "fig_stat_coherence_components",
+        #     args,
+        #     seed=int(args.stat_seed),
+        # )
+
+    print(f"\n[*] Statistical coherence analysis saved to: {stat_dir}\n")
 
 
 def summarize_direction(
@@ -1144,62 +2320,92 @@ def save_projected_sorted_curves(
 
 def main() -> None:
     args = parse_args()
+    if args.stat_seed is None:
+        args.stat_seed = int(args.seed if args.seed is not None else 0)
     set_seed(args.seed)
 
-    checkpoint_path, run_dir = choose_checkpoint(args.checkpoint)
-    cfg = load_run_config(run_dir)
-    demo_dir = infer_demo_dir(run_dir)
-
+    checkpoint_arg = checkpoint_arg_from_args(args)
     device = torch.device(args.device or ("cuda:0" if torch.cuda.is_available() else "cpu"))
 
-    # Dataset path and stats path default to the training run settings.
-    data_path = args.data or cfg.get("data")
-    if data_path is None:
-        raise ValueError("Dataset path is missing. Pass --data or ensure args.json contains 'data'.")
+    dataset_builder: Optional[Callable[[str], Any]] = None
+    if args.baseline_model == "pointcloud_ffm":
+        checkpoint_path, run_dir = choose_checkpoint(checkpoint_arg)
+        if run_dir.name.startswith("Baseline_"):
+            print(
+                "[warning] The checkpoint path looks like a train_Gen_Baseline.py run, "
+                "but --baseline-model was not set. Defaulting to pointcloud_ffm loading."
+            )
+        cfg = load_run_config(run_dir)
+        demo_dir = infer_demo_dir(run_dir)
 
-    # If the path stored in args.json is relative, resolve it against the demo dir.
-    data_path = resolve_input_path(
-        str(data_path),
-        label="Dataset",
-        extra_base_dirs=[run_dir, demo_dir],
-    )
+        # Dataset path and stats path default to the training run settings.
+        data_path = args.data or cfg.get("data")
+        if data_path is None:
+            raise ValueError("Dataset path is missing. Pass --data or ensure args.json contains 'data'.")
 
-    stats_path = run_dir / "dataset_stats.pt"
-    dataset = TurbulentCombustionH5Dataset(
-        h5_path=str(data_path),
-        split=args.split,
-        train_ratio=float(cfg.get("train_ratio", 0.9)),
-        seed=int(cfg.get("seed", 42)),
-        time_stride=int(cfg.get("time_stride", 1)),
-        stats_path=str(stats_path) if stats_path.exists() else None,
-    )
+        # If the path stored in args.json is relative, resolve it against the demo dir.
+        data_path = resolve_input_path(
+            str(data_path),
+            label="Dataset",
+            extra_base_dirs=[run_dir, demo_dir],
+        )
 
-    try:
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-    except pickle.UnpicklingError:
-        print("[warning] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        stats_path = run_dir / "dataset_stats.pt"
+        dataset = TurbulentCombustionH5Dataset(
+            h5_path=str(data_path),
+            split=args.split,
+            train_ratio=float(cfg.get("train_ratio", 0.9)),
+            seed=int(cfg.get("seed", 42)),
+            time_stride=int(cfg.get("time_stride", 1)),
+            stats_path=str(stats_path) if stats_path.exists() else None,
+        )
 
-    state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
-    if isinstance(state_dict, dict) and "_metadata" in state_dict:
-        state_dict = dict(state_dict)
-        state_dict.pop("_metadata", None)
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+        except pickle.UnpicklingError:
+            print("[warning] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    model = build_model(cfg, dataset).to(device)
-    model.load_state_dict(state_dict, strict=True)
-    model.eval()
+        state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
+        if isinstance(state_dict, dict) and "_metadata" in state_dict:
+            state_dict = dict(state_dict)
+            state_dict.pop("_metadata", None)
 
-    cond_fields = ensure_list(args.cond_fields) if args.cond_fields is not None else ensure_list(cfg.get("vis_cond_fields"))
-    if len(cond_fields) == 0:
-        cond_fields = ensure_list(cfg.get("cond_fields", [cfg.get("cond_field", 2)]))
+        model = build_model(cfg, dataset).to(device)
+        model.load_state_dict(state_dict, strict=True)
+        model.eval()
 
-    if args.n_obs_list is not None:
-        n_obs_list = broadcast_per_field(args.n_obs_list, cond_fields, "n_obs_list")
+        cond_fields = ensure_list(args.cond_fields) if args.cond_fields is not None else ensure_list(cfg.get("vis_cond_fields"))
+        if len(cond_fields) == 0:
+            cond_fields = ensure_list(cfg.get("cond_fields", [cfg.get("cond_field", 2)]))
+
+        if args.n_obs_list is not None:
+            n_obs_list = broadcast_per_field(args.n_obs_list, cond_fields, "n_obs_list")
+        else:
+            default_obs = cfg.get("vis_n_obs_list", cfg.get("n_obs_max_list", [cfg.get("n_obs_max", 256)]))
+            n_obs_list = broadcast_per_field(default_obs, cond_fields, "n_obs_list")
+
+        n_steps = int(args.n_steps if args.n_steps is not None else cfg.get("n_steps_generation", 100))
+        active_ode_solver = args.ode_solver
+        reco_fn = get_reconstruction_fn(args.baseline_model)
     else:
-        default_obs = cfg.get("vis_n_obs_list", cfg.get("n_obs_max_list", [cfg.get("n_obs_max", 256)]))
-        n_obs_list = broadcast_per_field(default_obs, cond_fields, "n_obs_list")
-
-    n_steps = int(args.n_steps if args.n_steps is not None else cfg.get("n_steps_generation", 100))
+        checkpoint_path, run_dir, cfg, dataset, model, dataset_builder, n_steps, active_ode_solver = load_baseline_context(
+            args=args,
+            checkpoint_arg=checkpoint_arg,
+            device=device,
+        )
+        demo_dir = infer_demo_dir(run_dir)
+        data_path = Path(cfg["shared"]["paths"]["data_path"])
+        stats_path = run_dir / "dataset_stats.pt"
+        shared_cond = cfg["shared"]["conditioning"]
+        cond_fields = ensure_list(args.cond_fields) if args.cond_fields is not None else ensure_list(shared_cond.get("vis_cond_fields"))
+        if len(cond_fields) == 0:
+            cond_fields = ensure_list(shared_cond.get("cond_fields"))
+        if args.n_obs_list is not None:
+            n_obs_list = broadcast_per_field(args.n_obs_list, cond_fields, "n_obs_list")
+        else:
+            n_obs_list = broadcast_per_field(shared_cond.get("vis_n_obs_list"), cond_fields, "n_obs_list")
+        reco_fn = get_reconstruction_fn(args.baseline_model)
 
     save_root = (
         resolve_output_path(args.save_root, extra_base_dirs=[demo_dir])
@@ -1218,6 +2424,21 @@ def main() -> None:
         "data": str(data_path),
         "split": args.split,
         "snapshot_indices": args.snapshot_indices,
+        "statistical_analysis": normalize_statistical_modes(args.statistical_analysis),
+        "statistical_split": args.statistical_split,
+        "stat_max_snapshots": args.stat_max_snapshots,
+        "stat_stride": args.stat_stride,
+        "stat_seed": args.stat_seed,
+        "stat_plot_style": args.stat_plot_style,
+        "stat_plot_formats": args.stat_plot_formats,
+        "stat_dpi": args.stat_dpi,
+        "stat_log_y": args.stat_log_y,
+        "stat_panel_labels": args.stat_panel_labels,
+        "stat_show_regression": args.stat_show_regression,
+        "stat_color_by": args.stat_color_by,
+        "stat_jitter_alpha": args.stat_jitter_alpha,
+        "stat_point_size": args.stat_point_size,
+        "baseline_model": args.baseline_model,
         "coherence_mode": args.coherence_mode,
         "cond_fields": cond_fields,
         "n_obs_list": n_obs_list,
@@ -1239,6 +2460,25 @@ def main() -> None:
         "global_dist_hparam_notes": hparam_notes,
     })
 
+    if args.statistical_analysis is not None:
+        run_statistical_analysis(
+            args=args,
+            model=model,
+            data_path=data_path,
+            cfg=cfg,
+            stats_path=stats_path,
+            eval_dir=eval_dir,
+            device=device,
+            cond_fields=cond_fields,
+            n_obs_list=n_obs_list,
+            n_steps=n_steps,
+            coherence_cfg=coherence_cfg,
+            reco_fn=reco_fn,
+            dataset_builder=dataset_builder,
+            ode_solver=active_ode_solver,
+        )
+        return
+
     guide_text = build_interpretation_guide_text(
         checkpoint_path=checkpoint_path,
         run_dir=run_dir,
@@ -1255,8 +2495,6 @@ def main() -> None:
         hparam_notes=hparam_notes,
     )
     save_text(eval_dir / "coherence_interpretation_guide.txt", guide_text)
-
-    reco_fn = get_reconstruction_fn()
 
     aggregate_per_channel: List[np.ndarray] = []
     aggregate_pairwise: List[np.ndarray] = []
@@ -1277,7 +2515,7 @@ def main() -> None:
             cond_fields=cond_fields,
             n_obs_list=n_obs_list,
             n_steps=n_steps,
-            ode_solver=args.ode_solver,
+            ode_solver=active_ode_solver,
         )
 
         truth = rec["truth"]

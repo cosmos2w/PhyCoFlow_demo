@@ -11,6 +11,7 @@ ffm_tc_pointcloud*/
 ForViewDataset/
 ForOfflineEvaluation/
 bk/
+Save_PhyCoEval/
 
 
 *.pt

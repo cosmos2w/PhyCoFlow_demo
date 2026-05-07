@@ -15,6 +15,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -333,6 +334,33 @@ def compute_global_distribution_coherence(
         out["pairwise_mean"] = pairwise.sum() / denom
 
     return out
+
+
+def coherence_result_to_scalars(result: Dict[str, torch.Tensor]) -> Dict[str, float]:
+    """
+    Extract scalar coherence diagnostics without mutating the input result.
+
+    Missing optional diagnostics, such as pairwise_mean when pairwise diagnostics
+    are disabled, are represented as NaN so table-writing code can continue.
+    """
+
+    def _scalar(name: str, default: float = np.nan) -> float:
+        value = result.get(name)
+        if value is None:
+            return float(default)
+        if torch.is_tensor(value):
+            flat = value.detach().cpu().reshape(-1)
+            if flat.numel() == 0:
+                return float(default)
+            return float(flat[0].item())
+        return float(value)
+
+    return {
+        "marginal_score": _scalar("marginal_score"),
+        "joint_score": _scalar("joint_score"),
+        "pairwise_mean": _scalar("pairwise_mean"),
+        "mode_score": _scalar("mode_score"),
+    }
 
 
 # -----------------------------------------------------------------------------

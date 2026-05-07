@@ -41,10 +41,12 @@ def parse_args() -> argparse.Namespace:
         default="Save_config/config_baseline_Gen.yaml",
         help="Unified config path. Used to resolve the target run when --run-dir / --checkpoint-path are omitted.",
     )
+    parser.add_argument("--checkpoint-path", type=str, default=None, help="Explicit checkpoint path.")
+
+    # These can be skipped if --checkpoint-path is given
     parser.add_argument("--baseline-model", type=str, default=None, help="Override baseline_model from YAML.")
     parser.add_argument("--training-stage", type=int, default=None, help="Override training_stage from YAML.")
     parser.add_argument("--run-dir", type=str, default=None, help="Specific unified run directory to evaluate.")
-    parser.add_argument("--checkpoint-path", type=str, default=None, help="Explicit checkpoint path.")
     parser.add_argument(
         "--checkpoint-name",
         type=str,
@@ -52,6 +54,8 @@ def parse_args() -> argparse.Namespace:
         choices=["best", "last"],
         help="Checkpoint file to use when only a run directory is provided.",
     )
+
+    # These can be optionally specified
     parser.add_argument("--device", type=str, default=None, help="Explicit device, e.g. cuda:0 or cpu.")
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
     parser.add_argument("--snapshot-index", type=int, default=0)
