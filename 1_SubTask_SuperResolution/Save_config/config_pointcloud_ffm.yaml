@@ -34,12 +34,12 @@
 #   multires_train_case_fraction: 0.3333333333
 
 #----------------------------------------------------------
-# Test Using Fourier positional encoding for RD 1:1:1
+# Test NOT Using Fourier positional encoding (retrain on case 4) for CFD 1:1:1
 # Use GL_rbf
 #----------------------------------------------------------
 
-Demo_Num: 21
-device_ids: [2]
+Demo_Num: 23
+device_ids: [0]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
@@ -62,14 +62,14 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 # PDEBench multi-resolution settings
 # ----------------------------------------------------------
-pdebench_dataset_name: "RD"         # ["RD", "CFD"]
+pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
 multires_ratio: "1:1:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
 multires_train_case_fraction: 1     # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
-Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
+Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.0
 
 # ----------------------------------------------------------
 # Backbone selection
@@ -84,9 +84,10 @@ cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
-USE_FOURIER_PE: false  # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
-fourier_pe_num_bands: 32
-fourier_pe_max_freq: 64.0
+
+USE_FOURIER_PE: true  # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
+fourier_pe_num_bands: 24  # 24 for RD-mixed and CFD, 32 for RD-H-only
+fourier_pe_max_freq: 32   # 48 for for RD-mixed, 32 for CFD-mixed, 48 for CFD-H-only and 64 for RD-H-only
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf
@@ -133,7 +134,6 @@ rff_lengthscale : 0.15
 
 eval_every : 5
 save_every : 500         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
-n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # ----------------------------------------------------------
 # Setting up the conditioning process

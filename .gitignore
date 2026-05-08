@@ -30,3 +30,4 @@ Save_PhyCoEval/
 *.npz
 
 !config_pointcloud_ffm.yaml
+!config_baseline_Gen.yaml
