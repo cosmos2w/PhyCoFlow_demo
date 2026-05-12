@@ -10,6 +10,14 @@ import torch.nn.functional as F
 from neuralop.models import FNO as NeuralOpFNO  # pip install neuraloperator
 from pykeops.torch import LazyTensor
 
+from obs_consistency import (
+    apply_endpoint_observation_consistency,
+    build_pointwise_observation_maps,
+    build_smooth_observation_maps,
+    normalize_obs_consistency_mode,
+    scatter_observed_values,
+)
+
 FIELD_NAMES = ("CH4", "CO", "T", "U_1", "p")
 
 # ------------------------------
@@ -1805,6 +1813,12 @@ class PointCloudFFM(nn.Module):
         n_steps: int = 8,
         clamp_indices: Optional[torch.Tensor] = None,
         ode_solver: str = "euler",
+        obs_consistency_mode: str = "default_hard",
+        obs_consistency_strength: float = 1.0,
+        obs_consistency_sigma: float = 0.05,
+        obs_consistency_schedule_power: float = 2.0,
+        obs_consistency_final_clamp: bool = True,
+        obs_consistency_chunk_size: int = 8192,
     ) -> torch.Tensor:
         """
         Integrate the learned rectified-flow ODE from x0 ~ prior to x1.
@@ -1817,6 +1831,35 @@ class PointCloudFFM(nn.Module):
 
         bsz = coords.shape[0]
         x = self.sample_source(coords)
+        obs_consistency_mode = normalize_obs_consistency_mode(obs_consistency_mode)
+        if obs_consistency_mode != "none" and clamp_indices is None:
+            if obs_consistency_mode in ("default_hard", "endpoint"):
+                raise ValueError(
+                    f"obs_consistency_mode={obs_consistency_mode!r} requires clamp_indices."
+                )
+
+        value_map = None
+        mask_map = None
+        if obs_consistency_mode == "endpoint":
+            value_map, mask_map = build_pointwise_observation_maps(
+                coords=coords,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_indices=clamp_indices,
+                obs_field_ids=obs_field_ids,
+                n_fields=self.model.n_fields,
+            )
+        elif obs_consistency_mode == "endpoint_smooth":
+            value_map, mask_map = build_smooth_observation_maps(
+                coords=coords,
+                obs_coords=obs_coords,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_field_ids=obs_field_ids,
+                n_fields=self.model.n_fields,
+                sigma=obs_consistency_sigma,
+                chunk_size=obs_consistency_chunk_size,
+            )
 
         ts = torch.linspace(
             0.0, 1.0, n_steps + 1, device=coords.device, dtype=coords.dtype
@@ -1828,25 +1871,60 @@ class PointCloudFFM(nn.Module):
 
             # Velocity at the current state.
             v0 = self.model(t0, x, coords, obs_coords, obs_values, obs_mask, obs_field_ids)
+            if obs_consistency_mode in ("endpoint", "endpoint_smooth"):
+                # RF clean-endpoint observation masking: guide x1_hat, then
+                # convert the consistent endpoint back to a velocity.
+                v0 = apply_endpoint_observation_consistency(
+                    x_t=x,
+                    v=v0,
+                    t=t0,
+                    value_map=value_map,
+                    mask_map=mask_map,
+                    strength=obs_consistency_strength,
+                    schedule_power=obs_consistency_schedule_power,
+                )
 
             if ode_solver == "heun":
                 # Optional predictor-corrector step.
                 x_euler = x + dt * v0
                 t1 = ts[i + 1].expand(bsz)
                 v1 = self.model(t1, x_euler, coords, obs_coords, obs_values, obs_mask, obs_field_ids)
+                if obs_consistency_mode in ("endpoint", "endpoint_smooth") and float(ts[i + 1].item()) < 1.0:
+                    v1 = apply_endpoint_observation_consistency(
+                        x_t=x_euler,
+                        v=v1,
+                        t=t1,
+                        value_map=value_map,
+                        mask_map=mask_map,
+                        strength=obs_consistency_strength,
+                        schedule_power=obs_consistency_schedule_power,
+                    )
                 x = x + 0.5 * dt * (v0 + v1)
             else:
                 # Default 1-RF benchmark solver.
                 x = x + dt * v0
 
-            # Keep known sensor values fixed during conditional generation.
-            if clamp_indices is not None:
-                for b in range(bsz):
-                    valid = obs_mask[b].bool()
-                    idx = clamp_indices[b, valid].long()
-                    fld = obs_field_ids[b, valid].long()
-                    val = obs_values[b, valid, 0]
-                    x[b, idx, fld] = val
+            # default_hard preserves the previous per-step pointwise sensor
+            # replacement behavior for SenConsis.
+            if obs_consistency_mode == "default_hard" and clamp_indices is not None:
+                x = scatter_observed_values(
+                    x=x,
+                    obs_values=obs_values,
+                    obs_mask=obs_mask,
+                    obs_indices=clamp_indices,
+                    obs_field_ids=obs_field_ids,
+                    strength=1.0,
+                )
+
+        if obs_consistency_final_clamp and obs_consistency_mode != "none" and clamp_indices is not None:
+            x = scatter_observed_values(
+                x=x,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_indices=clamp_indices,
+                obs_field_ids=obs_field_ids,
+                strength=1.0,
+            )
 
         return x
 
@@ -1916,6 +1994,12 @@ class FNOFFM(PointCloudFFM):
         obs_field_ids: torch.Tensor,
         n_steps: int = 100,
         clamp_indices: Optional[torch.Tensor] = None,
+        obs_consistency_mode: str = "default_hard",
+        obs_consistency_strength: float = 1.0,
+        obs_consistency_sigma: float = 0.05,
+        obs_consistency_schedule_power: float = 2.0,
+        obs_consistency_final_clamp: bool = True,
+        obs_consistency_chunk_size: int = 8192,
     ) -> torch.Tensor:
         """
         Guided sampling with the FNO backbone.
@@ -1932,6 +2016,30 @@ class FNOFFM(PointCloudFFM):
 
         bsz = coords.shape[0]
         x = self.prior(coords, self.model.n_fields)
+        obs_consistency_mode = normalize_obs_consistency_mode(obs_consistency_mode)
+
+        value_map = None
+        mask_map = None
+        if obs_consistency_mode == "endpoint":
+            value_map, mask_map = build_pointwise_observation_maps(
+                coords=coords,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_indices=clamp_indices,
+                obs_field_ids=obs_field_ids,
+                n_fields=self.model.n_fields,
+            )
+        elif obs_consistency_mode == "endpoint_smooth":
+            value_map, mask_map = build_smooth_observation_maps(
+                coords=coords,
+                obs_coords=obs_coords,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_field_ids=obs_field_ids,
+                n_fields=self.model.n_fields,
+                sigma=obs_consistency_sigma,
+                chunk_size=obs_consistency_chunk_size,
+            )
 
         dt = 1.0 / n_steps
         ts = torch.linspace(0.0, 1.0, n_steps + 1, device=coords.device, dtype=coords.dtype)
@@ -1950,6 +2058,17 @@ class FNOFFM(PointCloudFFM):
                 obs_field_ids=obs_field_ids,
                 obs_indices=clamp_indices,
             )
+            if obs_consistency_mode in ("endpoint", "endpoint_smooth"):
+                # RF clean-endpoint observation masking for the FNO backbone.
+                v0 = apply_endpoint_observation_consistency(
+                    x_t=x,
+                    v=v0,
+                    t=t0,
+                    value_map=value_map,
+                    mask_map=mask_map,
+                    strength=obs_consistency_strength,
+                    schedule_power=obs_consistency_schedule_power,
+                )
 
             x_euler = x + dt * v0
 
@@ -1963,15 +2082,37 @@ class FNOFFM(PointCloudFFM):
                 obs_field_ids=obs_field_ids,
                 obs_indices=clamp_indices,
             )
+            if obs_consistency_mode in ("endpoint", "endpoint_smooth") and float(ts[i + 1].item()) < 1.0:
+                v1 = apply_endpoint_observation_consistency(
+                    x_t=x_euler,
+                    v=v1,
+                    t=t1,
+                    value_map=value_map,
+                    mask_map=mask_map,
+                    strength=obs_consistency_strength,
+                    schedule_power=obs_consistency_schedule_power,
+                )
 
             x = x + 0.5 * dt * (v0 + v1)
 
-            # Hard-enforce observed values at the measured locations.
-            for b in range(bsz):
-                valid = obs_mask[b].bool()
-                idx = clamp_indices[b, valid].long()
-                fld = obs_field_ids[b, valid].long()
-                val = obs_values[b, valid, 0]
-                x[b, idx, fld] = val
+            if obs_consistency_mode == "default_hard":
+                x = scatter_observed_values(
+                    x=x,
+                    obs_values=obs_values,
+                    obs_mask=obs_mask,
+                    obs_indices=clamp_indices,
+                    obs_field_ids=obs_field_ids,
+                    strength=1.0,
+                )
+
+        if obs_consistency_final_clamp and obs_consistency_mode != "none":
+            x = scatter_observed_values(
+                x=x,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_indices=clamp_indices,
+                obs_field_ids=obs_field_ids,
+                strength=1.0,
+            )
 
         return x

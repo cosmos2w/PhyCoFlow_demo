@@ -3828,9 +3828,13 @@ from tqdm import tqdm
 
 try:
     import helpers_baseline as BASELINE_HELPERS
+    from helpers import save_sensor_parity_plot, save_sensor_residual_plot
+    from obs_consistency import observation_consistency_metrics
     from sit_transport import Transport as LinearVelocityTransport, create_transport, Sampler
 except ImportError:
     from . import helpers_baseline as BASELINE_HELPERS
+    from .helpers import save_sensor_parity_plot, save_sensor_residual_plot
+    from .obs_consistency import observation_consistency_metrics
     from .sit_transport import Transport as LinearVelocityTransport, create_transport, Sampler
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -3854,6 +3858,55 @@ _save_single_field_plot = BASELINE_HELPERS._save_single_field_plot
 _build_structured_triangulation = BASELINE_HELPERS._build_structured_triangulation
 
 SUPPORTED_BASELINES = {"s3gm", "latent_fm", "sit"}
+
+
+def _attach_senconsis_outputs(
+    *,
+    metrics: dict,
+    recon: torch.Tensor,
+    truth: torch.Tensor,
+    obs_coords: torch.Tensor,
+    obs_values: torch.Tensor,
+    obs_mask: torch.Tensor,
+    obs_indices: torch.Tensor,
+    obs_field_ids: torch.Tensor,
+    coords: torch.Tensor,
+    coords_xy: np.ndarray,
+    field_names: Sequence[str],
+    save_dir,
+    save_obs_consistency_plots: bool,
+) -> dict:
+    """SenConsis is sensor consistency between generated and observed sensors."""
+    obs_metrics = observation_consistency_metrics(
+        recon=recon,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_indices=obs_indices,
+        obs_field_ids=obs_field_ids,
+        field_names=field_names,
+    )
+    metrics.update(obs_metrics)
+    payload = {
+        "coords": coords.detach().cpu(),
+        "coords_xy": coords_xy,
+        "truth": truth.detach().cpu(),
+        "target": truth.detach().cpu(),
+        "recon": recon.detach().cpu(),
+        "obs_coords": obs_coords.detach().cpu(),
+        "obs_values": obs_values.detach().cpu(),
+        "obs_mask": obs_mask.detach().cpu(),
+        "obs_indices": obs_indices.detach().cpu(),
+        "obs_field_ids": obs_field_ids.detach().cpu(),
+        "field_names": list(field_names),
+    }
+    if save_obs_consistency_plots:
+        senconsis_dir = Path(save_dir) / "SenConsis"
+        senconsis_dir.mkdir(parents=True, exist_ok=True)
+        with open(senconsis_dir / "obs_consistency_metrics.json", "w", encoding="utf-8") as handle:
+            json.dump(obs_metrics, handle, indent=2)
+        save_sensor_parity_plot(payload, str(senconsis_dir))
+        save_sensor_residual_plot(payload, str(senconsis_dir))
+    return payload
 
 
 def load_yaml(path: Path) -> dict:
@@ -4677,6 +4730,7 @@ def visualize_reconstruction_s3gm(
     save_metrics_json=True,
     irregular=False,
     deformer=None,
+    save_obs_consistency_plots=False,
 ):
     if isinstance(cond_fields, int):
         cond_fields = [cond_fields]
@@ -4793,6 +4847,22 @@ def visualize_reconstruction_s3gm(
             triang=triang,
             body_polygon=body_polygon,
         )
+
+    _attach_senconsis_outputs(
+        metrics=metrics,
+        recon=recon,
+        truth=truth,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_indices=obs_indices,
+        obs_field_ids=obs_field_ids,
+        coords=coords,
+        coords_xy=coords_xy,
+        field_names=field_names,
+        save_dir=save_dir,
+        save_obs_consistency_plots=save_obs_consistency_plots,
+    )
 
     if save_metrics_json:
         prefix = file_tag or f"epoch_{epoch:04d}"
@@ -4921,6 +4991,7 @@ def visualize_reconstruction_latentfm(
     extra_metrics_list=None,
     save_analysis_npz=False,
     cfg=None,
+    save_obs_consistency_plots=False,
 ):
     model.eval()
     if isinstance(cond_fields, int):
@@ -5045,6 +5116,22 @@ def visualize_reconstruction_latentfm(
             body_polygon=body_polygon,
         )
 
+    _attach_senconsis_outputs(
+        metrics=metrics,
+        recon=recon,
+        truth=truth,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_indices=obs_indices,
+        obs_field_ids=obs_field_ids,
+        coords=coords,
+        coords_xy=coords_xy,
+        field_names=field_names,
+        save_dir=save_dir,
+        save_obs_consistency_plots=save_obs_consistency_plots,
+    )
+
     extra_metrics_list = extra_metrics_list or []
     extra_metrics = {}
     if len(extra_metrics_list) > 0 or save_analysis_npz:
@@ -5147,6 +5234,7 @@ def visualize_reconstruction_sit(
     file_tag: Optional[str] = None,
     tokenizer: str = "patch",
     cond_mode: str = "image",
+    save_obs_consistency_plots: bool = False,
 ) -> dict[str, float]:
     if isinstance(cond_fields, int):
         cond_fields = [cond_fields]
@@ -5254,6 +5342,22 @@ def visualize_reconstruction_sit(
             body_polygon=None,
         )
 
+    _attach_senconsis_outputs(
+        metrics=metrics,
+        recon=recon,
+        truth=truth,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_indices=obs_indices,
+        obs_field_ids=obs_field_ids,
+        coords=coords,
+        coords_xy=coords_xy,
+        field_names=field_names,
+        save_dir=save_dir,
+        save_obs_consistency_plots=save_obs_consistency_plots,
+    )
+
     payload = {
         "epoch": int(epoch),
         "snapshot_index": int(snapshot_index),
@@ -5290,7 +5394,7 @@ class BaseBaselineAdapter(abc.ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None) -> dict[str, float]:
+    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None, save_obs_consistency_plots: bool = False) -> dict[str, float]:
         raise NotImplementedError
 
     @contextlib.contextmanager
@@ -5409,7 +5513,7 @@ class S3GMAdapter(BaseBaselineAdapter):
         finally:
             bundle.ema.restore(all_params)
 
-    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None) -> dict[str, float]:
+    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None, save_obs_consistency_plots: bool = False) -> dict[str, float]:
         stage_cfg = resolve_stage_config(bundle.config)
         shared_cond = bundle.config["shared"]["conditioning"]
         sampling_cfg = stage_cfg["sampling"]
@@ -5434,6 +5538,7 @@ class S3GMAdapter(BaseBaselineAdapter):
             snapshot_index=snapshot_index,
             file_tag=f"s3gm_N{n_steps}",
             save_metrics_json=True,
+            save_obs_consistency_plots=save_obs_consistency_plots,
         )
 
 
@@ -5662,7 +5767,7 @@ class LatentFMAdapter(BaseBaselineAdapter):
         finally:
             bundle.ema.restore(velocity_net)
 
-    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None) -> dict[str, float]:
+    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None, save_obs_consistency_plots: bool = False) -> dict[str, float]:
         shared_cond = bundle.config["shared"]["conditioning"]
         if bundle.training_stage == 1:
             return visualize_ae_reconstruction(
@@ -5697,6 +5802,7 @@ class LatentFMAdapter(BaseBaselineAdapter):
             file_tag=f"latentfm_N{n_steps}",
             save_metrics_json=True,
             irregular=False,
+            save_obs_consistency_plots=save_obs_consistency_plots,
         )
         return metrics
 
@@ -5857,7 +5963,7 @@ class SiTAdapter(BaseBaselineAdapter):
         finally:
             bundle.ema.restore(all_params)
 
-    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None) -> dict[str, float]:
+    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None, save_obs_consistency_plots: bool = False) -> dict[str, float]:
         stage_cfg = resolve_stage_config(bundle.config)
         shared_cond = bundle.config["shared"]["conditioning"]
         sampling_cfg = stage_cfg["sampling"]
@@ -5881,6 +5987,7 @@ class SiTAdapter(BaseBaselineAdapter):
             file_tag=f"sit_N{n_steps}",
             tokenizer=bundle.components["tokenizer"],
             cond_mode=bundle.components["cond_mode"],
+            save_obs_consistency_plots=save_obs_consistency_plots,
         )
 
 

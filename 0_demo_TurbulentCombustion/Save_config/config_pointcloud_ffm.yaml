@@ -6,11 +6,12 @@
 
 #----------------------------------------------------------
 # try revised GL_rbf with improved topk_rbf_glres mode
-# Repeat 14, Try Fourier Positional Encoding
+# Try Fourier Positional Encoding & Using temperature + velocity + pressure + CO sensors 
+# Latent_drim = 256
 #----------------------------------------------------------
 
-Demo_Num: 16
-device_ids: [0]
+Demo_Num: 18
+device_ids: [1]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
@@ -44,7 +45,7 @@ fourier_pe_max_freq: 64.0
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf
 # ----------------------------------------------------------
-latent_dim: 128
+latent_dim: 256
 num_latents: 128
 num_heads: 8
 num_latent_blocks: 4
@@ -99,12 +100,12 @@ save_every : 500         # Saving reconstruction visualizations after save_every
 n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # Setting up the conditioning process
-cond_fields :   [2, 3]      # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
-n_obs_min_list: [128, 128]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
-n_obs_max_list: [384, 384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
+cond_fields :   [1, 2, 3, 4]      # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+n_obs_min_list: [192, 192, 192, 192]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
+n_obs_max_list: [384, 384, 384, 384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
 
 vis_cond_fields:            # help="Visualization conditioned fields. Defaults to cond_fields if None
-vis_n_obs_list: [256, 256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
+vis_n_obs_list: [256, 256, 256, 256 ]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
 
 # ===== Rectified Flow generation controls =====
 ode_solver : "euler"

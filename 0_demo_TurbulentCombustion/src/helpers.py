@@ -24,6 +24,11 @@ from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Sequence, Union
 
+from obs_consistency import (
+    build_smooth_observation_maps,
+    observation_consistency_metrics,
+)
+
 FIELD_NAMES = ("CH4", "CO", "T", "U_1", "p")
 
 def validate_regular_grid_compatibility(
@@ -452,6 +457,180 @@ def _save_single_field_plot(
 
     return l2_error
 
+
+def _safe_json_float_dict(metrics: dict) -> dict:
+    out = {}
+    for key, value in metrics.items():
+        if isinstance(value, (np.floating, np.integer)):
+            out[key] = value.item()
+        else:
+            out[key] = value
+    return out
+
+
+def _sensor_arrays_from_payload(payload: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    recon = payload["recon"].detach().cpu()
+    obs_values = payload["obs_values"].detach().cpu()
+    obs_mask = payload["obs_mask"].detach().cpu()
+    obs_indices = payload["obs_indices"].detach().cpu().long()
+    obs_field_ids = payload["obs_field_ids"].detach().cpu().long()
+
+    values = obs_values[..., 0] if obs_values.ndim == 3 else obs_values
+    bsz, n_obs = obs_mask.shape
+    batch_idx = torch.arange(bsz).view(-1, 1).expand(bsz, n_obs)
+    generated = recon[batch_idx, obs_indices, obs_field_ids.clamp_min(0)]
+    valid = (obs_mask > 0) & (obs_field_ids >= 0)
+    return (
+        values[valid].numpy(),
+        generated[valid].numpy(),
+        obs_field_ids[valid].numpy(),
+    )
+
+
+def _save_figure_all_formats(fig, base_path: str, dpi: int = 250) -> None:
+    for ext in ("png", "pdf", "svg"):
+        fig.savefig(f"{base_path}.{ext}", dpi=dpi, bbox_inches="tight")
+
+
+def save_sensor_parity_plot(payload: dict, senconsis_dir: str) -> None:
+    observed, generated, field_ids = _sensor_arrays_from_payload(payload)
+    field_names = list(payload.get("field_names", []))
+    fig, ax = plt.subplots(figsize=(6.2, 5.6))
+    if observed.size == 0:
+        ax.text(0.5, 0.5, "No sensors", transform=ax.transAxes, ha="center", va="center")
+    else:
+        for fld in np.unique(field_ids):
+            mask = field_ids == fld
+            label = field_names[int(fld)] if 0 <= int(fld) < len(field_names) else f"field_{int(fld)}"
+            ax.scatter(observed[mask], generated[mask], s=18, alpha=0.72, label=label)
+        lo = float(np.nanmin([observed.min(), generated.min()]))
+        hi = float(np.nanmax([observed.max(), generated.max()]))
+        pad = 0.03 * (hi - lo + 1e-12)
+        ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], color="black", linestyle=":", linewidth=1.5)
+        ax.set_xlim(lo - pad, hi + pad)
+        ax.set_ylim(lo - pad, hi + pad)
+        if len(np.unique(field_ids)) > 1:
+            ax.legend(frameon=False, fontsize=8)
+    ax.set_xlabel("Observed sensor value")
+    ax.set_ylabel("Generated value at sensor")
+    ax.set_title("Sensor consistency")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    _save_figure_all_formats(fig, os.path.join(senconsis_dir, "obs_consistency_parity"))
+    plt.close(fig)
+
+
+def save_sensor_residual_plot(payload: dict, senconsis_dir: str) -> None:
+    observed, generated, field_ids = _sensor_arrays_from_payload(payload)
+    residual = generated - observed
+    field_names = list(payload.get("field_names", []))
+    fig, ax = plt.subplots(figsize=(6.6, 4.6))
+    if residual.size == 0:
+        ax.text(0.5, 0.5, "No sensors", transform=ax.transAxes, ha="center", va="center")
+    else:
+        unique_fields = np.unique(field_ids)
+        data = [residual[field_ids == fld] for fld in unique_fields]
+        labels = [
+            field_names[int(fld)] if 0 <= int(fld) < len(field_names) else f"field_{int(fld)}"
+            for fld in unique_fields
+        ]
+        ax.violinplot(data, showmeans=True, showextrema=True)
+        ax.set_xticks(np.arange(1, len(labels) + 1))
+        ax.set_xticklabels(labels, rotation=25, ha="right")
+        ax.axhline(0.0, color="black", linestyle=":", linewidth=1.4)
+    ax.set_ylabel("Generated - observed")
+    ax.set_title("Sensor consistency residuals")
+    ax.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    _save_figure_all_formats(fig, os.path.join(senconsis_dir, "obs_consistency_residuals"))
+    plt.close(fig)
+
+
+def save_smooth_mask_plot(
+    payload: dict,
+    senconsis_dir: str,
+    sigma: float,
+    chunk_size: int = 8192,
+) -> None:
+    coords = payload["coords"].detach()
+    obs_coords = payload["obs_coords"].detach()
+    obs_values = payload["obs_values"].detach()
+    obs_mask = payload["obs_mask"].detach()
+    obs_field_ids = payload["obs_field_ids"].detach()
+    field_names = list(payload.get("field_names", []))
+    n_fields = int(payload["recon"].shape[-1])
+    value_map, mask_map = build_smooth_observation_maps(
+        coords=coords,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_field_ids=obs_field_ids,
+        n_fields=n_fields,
+        sigma=sigma,
+        chunk_size=chunk_size,
+    )
+    coords_xy = np.asarray(payload["coords_xy"])
+    triang = mtri.Triangulation(coords_xy[:, 0], coords_xy[:, 1])
+    mask_np = mask_map[0].detach().cpu().numpy()
+    value_np = value_map[0].detach().cpu().numpy()
+
+    for c in range(n_fields):
+        if not np.any(mask_np[:, c] > 0):
+            continue
+        name = field_names[c] if c < len(field_names) else f"field_{c}"
+        for kind, arr, cmap in (
+            ("mask", mask_np[:, c], "viridis"),
+            ("interp", value_np[:, c], "coolwarm"),
+        ):
+            fig, ax = plt.subplots(figsize=(6.2, 4.8))
+            im = ax.tricontourf(triang, arr, levels=80, cmap=cmap)
+            ax.set_aspect("equal")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_title(f"Sensor consistency {kind}: {name}")
+            fig.colorbar(im, ax=ax, shrink=0.75)
+            fig.tight_layout()
+            safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(name))
+            _save_figure_all_formats(fig, os.path.join(senconsis_dir, f"obs_consistency_{kind}_{safe_name}"))
+            plt.close(fig)
+
+
+def save_obs_consistency_comparison(rows: list[dict], senconsis_dir: str) -> None:
+    os.makedirs(senconsis_dir, exist_ok=True)
+    csv_path = os.path.join(senconsis_dir, "obs_consistency_comparison.csv")
+    json_path = os.path.join(senconsis_dir, "obs_consistency_comparison.json")
+    fieldnames = ["mode", "relative_l2", "obs_rel_l2_SenConsis", "obs_count_SenConsis_total"]
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+    with open(json_path, "w") as f:
+        json.dump(rows, f, indent=2)
+
+    modes = [row["mode"] for row in rows]
+    sensor_vals = [row.get("obs_rel_l2_SenConsis", np.nan) for row in rows]
+    full_vals = [row.get("relative_l2", np.nan) for row in rows]
+    x = np.arange(len(modes))
+    fig, ax = plt.subplots(figsize=(7.2, 4.6))
+    width = 0.36
+    ax.bar(x - width / 2, sensor_vals, width=width, label="obs_rel_l2_SenConsis")
+    if np.any(np.isfinite(full_vals)):
+        ax.bar(x + width / 2, full_vals, width=width, label="relative_l2")
+    ax.set_xticks(x)
+    ax.set_xticklabels(modes, rotation=20, ha="right")
+    ax.set_ylabel("Relative L2")
+    ax.set_title("Sensor consistency comparison")
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    _save_figure_all_formats(fig, os.path.join(senconsis_dir, "obs_consistency_comparison_bar"))
+    plt.close(fig)
+
 @torch.no_grad()
 def reconstruct_snapshot(
     model: torch.nn.Module,
@@ -546,6 +725,15 @@ def visualize_reconstruction(
     save_metrics_json: bool = True,
 
     return_payload: bool = False,
+    obs_consistency_mode: str = "default_hard",
+    obs_consistency_strength: float = 1.0,
+    obs_consistency_sigma: float = 0.05,
+    obs_consistency_schedule_power: float = 2.0,
+    obs_consistency_final_clamp: bool = True,
+    save_obs_consistency_plots: bool = False,
+    obs_consistency_compare_modes: Optional[Sequence[str]] = None,
+    obs_consistency_chunk_size: int = 8192,
+    sparse_condition: Optional[dict] = None,
 ):
     """
     Reconstruct full fields from arbitrary sparse sensors and save improved plots.
@@ -572,13 +760,20 @@ def visualize_reconstruction(
 
     truth = sample["fields"].unsqueeze(0).to(device)    # [1, N, C]
 
-    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
-        coords_full=coords,
-        fields_full=truth,
-        cond_fields=cond_fields,
-        n_obs_min=n_obs,
-        n_obs_max=n_obs,   # exact sensor counts for visualization
-    )
+    if sparse_condition is None:
+        obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+            coords_full=coords,
+            fields_full=truth,
+            cond_fields=cond_fields,
+            n_obs_min=n_obs,
+            n_obs_max=n_obs,   # exact sensor counts for visualization
+        )
+    else:
+        obs_coords = sparse_condition["obs_coords"].to(device)
+        obs_values = sparse_condition["obs_values"].to(device)
+        obs_mask = sparse_condition["obs_mask"].to(device)
+        obs_indices = sparse_condition["obs_indices"].to(device)
+        obs_field_ids = sparse_condition["obs_field_ids"].to(device)
 
     recon = model.sample(
         coords=coords,
@@ -588,6 +783,12 @@ def visualize_reconstruction(
         obs_field_ids=obs_field_ids,
         n_steps=n_steps,
         clamp_indices=obs_indices,
+        obs_consistency_mode=obs_consistency_mode,
+        obs_consistency_strength=obs_consistency_strength,
+        obs_consistency_sigma=obs_consistency_sigma,
+        obs_consistency_schedule_power=obs_consistency_schedule_power,
+        obs_consistency_final_clamp=obs_consistency_final_clamp,
+        obs_consistency_chunk_size=obs_consistency_chunk_size,
     )
 
     mean = dataset.mean.to(device)
@@ -631,6 +832,18 @@ def visualize_reconstruction(
         )
         metrics[name] = l2_error
 
+    # SenConsis = sensor consistency between generated values and sparse
+    # observed values. Added scalar metrics are relative L2 at sensor entries.
+    obs_metrics = observation_consistency_metrics(
+        recon=recon,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_indices=obs_indices,
+        obs_field_ids=obs_field_ids,
+        field_names=field_names,
+    )
+    metrics.update(obs_metrics)
+
     if save_metrics_json:
         prefix = file_tag if file_tag is not None else f"epoch_{epoch:04d}"
         metrics_path = os.path.join(save_dir, f"{prefix}_metrics.json")
@@ -640,24 +853,51 @@ def visualize_reconstruction(
             "cond_fields": [int(v) for v in cond_fields],
             "n_obs": [int(v) for v in n_obs],
             "n_steps": int(n_steps),
+            "obs_consistency_mode": obs_consistency_mode,
             "metrics": metrics,
         }
         with open(metrics_path, "w") as f:
             json.dump(payload, f, indent=2)
 
+    payload = {
+        "coords": coords.detach().cpu(),
+        "coords_xy": coords_xy,
+        "truth": truth.detach().cpu(),
+        "target": truth.detach().cpu(),
+        "recon": recon.detach().cpu(),
+        "truth_phys": truth_phys,
+        "recon_phys": recon_phys,
+        "obs_coords": obs_coords.detach().cpu(),
+        "obs_values": obs_values.detach().cpu(),
+        "obs_mask": obs_mask.detach().cpu(),
+        "obs_indices": obs_indices.detach().cpu(),
+        "obs_field_ids": obs_field_ids.detach().cpu(),
+        "obs_indices_valid": obs_indices_cpu,
+        "obs_field_ids_valid": obs_field_ids_cpu,
+        "field_names": list(field_names),
+        "snapshot_index": int(snapshot_index),
+        "cond_fields": [int(v) for v in cond_fields],
+        "n_obs": [int(v) for v in n_obs],
+        "n_steps": int(n_steps),
+        "obs_consistency_mode": obs_consistency_mode,
+    }
+
+    if save_obs_consistency_plots:
+        senconsis_dir = os.path.join(save_dir, "SenConsis")
+        os.makedirs(senconsis_dir, exist_ok=True)
+        with open(os.path.join(senconsis_dir, "obs_consistency_metrics.json"), "w") as f:
+            json.dump(_safe_json_float_dict(obs_metrics), f, indent=2)
+        save_sensor_parity_plot(payload, senconsis_dir)
+        save_sensor_residual_plot(payload, senconsis_dir)
+        if obs_consistency_mode == "endpoint_smooth":
+            save_smooth_mask_plot(
+                payload,
+                senconsis_dir,
+                sigma=obs_consistency_sigma,
+                chunk_size=obs_consistency_chunk_size,
+            )
+
     if return_payload:
-        payload = {
-            "coords_xy": coords_xy,
-            "truth_phys": truth_phys,
-            "recon_phys": recon_phys,
-            "obs_indices": obs_indices_cpu,
-            "obs_field_ids": obs_field_ids_cpu,
-            "field_names": list(field_names),
-            "snapshot_index": int(snapshot_index),
-            "cond_fields": [int(v) for v in cond_fields],
-            "n_obs": [int(v) for v in n_obs],
-            "n_steps": int(n_steps),
-        }
         return metrics, payload
 
     return metrics

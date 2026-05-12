@@ -1,3 +1,15 @@
+"""
+Sparse-observation consistency usage:
+
+- default_hard is the default and preserves current pointwise hard replacement behavior.
+- endpoint applies rectified-flow clean-endpoint pointwise observation masking.
+- endpoint_smooth applies rectified-flow clean-endpoint Gaussian/RBF smooth observation masking.
+- In PDEBench mixed-resolution evaluation, consistency maps are built on the selected L/M/H coordinate set.
+- All added SenConsis outputs are saved under SenConsis/.
+    activate this using --obs-consistency-mode & visualize by --save-obs-consistency-plots.
+- SenConsis metrics are relative L2 sensor-consistency errors.
+"""
+
 import argparse
 import json
 import os
@@ -15,6 +27,7 @@ import torch.nn.functional as F
 from helpers import (
     TurbulentCombustionH5Dataset,
     PDEBenchMultiResDataset,
+    save_obs_consistency_comparison,
     visualize_reconstruction,
     build_sparse_condition,
     _save_single_field_plot,
@@ -35,7 +48,10 @@ except ImportError:
     FNOFFM = None
 
 def parse_args():
-    p = argparse.ArgumentParser("Standalone evaluator for trained FFM models.")
+    p = argparse.ArgumentParser(
+        "Standalone evaluator for trained FFM models.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     p.add_argument("--Demo-Num", dest="Demo_Num", type=int, required=True, 
                    help="Demo ID to recover.")
     p.add_argument("--demo-root", type=str, default=".", 
@@ -79,6 +95,32 @@ def parse_args():
     # grad_rel_l2: smaller is better, below ~0.3 are very good, above ~0.7 means local derivatives are poorly captured
     p.add_argument("--save-analysis-npz", action="store_true",
                    help="If set, save per-field intermediate arrays (grids, gradients, spectra) to .npz files.")
+    p.add_argument(
+        "--obs-consistency-mode",
+        choices=["none", "default_hard", "endpoint", "endpoint_smooth"],
+        default="default_hard",
+        help="Sparse-observation consistency mode used during sampling.",
+    )
+    p.add_argument("--obs-consistency-strength", type=float, default=1.0)
+    p.add_argument("--obs-consistency-sigma", type=float, default=0.05)
+    p.add_argument("--obs-consistency-schedule-power", type=float, default=2.0)
+    p.add_argument(
+        "--no-obs-consistency-final-clamp",
+        action="store_true",
+        help="Disable the final exact sensor clamp for observation-consistency modes.",
+    )
+    p.add_argument(
+        "--save-obs-consistency-plots",
+        action="store_true",
+        help="Save SenConsis metrics and sensor-consistency figures.",
+    )
+    p.add_argument(
+        "--obs-consistency-compare-modes",
+        nargs="+",
+        default=None,
+        choices=["none", "default_hard", "endpoint", "endpoint_smooth"],
+        help="Evaluate multiple sparse-observation consistency modes using the same sensor set.",
+    )
     
     return p.parse_args()
 
@@ -365,99 +407,23 @@ def _visualize_reconstruction_with_payload(
     save_metrics_json: bool = True,
 ):
     """
-    Local copy of the plotting reconstruction path that also returns arrays
-    needed by the structured-grid metrics. Kept here so only this evaluator
-    changes.
+    Backward-compatible wrapper for older evaluator code. The shared helper now
+    returns the full payload, including SenConsis sensor tensors.
     """
-    model.eval()
-
-    cond_fields = _to_int_list(cond_fields)
-    n_obs = _broadcast_per_field(n_obs, cond_fields, "n_obs")
-
-    sample = dataset[snapshot_index]
-    coords = sample["coords"].unsqueeze(0).to(device)
-    coords_raw = sample["coords_raw"].unsqueeze(0).to(device)
-    truth = sample["fields"].unsqueeze(0).to(device)
-
-    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
-        coords_full=coords,
-        fields_full=truth,
+    return visualize_reconstruction(
+        model=model,
+        dataset=dataset,
+        epoch=epoch,
+        device=device,
+        save_dir=save_dir,
         cond_fields=cond_fields,
-        n_obs_min=n_obs,
-        n_obs_max=n_obs,
-    )
-
-    recon = model.sample(
-        coords=coords,
-        obs_coords=obs_coords,
-        obs_values=obs_values,
-        obs_mask=obs_mask,
-        obs_field_ids=obs_field_ids,
+        n_obs=n_obs,
         n_steps=n_steps,
-        clamp_indices=obs_indices,
+        snapshot_index=snapshot_index,
+        file_tag=file_tag,
+        save_metrics_json=save_metrics_json,
+        return_payload=True,
     )
-
-    mean = dataset.mean.to(device)
-    std = dataset.std.to(device)
-    recon_phys = recon * std.view(1, 1, -1) + mean.view(1, 1, -1)
-    truth_phys = truth * std.view(1, 1, -1) + mean.view(1, 1, -1)
-
-    recon_phys = recon_phys[0].cpu().numpy()
-    truth_phys = truth_phys[0].cpu().numpy()
-
-    valid = obs_mask[0].bool()
-    obs_indices_cpu = obs_indices[0, valid].cpu().numpy()
-    obs_field_ids_cpu = obs_field_ids[0, valid].cpu().numpy()
-
-    coords_np = coords_raw[0].cpu().numpy()
-    coords_xy = coords_np[:, :2]
-
-    field_names = tuple(getattr(dataset, "field_names", FIELD_NAMES))
-    metrics = {}
-
-    for c, name in enumerate(field_names):
-        true_f = truth_phys[:, c]
-        pred_f = recon_phys[:, c]
-
-        sensor_coords = None
-        field_sensor_mask = (obs_field_ids_cpu == c)
-        if np.any(field_sensor_mask):
-            sensor_coords = coords_xy[obs_indices_cpu[field_sensor_mask]]
-
-        l2_error = _save_single_field_plot(
-            true_f=true_f,
-            pred_f=pred_f,
-            coords_xy=coords_xy,
-            sensor_coords=sensor_coords,
-            field_name=name,
-            epoch=epoch,
-            save_dir=save_dir,
-            file_prefix=file_tag,
-        )
-        metrics[name] = l2_error
-
-    if save_metrics_json:
-        prefix = file_tag if file_tag is not None else f"epoch_{epoch:04d}"
-        metrics_path = os.path.join(save_dir, f"{prefix}_metrics.json")
-        json_payload = {
-            "epoch": int(epoch),
-            "snapshot_index": int(snapshot_index),
-            "cond_fields": [int(v) for v in cond_fields],
-            "n_obs": [int(v) for v in n_obs],
-            "n_steps": int(n_steps),
-            "metrics": metrics,
-        }
-        with open(metrics_path, "w") as f:
-            json.dump(json_payload, f, indent=2)
-
-    payload = {
-        "coords_xy": coords_xy,
-        "truth_phys": truth_phys,
-        "recon_phys": recon_phys,
-        "field_names": field_names,
-        "resolution_tag": str(sample.get("resolution_tag", "")),
-    }
-    return metrics, payload
 
 
 def _extract_num_xy_for_payload(dataset, payload: dict):
@@ -817,6 +783,16 @@ def _save_band_energy_plot(
     plt.close(fig)
 
 
+def _mean_full_field_relative_l2(metrics: dict) -> float:
+    values = []
+    for key, value in metrics.items():
+        if key.startswith("obs_"):
+            continue
+        if isinstance(value, (int, float)) and np.isfinite(value):
+            values.append(float(value))
+    return float(np.mean(values)) if values else float("nan")
+
+
 def main():
     args = parse_args()
 
@@ -932,10 +908,17 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     epoch = int(ckpt.get("epoch", 0)) if isinstance(ckpt, dict) else 0
-    need_payload = (len(args.extra_metrics) > 0) or args.save_analysis_npz
+    final_clamp = not args.no_obs_consistency_final_clamp
+    need_payload = (
+        (len(args.extra_metrics) > 0)
+        or args.save_analysis_npz
+        or args.save_obs_consistency_plots
+        or args.obs_consistency_compare_modes is not None
+    )
+    metrics_by_mode = None
 
-    if need_payload:
-        metrics, payload = _visualize_reconstruction_with_payload(
+    if args.obs_consistency_compare_modes is None:
+        result = visualize_reconstruction(
             model=model,
             dataset=dataset,
             epoch=epoch,
@@ -947,22 +930,67 @@ def main():
             snapshot_index=args.snapshot_index,
             file_tag=f"snapshot_{args.snapshot_index:04d}",
             save_metrics_json=True,
+            return_payload=need_payload,
+            obs_consistency_mode=args.obs_consistency_mode,
+            obs_consistency_strength=args.obs_consistency_strength,
+            obs_consistency_sigma=args.obs_consistency_sigma,
+            obs_consistency_schedule_power=args.obs_consistency_schedule_power,
+            obs_consistency_final_clamp=final_clamp,
+            save_obs_consistency_plots=args.save_obs_consistency_plots,
         )
+        if need_payload:
+            metrics, payload = result
+        else:
+            metrics = result
+            payload = None
     else:
-        metrics = visualize_reconstruction(
-            model=model,
-            dataset=dataset,
-            epoch=epoch,
-            device=device,
-            save_dir=str(out_dir),
-            cond_fields=vis_cond_fields,
-            n_obs=vis_n_obs_list,
-            n_steps=n_steps_generation,
-            snapshot_index=args.snapshot_index,
-            file_tag=f"snapshot_{args.snapshot_index:04d}",
-            save_metrics_json=True,
-        )
+        metrics_by_mode = {}
+        comparison_rows = []
+        sparse_condition = None
         payload = None
+        metrics = {}
+        for mode in args.obs_consistency_compare_modes:
+            mode_metrics, mode_payload = visualize_reconstruction(
+                model=model,
+                dataset=dataset,
+                epoch=epoch,
+                device=device,
+                save_dir=str(out_dir),
+                cond_fields=vis_cond_fields,
+                n_obs=vis_n_obs_list,
+                n_steps=n_steps_generation,
+                snapshot_index=args.snapshot_index,
+                file_tag=f"snapshot_{args.snapshot_index:04d}_{mode}",
+                save_metrics_json=True,
+                return_payload=True,
+                obs_consistency_mode=mode,
+                obs_consistency_strength=args.obs_consistency_strength,
+                obs_consistency_sigma=args.obs_consistency_sigma,
+                obs_consistency_schedule_power=args.obs_consistency_schedule_power,
+                obs_consistency_final_clamp=final_clamp,
+                save_obs_consistency_plots=False,
+                sparse_condition=sparse_condition,
+            )
+            if sparse_condition is None:
+                sparse_condition = {
+                    "obs_coords": mode_payload["obs_coords"],
+                    "obs_values": mode_payload["obs_values"],
+                    "obs_mask": mode_payload["obs_mask"],
+                    "obs_indices": mode_payload["obs_indices"],
+                    "obs_field_ids": mode_payload["obs_field_ids"],
+                }
+            metrics_by_mode[mode] = mode_metrics
+            payload = mode_payload
+            metrics = mode_metrics
+            comparison_rows.append({
+                "mode": mode,
+                "relative_l2": _mean_full_field_relative_l2(mode_metrics),
+                "obs_rel_l2_SenConsis": mode_metrics.get("obs_rel_l2_SenConsis", float("nan")),
+                "obs_count_SenConsis_total": mode_metrics.get("obs_count_SenConsis_total", 0),
+            })
+
+        senconsis_dir = out_dir / "SenConsis"
+        save_obs_consistency_comparison(comparison_rows, str(senconsis_dir))
 
     extra_metrics = {}
 
@@ -1059,7 +1087,14 @@ def main():
         "vis_cond_fields": [int(v) for v in vis_cond_fields],
         "vis_n_obs_list": [int(v) for v in vis_n_obs_list],
         "n_steps_generation": int(n_steps_generation),
+        "obs_consistency_mode": args.obs_consistency_mode,
+        "obs_consistency_strength": float(args.obs_consistency_strength),
+        "obs_consistency_sigma": float(args.obs_consistency_sigma),
+        "obs_consistency_schedule_power": float(args.obs_consistency_schedule_power),
+        "obs_consistency_final_clamp": bool(final_clamp),
+        "obs_consistency_compare_modes": args.obs_consistency_compare_modes,
         "metrics": metrics,
+        "metrics_by_mode": metrics_by_mode,
         "extra_metric_names": list(args.extra_metrics),
         "extra_metrics": extra_metrics,
     }

@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"])
     parser.add_argument("--snapshot-index", type=int, default=0)
     parser.add_argument("--n-steps", type=int, default=None, help="Optional sampling-step override for evaluation.")
+    parser.add_argument(
+        "--save-obs-consistency-plots",
+        action="store_true",
+        help="Save SenConsis relative L2 sensor-consistency metrics and figures.",
+    )
     return parser.parse_args()
 
 
@@ -146,6 +151,7 @@ def main() -> None:
             epoch=int(checkpoint.get("epoch", 0)),
             snapshot_index=int(args.snapshot_index),
             n_steps=args.n_steps,
+            save_obs_consistency_plots=args.save_obs_consistency_plots,
         )
 
     summary = {
