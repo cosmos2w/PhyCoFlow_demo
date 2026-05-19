@@ -1473,7 +1473,10 @@ class FNO(nn.Module):
         velocity field  : [B, N, C]
 
     Notes:
-    - The FNO operates on a regular mesh, so x_t is reshaped from point-cloud layout [B, N, C] to grid layout [B, C, Num_y, Num_x].
+    - The FNO operates on a regular mesh, so x_t is converted from point-cloud layout [B, N, C] to grid layout [B, C, Num_y, Num_x].
+    - If the HDF5 point order is not already row-major, the backbone derives
+      a stable row-major permutation from coords, applies it internally, and
+      returns the velocity in the original point order.
     - Sparse conditioning is rasterized into dense per-field observation maps and mask/support maps before being concatenated to the FNO input.
     - Optional Gaussian splatting can soften one-pixel conditioning impulses before they are concatenated to the spectral input.
     - New FNO runs use three condition-channel groups. This intentionally
@@ -1516,6 +1519,8 @@ class FNO(nn.Module):
         # Keep the blur kernel off the persistent state dict so old checkpoints
         # still load with strict=True.
         self.register_buffer("_condition_blur_kernel_cache", torch.empty(0), persistent=False)
+        self.register_buffer("_grid_order_cache", torch.empty(0, dtype=torch.long), persistent=False)
+        self.register_buffer("_point_to_grid_cache", torch.empty(0, dtype=torch.long), persistent=False)
 
         # FNO input channels:
         #   current state x_t         -> C
@@ -1534,6 +1539,65 @@ class FNO(nn.Module):
             n_layers=n_layers,
             positional_embedding="grid" if use_grid_positional_embedding else None,
         )
+
+    def _get_grid_permutation(
+        self,
+        coords: torch.Tensor,
+        decimals: int = 6,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return index maps between the dataset point order and row-major grid order.
+
+        grid_order[g] = original point index for row-major grid cell g.
+        point_to_grid[p] = row-major grid cell for original point index p.
+
+        The cache assumes the FNO sees one fixed mesh, which is true for this
+        turbulent-combustion demo. It is non-persistent and rebuilt after device
+        moves or checkpoint loading.
+        """
+        n_pts = coords.shape[1]
+        expected = self.Num_x * self.Num_y
+        if n_pts != expected:
+            raise ValueError(
+                f"FNO backbone expected N = Num_x * Num_y = {expected}, got {n_pts}."
+            )
+
+        cached_order = self._grid_order_cache
+        cached_point_to_grid = self._point_to_grid_cache
+        if (
+            cached_order.numel() == n_pts
+            and cached_point_to_grid.numel() == n_pts
+            and cached_order.device == coords.device
+            and cached_point_to_grid.device == coords.device
+        ):
+            return cached_order, cached_point_to_grid
+
+        coords0 = coords[0, :, :2].detach()
+        scale = float(10 ** decimals)
+        x = torch.round(coords0[:, 0] * scale) / scale
+        y = torch.round(coords0[:, 1] * scale) / scale
+
+        unique_x, x_rank = torch.unique(x, sorted=True, return_inverse=True)
+        unique_y, y_rank = torch.unique(y, sorted=True, return_inverse=True)
+        if unique_x.numel() != self.Num_x or unique_y.numel() != self.Num_y:
+            raise ValueError(
+                "FNO could not infer the requested grid from coords: "
+                f"detected unique (x, y)=({unique_x.numel()}, {unique_y.numel()}), "
+                f"but expected (Num_x, Num_y)=({self.Num_x}, {self.Num_y})."
+            )
+
+        point_to_grid = (y_rank.long() * self.Num_x + x_rank.long()).contiguous()
+        if torch.unique(point_to_grid).numel() != n_pts:
+            raise ValueError(
+                "FNO could not infer a complete tensor-product grid from coords. "
+                "The coordinate set has duplicate or missing (x, y) grid cells, so "
+                "an internal row-major permutation would be ambiguous."
+            )
+
+        grid_order = torch.argsort(point_to_grid).contiguous()
+        self._grid_order_cache = grid_order
+        self._point_to_grid_cache = point_to_grid
+        return grid_order, point_to_grid
 
     def _get_condition_blur_kernel(
         self,
@@ -1605,9 +1669,13 @@ class FNO(nn.Module):
         )
         return blurred_value_norm, blurred_value_num, blurred_mask_raw
 
-    def _pointcloud_to_grid(self, x: torch.Tensor) -> torch.Tensor:
+    def _pointcloud_to_grid(
+        self,
+        x: torch.Tensor,
+        grid_order: torch.Tensor,
+    ) -> torch.Tensor:
         """
-        Convert [B, N, C] -> [B, C, Num_y, Num_x].
+        Convert original point order [B, N, C] -> row-major grid [B, C, Num_y, Num_x].
         """
         bsz, n_pts, n_fields = x.shape
         expected = self.Num_x * self.Num_y
@@ -1616,17 +1684,23 @@ class FNO(nn.Module):
                 f"FNO backbone expected N = Num_x * Num_y = {expected}, got {n_pts}."
             )
 
+        x = x[:, grid_order, :]
         x_grid = x.reshape(bsz, self.Num_y, self.Num_x, n_fields)
         x_grid = x_grid.permute(0, 3, 1, 2).contiguous()
         return x_grid
 
-    def _grid_to_pointcloud(self, x_grid: torch.Tensor) -> torch.Tensor:
+    def _grid_to_pointcloud(
+        self,
+        x_grid: torch.Tensor,
+        point_to_grid: torch.Tensor,
+    ) -> torch.Tensor:
         """
-        Convert [B, C, Num_y, Num_x] -> [B, N, C].
+        Convert row-major grid [B, C, Num_y, Num_x] -> original point order [B, N, C].
         """
         bsz, n_fields, _, _ = x_grid.shape
         x = x_grid.permute(0, 2, 3, 1).contiguous()
         x = x.reshape(bsz, self.Num_x * self.Num_y, n_fields)
+        x = x[:, point_to_grid, :]
         return x
 
     def _build_condition_maps(
@@ -1706,18 +1780,22 @@ class FNO(nn.Module):
             )
 
         bsz = x_t.shape[0]
+        grid_order, point_to_grid = self._get_grid_permutation(coords)
 
-        # Reshape the current state to a grid.
-        x_grid = self._pointcloud_to_grid(x_t)  # [B, C, Num_y, Num_x]
+        # Convert the current state to a row-major grid. If the dataset is
+        # stored in a different point order, the permutation is applied here
+        # rather than mutating the shared point-cloud dataset.
+        x_grid = self._pointcloud_to_grid(x_t, grid_order=grid_order)  # [B, C, Num_y, Num_x]
         # Broadcast time to a full grid channel.
         t_map = t.view(bsz, 1, 1, 1).expand(bsz, 1, self.Num_y, self.Num_x)
 
         # Convert sparse observations into dense field-aligned maps.
+        obs_grid_indices = point_to_grid[obs_indices.long()]
         obs_value_norm_maps, obs_value_weighted_maps, obs_support_maps = self._build_condition_maps(
             obs_values=obs_values,
             obs_mask=obs_mask,
             obs_field_ids=obs_field_ids,
-            obs_indices=obs_indices,
+            obs_indices=obs_grid_indices,
             dtype=x_t.dtype,
             device=x_t.device,
         )
@@ -1732,7 +1810,7 @@ class FNO(nn.Module):
         # FNO predicts the velocity field on the regular grid.
         vel_grid = self.fno(fno_in)
         # Convert back to the standard point-cloud layout expected by the wrapper.
-        vel = self._grid_to_pointcloud(vel_grid)
+        vel = self._grid_to_pointcloud(vel_grid, point_to_grid=point_to_grid)
         return vel
 
 

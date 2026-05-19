@@ -38,7 +38,7 @@ def validate_regular_grid_compatibility(
     Num_y: Optional[int],
     decimals: int = 6,
     atol: float = 1e-5,
-) -> None:
+) -> Dict[str, object]:
     """
     Validate that a point-cloud dataset can be interpreted as a Num_x by Num_y regular grid.
 
@@ -47,11 +47,16 @@ def validate_regular_grid_compatibility(
       - Num_x * Num_y must match the number of points
       - the coordinate set must contain exactly Num_x unique x-values
         and Num_y unique y-values (up to rounding)
-      - the flattened point order must already be row-major:
-        x varies along axis 1/width and y varies along axis 0/height
-      - unique x/y spacing must be approximately regular
+      - every (x, y) tensor-product grid cell must exist exactly once
+
+    The FNO backbone can now apply a coordinate-derived row-major permutation
+    internally, so non-row-major HDF5 point order is reported but not rejected.
+    Nonuniform x/y spacing is also reported because the FNO then operates on
+    index-space grid positions, while physical coordinates remain available to
+    the point-cloud baselines.
 
     Raises ValueError if the dataset is not compatible with the requested grid.
+    Returns a small diagnostics dict for launch-time logging.
     """
     if Num_x is None or Num_y is None:
         raise ValueError(
@@ -126,28 +131,65 @@ def validate_regular_grid_compatibility(
     y_col_ascending = bool(torch.allclose(y_first_col, unique_y_vals, atol=atol, rtol=1e-4))
     y_col_descending = bool(torch.allclose(y_first_col, torch.flip(unique_y_vals, dims=[0]), atol=atol, rtol=1e-4))
 
-    if not x_row_matches_all:
-        diagnostics.append("x row pattern is not repeated across all rows")
-    if not y_col_matches_all:
-        diagnostics.append("y column pattern is not repeated across all columns")
-    if not y_constant_by_row:
-        diagnostics.append("y is not approximately constant across each flattened row")
-    if not x_constant_by_col:
-        diagnostics.append("x is not approximately constant down each flattened column")
-    if not (x_row_ascending or x_row_descending):
-        diagnostics.append("x does not monotonically cover the unique x values across row width")
-    if not (y_col_ascending or y_col_descending):
-        diagnostics.append("y does not monotonically cover the unique y values down column height")
+    row_major = (
+        x_row_matches_all
+        and y_col_matches_all
+        and y_constant_by_row
+        and x_constant_by_col
+        and (x_row_ascending or x_row_descending)
+        and (y_col_ascending or y_col_descending)
+    )
 
-    if diagnostics:
-        detail = "; ".join(diagnostics)
+    x_rank = torch.bucketize(x, unique_x_vals)
+    y_rank = torch.bucketize(y, unique_y_vals)
+    # bucketize can return insertion positions for exact rounded values; after
+    # the unique-count check above, every rounded coordinate must map in range.
+    if bool((x_rank >= Num_x).any() or (y_rank >= Num_y).any()):
+        raise ValueError(
+            "FNO regular-grid validation failed: coordinate values could not be "
+            "mapped back to the detected unique x/y grid values."
+        )
+    point_to_grid = y_rank.long() * Num_x + x_rank.long()
+    complete_tensor_product = int(torch.unique(point_to_grid).numel()) == expected_points
+
+    if not complete_tensor_product:
         raise ValueError(
             "FNO regular-grid validation failed: the dataset may be a valid point cloud, "
-            "but it is not in row-major flattened grid order. FNO reshapes [B, N, C] "
-            f"directly to [B, C, Num_y, Num_x]=[B, C, {Num_y}, {Num_x}], so this "
-            f"ordering would produce a scrambled image. Details: {detail}. "
-            "Reorder the data for FNO or implement an explicit grid permutation before using the FNO backbone."
+            "but it is not a complete tensor-product grid. FNO needs exactly one "
+            f"point for every ({Num_y}, {Num_x}) grid cell. Detected unique counts "
+            f"are (x={unique_x}, y={unique_y}), but unique (x, y) cells are "
+            f"{int(torch.unique(point_to_grid).numel())} out of {expected_points}. "
+            "Use a point-cloud backbone or implement a dataset-specific gridding/interpolation step."
         )
+
+    if not row_major:
+        diagnostics.append(
+            "flattened point order is not row-major; FNO will apply a coordinate-derived grid permutation"
+        )
+
+    x_diffs = unique_x_vals[1:] - unique_x_vals[:-1] if unique_x_vals.numel() > 1 else torch.ones(1)
+    y_diffs = unique_y_vals[1:] - unique_y_vals[:-1] if unique_y_vals.numel() > 1 else torch.ones(1)
+    order = torch.argsort(point_to_grid)
+    return {
+        "Num_x": Num_x,
+        "Num_y": Num_y,
+        "num_points": expected_points,
+        "unique_x": unique_x,
+        "unique_y": unique_y,
+        "complete_tensor_product": True,
+        "row_major": row_major,
+        "requires_permutation": not row_major,
+        "x_spacing_min": float(x_diffs.min().item()),
+        "x_spacing_median": float(x_diffs.median().item()),
+        "x_spacing_max": float(x_diffs.max().item()),
+        "y_spacing_min": float(y_diffs.min().item()),
+        "y_spacing_median": float(y_diffs.median().item()),
+        "y_spacing_max": float(y_diffs.max().item()),
+        "spacing_regular": len([d for d in diagnostics if "spaced" in d]) == 0,
+        "diagnostics": diagnostics,
+        "first_row_original_indices": [int(v) for v in order[: min(8, order.numel())].tolist()],
+        "first_original_to_grid_indices": [int(v) for v in point_to_grid[: min(8, point_to_grid.numel())].tolist()],
+    }
 
 def normalize_coords(coords: torch.Tensor) -> torch.Tensor:
     cmin = coords.min(dim=0).values

@@ -730,7 +730,17 @@ def main():
     )
 
     if cfg.get("backbone") == "fno":
-        validate_regular_grid_compatibility(dataset, cfg.get("Num_x", None), cfg.get("Num_y", None))
+        grid_info = validate_regular_grid_compatibility(dataset, cfg.get("Num_x", None), cfg.get("Num_y", None))
+        print(
+            "[*] FNO grid detected: "
+            f"{grid_info['unique_x']} unique x values x {grid_info['unique_y']} unique y values "
+            f"= {grid_info['num_points']} points."
+        )
+        if grid_info["requires_permutation"]:
+            print(
+                "[*] FNO grid order: dataset is not row-major; the FNO backbone will "
+                "apply its coordinate-derived permutation during evaluation."
+            )
 
     try:
         # Build and restore on CPU first to avoid temporarily holding both the

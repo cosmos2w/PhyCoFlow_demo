@@ -686,13 +686,44 @@ def main():
     elif args.backbone == "fno":
         # FNO requires an explicit regular-grid interpretation of the dataset.
         try:
-            validate_regular_grid_compatibility(train_set, args.Num_x, args.Num_y)
+            grid_info = validate_regular_grid_compatibility(train_set, args.Num_x, args.Num_y)
             validate_regular_grid_compatibility(val_set, args.Num_x, args.Num_y)
         except ValueError as e:
             print(f"\n[Warning: !] {e}")
             print("[Warning: !] FNO baseline cannot start because the provided Num_x / Num_y "
                   "are missing or incompatible with the dataset.\n")
             raise SystemExit(1)
+
+        print(
+            "[*] FNO grid detected: "
+            f"{grid_info['unique_x']} unique x values x {grid_info['unique_y']} unique y values "
+            f"= {grid_info['num_points']} points."
+        )
+        print(
+            "[*] FNO grid spacing in normalized coords: "
+            f"x min/med/max={grid_info['x_spacing_min']:.3e}/"
+            f"{grid_info['x_spacing_median']:.3e}/{grid_info['x_spacing_max']:.3e}, "
+            f"y min/med/max={grid_info['y_spacing_min']:.3e}/"
+            f"{grid_info['y_spacing_median']:.3e}/{grid_info['y_spacing_max']:.3e}."
+        )
+        if grid_info["requires_permutation"]:
+            print(
+                "[*] FNO grid order: dataset is not row-major; the FNO backbone will "
+                "internally permute point order -> row-major grid and invert the "
+                "permutation on output."
+            )
+            print(
+                "[*] FNO grid permutation sample: first row-major cells come from "
+                f"original indices {grid_info['first_row_original_indices']}; "
+                "first original points map to grid cells "
+                f"{grid_info['first_original_to_grid_indices']}."
+            )
+        if not grid_info["spacing_regular"]:
+            print(
+                "[*] FNO grid note: physical x/y spacing is nonuniform. FNO will run "
+                "on the topological index grid; point-cloud baselines still use "
+                "the physical coordinates directly."
+            )
 
         backbone = FNO(
             n_fields=train_set.num_fields,
