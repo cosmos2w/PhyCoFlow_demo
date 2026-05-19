@@ -821,6 +821,7 @@ def main():
                     cond_fields=args.vis_cond_fields,
                     n_obs=args.vis_n_obs_list,
                     n_steps=nfe,
+                    ode_solver=args.ode_solver,
                     snapshot_index=0,
                     file_tag=f"{args.ode_solver}_nfe{nfe}",
                     save_metrics_json = True,

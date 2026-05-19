@@ -1474,8 +1474,11 @@ class FNO(nn.Module):
 
     Notes:
     - The FNO operates on a regular mesh, so x_t is reshaped from point-cloud layout [B, N, C] to grid layout [B, C, Num_y, Num_x].
-    - Sparse conditioning is rasterized into dense per-field observation maps and mask maps before being concatenated to the FNO input.
+    - Sparse conditioning is rasterized into dense per-field observation maps and mask/support maps before being concatenated to the FNO input.
     - Optional Gaussian splatting can soften one-pixel conditioning impulses before they are concatenated to the spectral input.
+    - New FNO runs use three condition-channel groups. This intentionally
+      changes the FNO input channel count, so older FNO checkpoints trained
+      with the previous two-group conditioning layout are not compatible.
     """
 
     def __init__(
@@ -1517,10 +1520,11 @@ class FNO(nn.Module):
         # FNO input channels:
         #   current state x_t         -> C
         #   scalar time channel       -> 1
-        #   observed value maps       -> C
-        #   observed mask maps        -> C
-        # total = 3C + 1
-        in_channels = 3 * n_fields + 1
+        #   normalized observed values        -> C
+        #   support-weighted observed values  -> C
+        #   soft observation support maps     -> C
+        # total = 4C + 1
+        in_channels = 4 * n_fields + 1
 
         self.fno = NeuralOpFNO(
             n_modes=(n_modes_y, n_modes_x),   # tensor layout is [B, C, Num_y, Num_x]
@@ -1560,13 +1564,19 @@ class FNO(nn.Module):
         self,
         obs_value_maps: torch.Tensor,
         obs_mask_maps: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Replace one-pixel conditioning maps with Gaussian splats.
 
-        The value map is normalized by the blurred support so sensor magnitudes
-        remain on the original field scale, while the mask becomes a soft
-        confidence/support map.
+        Returns three semantically different condition maps:
+          - normalized/interpolated values on the original field scale;
+          - support-weighted values, i.e. the blurred numerator;
+          - soft support, i.e. the blurred mask.
+
+        The support-weighted channel is deliberately separate from the
+        normalized channel. It avoids presenting an unqualified finite-support
+        normalized plateau/boundary to the spectral model, and lets the FNO
+        distinguish "interpolated value" from "confidence/support."
         """
         kernel = self._get_condition_blur_kernel(
             dtype=obs_value_maps.dtype,
@@ -1587,14 +1597,13 @@ class FNO(nn.Module):
             groups=self.n_fields,
         )
 
-        blurred_value_maps = blurred_value_num / blurred_mask_raw.clamp_min(1e-6)
-        blurred_value_maps = torch.where(
+        blurred_value_norm = blurred_value_num / blurred_mask_raw.clamp_min(1e-6)
+        blurred_value_norm = torch.where(
             blurred_mask_raw > 0,
-            blurred_value_maps,
-            torch.zeros_like(blurred_value_maps),
+            blurred_value_norm,
+            torch.zeros_like(blurred_value_norm),
         )
-        blurred_mask_maps = blurred_mask_raw.clamp(max=1.0)
-        return blurred_value_maps, blurred_mask_maps
+        return blurred_value_norm, blurred_value_num, blurred_mask_raw
 
     def _pointcloud_to_grid(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -1628,13 +1637,14 @@ class FNO(nn.Module):
         obs_indices: torch.Tensor,
         dtype: torch.dtype,
         device: torch.device,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Rasterize sparse observations into dense grid-aligned maps.
 
         Returns:
-            obs_value_maps: [B, C, Num_y, Num_x]
-            obs_mask_maps : [B, C, Num_y, Num_x]
+            obs_value_norm_maps    : [B, C, Num_y, Num_x]
+            obs_value_weighted_maps: [B, C, Num_y, Num_x]
+            obs_support_maps       : [B, C, Num_y, Num_x]
         """
         bsz, _, _ = obs_values.shape
         n_pts = self.Num_x * self.Num_y
@@ -1663,12 +1673,14 @@ class FNO(nn.Module):
         obs_mask_maps = obs_mask_maps.reshape(bsz, self.n_fields, self.Num_y, self.Num_x)
 
         if self.condition_blur:
-            obs_value_maps, obs_mask_maps = self._blur_condition_maps(
+            return self._blur_condition_maps(
                 obs_value_maps=obs_value_maps,
                 obs_mask_maps=obs_mask_maps,
             )
 
-        return obs_value_maps, obs_mask_maps
+        # Without blur, a point observation is both the normalized value and
+        # the support-weighted value, with the binary mask carrying support.
+        return obs_value_maps, obs_value_maps, obs_mask_maps
 
     def forward(
         self,
@@ -1701,7 +1713,7 @@ class FNO(nn.Module):
         t_map = t.view(bsz, 1, 1, 1).expand(bsz, 1, self.Num_y, self.Num_x)
 
         # Convert sparse observations into dense field-aligned maps.
-        obs_value_maps, obs_mask_maps = self._build_condition_maps(
+        obs_value_norm_maps, obs_value_weighted_maps, obs_support_maps = self._build_condition_maps(
             obs_values=obs_values,
             obs_mask=obs_mask,
             obs_field_ids=obs_field_ids,
@@ -1711,8 +1723,12 @@ class FNO(nn.Module):
         )
 
         # Concatenate:
-        #   [current fields, time channel, observed values, observation masks]
-        fno_in = torch.cat([x_grid, t_map, obs_value_maps, obs_mask_maps], dim=1)
+        #   [current fields, time channel, normalized observed values,
+        #    support-weighted observed values, soft support maps]
+        fno_in = torch.cat(
+            [x_grid, t_map, obs_value_norm_maps, obs_value_weighted_maps, obs_support_maps],
+            dim=1,
+        )
         # FNO predicts the velocity field on the regular grid.
         vel_grid = self.fno(fno_in)
         # Convert back to the standard point-cloud layout expected by the wrapper.
@@ -1994,6 +2010,7 @@ class FNOFFM(PointCloudFFM):
         obs_field_ids: torch.Tensor,
         n_steps: int = 100,
         clamp_indices: Optional[torch.Tensor] = None,
+        ode_solver: str = "euler",
         obs_consistency_mode: str = "default_hard",
         obs_consistency_strength: float = 1.0,
         obs_consistency_sigma: float = 0.05,
@@ -2006,8 +2023,17 @@ class FNOFFM(PointCloudFFM):
 
         clamp_indices serves two roles here:
           1) it tells the backbone where to rasterize sparse observations;
-          2) it is also used for hard clamping after each Heun step.
+          2) it is also used for hard clamping after each solver step.
+
+        Euler uses one model evaluation per step. Heun uses two. Keeping this
+        explicit is important for fair NFE comparisons against GL_rbf.
         """
+        if n_steps < 1:
+            raise ValueError(f"n_steps must be >= 1, got {n_steps}")
+        if ode_solver not in ("euler", "heun"):
+            raise ValueError(
+                f"Unsupported ode_solver={ode_solver!r}; expected 'euler' or 'heun'."
+            )
         if clamp_indices is None:
             raise ValueError(
                 "FNOFFM.sample requires clamp_indices so sparse observations can be "
@@ -2041,12 +2067,11 @@ class FNOFFM(PointCloudFFM):
                 chunk_size=obs_consistency_chunk_size,
             )
 
-        dt = 1.0 / n_steps
         ts = torch.linspace(0.0, 1.0, n_steps + 1, device=coords.device, dtype=coords.dtype)
 
         for i in range(n_steps):
             t0 = ts[i].expand(bsz)
-            t1 = ts[i + 1].expand(bsz)
+            dt = ts[i + 1] - ts[i]
 
             v0 = self.model(
                 t=t0,
@@ -2070,30 +2095,32 @@ class FNOFFM(PointCloudFFM):
                     schedule_power=obs_consistency_schedule_power,
                 )
 
-            x_euler = x + dt * v0
-
-            v1 = self.model(
-                t=t1,
-                x_t=x_euler,
-                coords=coords,
-                obs_coords=obs_coords,
-                obs_values=obs_values,
-                obs_mask=obs_mask,
-                obs_field_ids=obs_field_ids,
-                obs_indices=clamp_indices,
-            )
-            if obs_consistency_mode in ("endpoint", "endpoint_smooth") and float(ts[i + 1].item()) < 1.0:
-                v1 = apply_endpoint_observation_consistency(
-                    x_t=x_euler,
-                    v=v1,
+            if ode_solver == "heun":
+                x_euler = x + dt * v0
+                t1 = ts[i + 1].expand(bsz)
+                v1 = self.model(
                     t=t1,
-                    value_map=value_map,
-                    mask_map=mask_map,
-                    strength=obs_consistency_strength,
-                    schedule_power=obs_consistency_schedule_power,
+                    x_t=x_euler,
+                    coords=coords,
+                    obs_coords=obs_coords,
+                    obs_values=obs_values,
+                    obs_mask=obs_mask,
+                    obs_field_ids=obs_field_ids,
+                    obs_indices=clamp_indices,
                 )
-
-            x = x + 0.5 * dt * (v0 + v1)
+                if obs_consistency_mode in ("endpoint", "endpoint_smooth") and float(ts[i + 1].item()) < 1.0:
+                    v1 = apply_endpoint_observation_consistency(
+                        x_t=x_euler,
+                        v=v1,
+                        t=t1,
+                        value_map=value_map,
+                        mask_map=mask_map,
+                        strength=obs_consistency_strength,
+                        schedule_power=obs_consistency_schedule_power,
+                    )
+                x = x + 0.5 * dt * (v0 + v1)
+            else:
+                x = x + dt * v0
 
             if obs_consistency_mode == "default_hard":
                 x = scatter_observed_values(

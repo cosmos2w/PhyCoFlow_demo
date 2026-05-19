@@ -34,12 +34,12 @@
 #   multires_train_case_fraction: 0.3333333333
 
 #----------------------------------------------------------
-# Test NOT Using Fourier positional encoding (retrain on case 4) for CFD 1:1:1
-# Use GL_rbf
+# Zero-shot super-resolution: test on 1:1:0 for CFD, use upgraded topk_rbf gathering
+# Retrained 0518
 #----------------------------------------------------------
 
-Demo_Num: 23
-device_ids: [0]
+Demo_Num: 12
+device_ids: [1]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
@@ -64,8 +64,8 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
-selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
-multires_ratio: "1:1:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
+selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-Vx
+multires_ratio: "1:1:0"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
 multires_train_case_fraction: 1     # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
@@ -87,7 +87,7 @@ rbf_sigma : 0.05
 
 USE_FOURIER_PE: true  # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
 fourier_pe_num_bands: 24  # 24 for RD-mixed and CFD, 32 for RD-H-only
-fourier_pe_max_freq: 32   # 48 for for RD-mixed, 32 for CFD-mixed, 48 for CFD-H-only and 64 for RD-H-only
+fourier_pe_max_freq: 48   # 48 for for RD-mixed, 32 for CFD-mixed, 48 for CFD-H-only and 64 for RD-H-only
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf

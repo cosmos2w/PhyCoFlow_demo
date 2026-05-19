@@ -27,6 +27,7 @@ import torch.nn.functional as F
 from helpers import (
     TurbulentCombustionH5Dataset,
     save_obs_consistency_comparison,
+    validate_regular_grid_compatibility,
     visualize_reconstruction,
 )
 
@@ -65,6 +66,12 @@ def parse_args():
                    help="Which checkpoint to load from the recovered run directory.")
     p.add_argument("--n-steps-generation", type=int, default = 4,
                    help="Override generation steps. Defaults to YAML n_steps_generation if present.")
+    p.add_argument(
+        "--ode-solver",
+        choices=["euler", "heun"],
+        default=None,
+        help="ODE solver for generation. Defaults to YAML ode_solver, then euler.",
+    )
     p.add_argument("--device", type=str, default=None, help="e.g. cuda:0 or cpu")
     
     # Added extra metrics for evaluation
@@ -722,6 +729,9 @@ def main():
         stats_path=str(model_root / "dataset_stats.pt"),
     )
 
+    if cfg.get("backbone") == "fno":
+        validate_regular_grid_compatibility(dataset, cfg.get("Num_x", None), cfg.get("Num_y", None))
+
     try:
         # Build and restore on CPU first to avoid temporarily holding both the
         # checkpoint tensors and the live model weights on the target device.
@@ -748,6 +758,13 @@ def main():
         model.load_state_dict(state_dict, strict=True)
     except Exception as e:
         print(f"[Warning: !] Checkpoint is incompatible with the reconstructed model: {e}")
+        if cfg.get("backbone") == "fno":
+            print(
+                "[Warning: !] FNO conditioning now uses normalized, support-weighted, "
+                "and soft-support channels (4 * n_fields + 1 inputs). Older FNO "
+                "checkpoints trained with the previous 3 * n_fields + 1 input layout "
+                "must be retrained."
+            )
         raise SystemExit(1)
 
     epoch = int(ckpt.get("epoch", 0)) if isinstance(ckpt, dict) else 0
@@ -766,7 +783,10 @@ def main():
         args.n_steps_generation if args.n_steps_generation is not None
         else cfg.get("n_steps_generation", 100)
     )
-    print(f'\nResults are generated from n_steps={n_steps_generation}\n')
+    ode_solver = args.ode_solver if args.ode_solver is not None else cfg.get("ode_solver", "euler")
+    if ode_solver not in ("euler", "heun"):
+        raise ValueError(f"Unsupported ode_solver={ode_solver!r}; expected 'euler' or 'heun'.")
+    print(f'\nResults are generated from solver={ode_solver}, n_steps={n_steps_generation}\n')
 
     eval_timestamp = torch.tensor([])  # dummy to avoid importing datetime twice
     from datetime import datetime
@@ -794,8 +814,9 @@ def main():
             cond_fields=vis_cond_fields,
             n_obs=vis_n_obs_list,
             n_steps=n_steps_generation,
+            ode_solver=ode_solver,
             snapshot_index=args.snapshot_index,
-            file_tag=f"snapshot_{args.snapshot_index:04d}",
+            file_tag=f"snapshot_{args.snapshot_index:04d}_{ode_solver}",
             save_metrics_json=True,
             return_payload=need_payload,
             obs_consistency_mode=args.obs_consistency_mode,
@@ -827,8 +848,9 @@ def main():
                 cond_fields=vis_cond_fields,
                 n_obs=vis_n_obs_list,
                 n_steps=n_steps_generation,
+                ode_solver=ode_solver,
                 snapshot_index=args.snapshot_index,
-                file_tag=f"snapshot_{args.snapshot_index:04d}_{mode}",
+                file_tag=f"snapshot_{args.snapshot_index:04d}_{ode_solver}_{mode}",
                 save_metrics_json=True,
                 return_payload=True,
                 obs_consistency_mode=mode,
@@ -952,6 +974,7 @@ def main():
         "vis_cond_fields": [int(v) for v in vis_cond_fields],
         "vis_n_obs_list": [int(v) for v in vis_n_obs_list],
         "n_steps_generation": int(n_steps_generation),
+        "ode_solver": ode_solver,
         "obs_consistency_mode": args.obs_consistency_mode,
         "obs_consistency_strength": float(args.obs_consistency_strength),
         "obs_consistency_sigma": float(args.obs_consistency_sigma),

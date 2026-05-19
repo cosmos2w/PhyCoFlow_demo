@@ -11,6 +11,7 @@ With this patch:
 
 import os
 import csv
+import inspect
 import torch
 import numpy as np
 import json
@@ -36,6 +37,7 @@ def validate_regular_grid_compatibility(
     Num_x: Optional[int],
     Num_y: Optional[int],
     decimals: int = 6,
+    atol: float = 1e-5,
 ) -> None:
     """
     Validate that a point-cloud dataset can be interpreted as a Num_x by Num_y regular grid.
@@ -45,6 +47,9 @@ def validate_regular_grid_compatibility(
       - Num_x * Num_y must match the number of points
       - the coordinate set must contain exactly Num_x unique x-values
         and Num_y unique y-values (up to rounding)
+      - the flattened point order must already be row-major:
+        x varies along axis 1/width and y varies along axis 0/height
+      - unique x/y spacing must be approximately regular
 
     Raises ValueError if the dataset is not compatible with the requested grid.
     """
@@ -78,6 +83,70 @@ def validate_regular_grid_compatibility(
             "[x] Grid compatibility check failed. "
             f"Dataset unique counts are ({unique_x}, {unique_y}) in (x, y), "
             f"but requested (Num_x, Num_y)=({Num_x}, {Num_y})."
+        )
+
+    unique_x_vals = torch.unique(x, sorted=True)
+    unique_y_vals = torch.unique(y, sorted=True)
+
+    def _spacing_is_regular(values: torch.Tensor) -> bool:
+        if values.numel() <= 2:
+            return True
+        diffs = values[1:] - values[:-1]
+        return bool(torch.allclose(diffs, diffs.median().expand_as(diffs), atol=atol, rtol=1e-4))
+
+    diagnostics = []
+    if not _spacing_is_regular(unique_x_vals):
+        diagnostics.append("unique x coordinates are not approximately regularly spaced")
+    if not _spacing_is_regular(unique_y_vals):
+        diagnostics.append("unique y coordinates are not approximately regularly spaced")
+
+    x_grid = x.reshape(Num_y, Num_x)
+    y_grid = y.reshape(Num_y, Num_x)
+
+    x_first_row = x_grid[0]
+    y_first_col = y_grid[:, 0]
+
+    x_row_matches_all = bool(torch.allclose(
+        x_grid,
+        x_first_row.view(1, Num_x).expand(Num_y, Num_x),
+        atol=atol,
+        rtol=1e-4,
+    ))
+    y_col_matches_all = bool(torch.allclose(
+        y_grid,
+        y_first_col.view(Num_y, 1).expand(Num_y, Num_x),
+        atol=atol,
+        rtol=1e-4,
+    ))
+    y_constant_by_row = bool((y_grid.max(dim=1).values - y_grid.min(dim=1).values <= atol).all())
+    x_constant_by_col = bool((x_grid.max(dim=0).values - x_grid.min(dim=0).values <= atol).all())
+
+    x_row_ascending = bool(torch.allclose(x_first_row, unique_x_vals, atol=atol, rtol=1e-4))
+    x_row_descending = bool(torch.allclose(x_first_row, torch.flip(unique_x_vals, dims=[0]), atol=atol, rtol=1e-4))
+    y_col_ascending = bool(torch.allclose(y_first_col, unique_y_vals, atol=atol, rtol=1e-4))
+    y_col_descending = bool(torch.allclose(y_first_col, torch.flip(unique_y_vals, dims=[0]), atol=atol, rtol=1e-4))
+
+    if not x_row_matches_all:
+        diagnostics.append("x row pattern is not repeated across all rows")
+    if not y_col_matches_all:
+        diagnostics.append("y column pattern is not repeated across all columns")
+    if not y_constant_by_row:
+        diagnostics.append("y is not approximately constant across each flattened row")
+    if not x_constant_by_col:
+        diagnostics.append("x is not approximately constant down each flattened column")
+    if not (x_row_ascending or x_row_descending):
+        diagnostics.append("x does not monotonically cover the unique x values across row width")
+    if not (y_col_ascending or y_col_descending):
+        diagnostics.append("y does not monotonically cover the unique y values down column height")
+
+    if diagnostics:
+        detail = "; ".join(diagnostics)
+        raise ValueError(
+            "FNO regular-grid validation failed: the dataset may be a valid point cloud, "
+            "but it is not in row-major flattened grid order. FNO reshapes [B, N, C] "
+            f"directly to [B, C, Num_y, Num_x]=[B, C, {Num_y}, {Num_x}], so this "
+            f"ordering would produce a scrambled image. Details: {detail}. "
+            "Reorder the data for FNO or implement an explicit grid permutation before using the FNO backbone."
         )
 
 def normalize_coords(coords: torch.Tensor) -> torch.Tensor:
@@ -720,6 +789,7 @@ def visualize_reconstruction(
     cond_fields: Union[int, Sequence[int]] = (2,),
     n_obs: Union[int, Sequence[int]] = 256,
     n_steps: int = 32,
+    ode_solver: Optional[str] = None,
     snapshot_index: int = 0,
     file_tag: Optional[str] = None,
     save_metrics_json: bool = True,
@@ -775,7 +845,7 @@ def visualize_reconstruction(
         obs_indices = sparse_condition["obs_indices"].to(device)
         obs_field_ids = sparse_condition["obs_field_ids"].to(device)
 
-    recon = model.sample(
+    sample_kwargs = dict(
         coords=coords,
         obs_coords=obs_coords,
         obs_values=obs_values,
@@ -790,6 +860,11 @@ def visualize_reconstruction(
         obs_consistency_final_clamp=obs_consistency_final_clamp,
         obs_consistency_chunk_size=obs_consistency_chunk_size,
     )
+    sig = inspect.signature(model.sample)
+    if "ode_solver" in sig.parameters and ode_solver is not None:
+        sample_kwargs["ode_solver"] = ode_solver
+
+    recon = model.sample(**sample_kwargs)
 
     mean = dataset.mean.to(device)
     std = dataset.std.to(device)
@@ -853,6 +928,7 @@ def visualize_reconstruction(
             "cond_fields": [int(v) for v in cond_fields],
             "n_obs": [int(v) for v in n_obs],
             "n_steps": int(n_steps),
+            "ode_solver": ode_solver,
             "obs_consistency_mode": obs_consistency_mode,
             "metrics": metrics,
         }
@@ -879,6 +955,7 @@ def visualize_reconstruction(
         "cond_fields": [int(v) for v in cond_fields],
         "n_obs": [int(v) for v in n_obs],
         "n_steps": int(n_steps),
+        "ode_solver": ode_solver,
         "obs_consistency_mode": obs_consistency_mode,
     }
 
