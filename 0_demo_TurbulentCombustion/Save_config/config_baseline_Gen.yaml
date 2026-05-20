@@ -38,15 +38,38 @@ shared:
     num_y: 100
 
   conditioning:
-    cond_fields: [2, 3]
-    n_obs_min_list: [128, 128]
-    n_obs_max_list: [512, 512]
-    vis_cond_fields: [2, 3]
-    vis_n_obs_list: [256, 256]
+    # SiT baseline launch variants. Field IDs:
+    #   0: CH4, 1: CO, 2: T, 3: U_1, 4: p
+    #
+    # A. T only:
+    #   cond_fields: [2]
+    #   n_obs_min_list: [192]
+    #   n_obs_max_list: [384]
+    #   vis_cond_fields: [2]
+    #   vis_n_obs_list: [256]
+    #
+    # B. T and U_1:
+    #   cond_fields: [2, 3]
+    #   n_obs_min_list: [192, 192]
+    #   n_obs_max_list: [384, 384]
+    #   vis_cond_fields: [2, 3]
+    #   vis_n_obs_list: [256, 256]
+    #
+    # C. CO, T, U_1, and p:
+    #   cond_fields: [1, 2, 3, 4]
+    #   n_obs_min_list: [192, 192, 192, 192]
+    #   n_obs_max_list: [384, 384, 384, 384]
+    #   vis_cond_fields: [1, 2, 3, 4]
+    #   vis_n_obs_list: [256, 256, 256, 256]
+    cond_fields: [2]
+    n_obs_min_list: [192]
+    n_obs_max_list: [384]
+    vis_cond_fields: [2]
+    vis_n_obs_list: [256]
 
   logging:
     eval_every: 5
-    save_every: 200
+    save_every: 500
 
   # Optional global training overrides.
   # Leave as null to preserve the original per-model defaults below.
@@ -132,16 +155,16 @@ latent_fm_params:
 sit_params:
   training:
     epochs: 10000
-    batch_size: 18
+    batch_size: 32
     learning_rate: 5.0e-5
-    weight_decay: 0.001
+    weight_decay: 0.0001
     eval_every: 5
-    save_every: 200
+    save_every: 500
     adam_eps: 1.0e-6
     huber_beta: 0.1
 
   architecture:
-    patch_size: 2
+    patch_size: 4
     hidden_size: 256
     depth: 8
     num_heads: 4
@@ -163,4 +186,4 @@ sit_params:
   sampling:
     sampling_N: 50
     ode_solver: "euler"
-    benchmark_n_steps: [16, 50]
+    benchmark_n_steps: [4, 16, 32, 64]

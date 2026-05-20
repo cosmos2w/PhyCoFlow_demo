@@ -3817,6 +3817,7 @@ import csv
 import json
 import os
 import pickle
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -4261,6 +4262,7 @@ def run_epoch_s3gm(bundle: BaselineBundle, loader: DataLoader, training: bool, e
     num_x = int(bundle.config["shared"]["data"]["num_x"])
     h_pad = int(bundle.components["H_pad"])
     w_pad = int(bundle.components["W_pad"])
+    grid_order = bundle.components.get("grid_order")
     ema = bundle.ema
     all_params_fn = bundle.components["all_params_fn"]
 
@@ -4271,7 +4273,7 @@ def run_epoch_s3gm(bundle: BaselineBundle, loader: DataLoader, training: bool, e
 
     for batch in pbar:
         fields_full = batch["fields"].to(bundle.device)
-        x_grid = pointcloud_to_grid_padded(fields_full, num_y, num_x, h_pad, w_pad)
+        x_grid = pointcloud_to_grid_padded(fields_full, num_y, num_x, h_pad, w_pad, grid_order=grid_order)
         loss = s3gm_loss(net, sde, x_grid)
 
         if training and optimizer is not None:
@@ -4406,6 +4408,8 @@ def run_epoch_sit(bundle: BaselineBundle, loader: DataLoader, training: bool, ep
     transport = bundle.components["transport"]
     h_pad = int(bundle.components["H_pad"])
     w_pad = int(bundle.components["W_pad"])
+    grid_order = bundle.components.get("grid_order")
+    point_to_grid = bundle.components.get("point_to_grid")
     cond_mode = bundle.components["cond_mode"]
     tokenizer = bundle.components["tokenizer"]
     spike_state = bundle.components["spike_state"]
@@ -4454,7 +4458,9 @@ def run_epoch_sit(bundle: BaselineBundle, loader: DataLoader, training: bool, ep
             model_kwargs["obs_value_nodes"] = obs_value_nodes
             model_kwargs["obs_mask_nodes"] = obs_mask_nodes
         else:
-            x_grid = pointcloud_to_grid_padded(fields_full, num_y, num_x, h_pad, w_pad)
+            x_grid = pointcloud_to_grid_padded(
+                fields_full, num_y, num_x, h_pad, w_pad, grid_order=grid_order
+            )
             obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
                 coords_full=coords,
                 fields_full=fields_full,
@@ -4473,6 +4479,7 @@ def run_epoch_sit(bundle: BaselineBundle, loader: DataLoader, training: bool, ep
                 num_x,
                 h_pad,
                 w_pad,
+                point_to_grid=point_to_grid,
             )
             if cond_mode == "interp":
                 obs_value_grid = nearest_fill_grid(obs_value_grid, obs_mask_grid)
@@ -4730,6 +4737,7 @@ def visualize_reconstruction_s3gm(
     save_metrics_json=True,
     irregular=False,
     deformer=None,
+    point_to_grid=None,
     save_obs_consistency_plots=False,
 ):
     if isinstance(cond_fields, int):
@@ -4788,6 +4796,7 @@ def visualize_reconstruction_s3gm(
             Num_x,
             H_pad,
             W_pad,
+            point_to_grid=point_to_grid,
         )
 
     with torch.enable_grad():
@@ -4807,7 +4816,7 @@ def visualize_reconstruction_s3gm(
     if irregular:
         recon = gather_from_grid(recon_grid[:, :, :Num_y, :Num_x], latent_coords)
     else:
-        recon = grid_to_pointcloud(recon_grid, Num_y, Num_x)
+        recon = grid_to_pointcloud(recon_grid, Num_y, Num_x, point_to_grid=point_to_grid)
 
     mean = dataset.mean.to(device)
     std = dataset.std.to(device)
@@ -5234,6 +5243,7 @@ def visualize_reconstruction_sit(
     file_tag: Optional[str] = None,
     tokenizer: str = "patch",
     cond_mode: str = "image",
+    point_to_grid: Optional[torch.Tensor] = None,
     save_obs_consistency_plots: bool = False,
 ) -> dict[str, float]:
     if isinstance(cond_fields, int):
@@ -5291,6 +5301,7 @@ def visualize_reconstruction_sit(
             num_x,
             h_pad,
             w_pad,
+            point_to_grid=point_to_grid,
         )
         if cond_mode == "interp":
             obs_value_grid = nearest_fill_grid(obs_value_grid, obs_mask_grid)
@@ -5304,7 +5315,7 @@ def visualize_reconstruction_sit(
             n_steps=n_steps,
             sampler_type=sampler_type,
         )
-        recon = grid_to_pointcloud(recon_grid, num_y, num_x)
+        recon = grid_to_pointcloud(recon_grid, num_y, num_x, point_to_grid=point_to_grid)
 
     mean = dataset.mean.to(device)
     std = dataset.std.to(device)
@@ -5412,6 +5423,9 @@ class S3GMAdapter(BaseBaselineAdapter):
         training = stage_cfg["training"]
         num_y = int(cfg["shared"]["data"]["num_y"])
         num_x = int(cfg["shared"]["data"]["num_x"])
+        grid_info = validate_regular_grid_compatibility(train_set, num_x, num_y)
+        if val_set is not train_set:
+            validate_regular_grid_compatibility(val_set, num_x, num_y)
         h_pad, w_pad = compute_pad_size(num_y, num_x, 2 ** (len(arch["ch_mult"]) - 1))
 
         net = UNetVideoModel(
@@ -5468,7 +5482,15 @@ class S3GMAdapter(BaseBaselineAdapter):
             config=cfg,
             dataset_train=train_set,
             dataset_val=val_set,
-            components={"sde": sde, "H_pad": h_pad, "W_pad": w_pad, "all_params_fn": all_params_fn},
+            components={
+                "sde": sde,
+                "H_pad": h_pad,
+                "W_pad": w_pad,
+                "all_params_fn": all_params_fn,
+                "grid_order": grid_info["grid_order"],
+                "point_to_grid": grid_info["point_to_grid"],
+                "grid_info": grid_info,
+            },
         )
 
     def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
@@ -5538,6 +5560,7 @@ class S3GMAdapter(BaseBaselineAdapter):
             snapshot_index=snapshot_index,
             file_tag=f"s3gm_N{n_steps}",
             save_metrics_json=True,
+            point_to_grid=bundle.components.get("point_to_grid"),
             save_obs_consistency_plots=save_obs_consistency_plots,
         )
 
@@ -5810,6 +5833,33 @@ class LatentFMAdapter(BaseBaselineAdapter):
 class SiTAdapter(BaseBaselineAdapter):
     name = "sit"
 
+    def _checkpoint_context(self, bundle: BaselineBundle, checkpoint: dict) -> str:
+        stage_cfg = resolve_stage_config(bundle.config)
+        arch = stage_cfg["architecture"]
+        fields = [
+            f"checkpoint method={checkpoint.get('method', '<missing>')!r}",
+            f"checkpoint baseline_model={checkpoint.get('baseline_model', '<missing>')!r}",
+            f"checkpoint training_stage={checkpoint.get('training_stage', '<missing>')!r}",
+            f"checkpoint epoch={checkpoint.get('epoch', '<missing>')!r}",
+            f"checkpoint grid=({checkpoint.get('Num_y', '<missing>')}, {checkpoint.get('Num_x', '<missing>')})",
+            f"checkpoint padded=({checkpoint.get('H_pad', '<missing>')}, {checkpoint.get('W_pad', '<missing>')})",
+            f"checkpoint patch_size={checkpoint.get('patch_size', '<missing>')!r}",
+            f"checkpoint hidden_size={checkpoint.get('hidden_size', '<missing>')!r}",
+            f"checkpoint depth={checkpoint.get('depth', '<missing>')!r}",
+            f"checkpoint num_heads={checkpoint.get('sit_num_heads', '<missing>')!r}",
+            f"checkpoint tokenizer={checkpoint.get('tokenizer', '<missing>')!r}",
+            f"checkpoint cond_channels={checkpoint.get('cond_channels', '<missing>')!r}",
+            f"config grid=({bundle.config['shared']['data']['num_y']}, {bundle.config['shared']['data']['num_x']})",
+            f"config padded=({bundle.components['H_pad']}, {bundle.components['W_pad']})",
+            f"config patch_size={arch['patch_size']!r}",
+            f"config hidden_size={arch['hidden_size']!r}",
+            f"config depth={arch['depth']!r}",
+            f"config num_heads={arch['num_heads']!r}",
+            f"config tokenizer={arch['tokenizer']!r}",
+            f"config cond_channels={bundle.components['cond_channels']!r}",
+        ]
+        return "; ".join(fields)
+
     def build_for_training(self, cfg: dict, device: torch.device, run_dir: Path, train_set, val_set) -> BaselineBundle:
         stage_cfg = resolve_stage_config(cfg)
         training = stage_cfg["training"]
@@ -5818,14 +5868,44 @@ class SiTAdapter(BaseBaselineAdapter):
         conditioning_cfg = stage_cfg["conditioning"]
         num_y = int(cfg["shared"]["data"]["num_y"])
         num_x = int(cfg["shared"]["data"]["num_x"])
-        h_pad, w_pad = compute_pad_size(num_y, num_x, int(arch["patch_size"]))
+        grid_info = validate_regular_grid_compatibility(train_set, num_x, num_y)
+        if val_set is not train_set:
+            validate_regular_grid_compatibility(val_set, num_x, num_y)
+        patch_size = int(arch["patch_size"])
+        h_pad, w_pad = compute_pad_size(num_y, num_x, patch_size)
+        token_count = (h_pad // patch_size) * (w_pad // patch_size)
+        allow_large_token_count = bool(arch.get("allow_large_token_count", False))
+        token_message = (
+            f"SiT patch token count is {token_count} "
+            f"(({h_pad}//{patch_size}) * ({w_pad}//{patch_size})) for padded grid "
+            f"{h_pad}x{w_pad}."
+        )
+        if token_count > 8192 and not allow_large_token_count:
+            raise ValueError(
+                token_message
+                + " This is likely too large for stable/efficient SiT baseline training. "
+                "Set sit_params.architecture.allow_large_token_count: true only after "
+                "explicitly accepting the memory/runtime cost."
+            )
+        if token_count > 8192:
+            warnings.warn(
+                token_message + " Proceeding because allow_large_token_count=true.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        elif token_count > 4096:
+            warnings.warn(
+                token_message + " This may be memory-heavy for SiT; consider a larger patch_size.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         n_fields = train_set.num_fields
         cond_channels = 2 * n_fields + 1
 
         net = SiTPhysics(
             input_size_h=h_pad,
             input_size_w=w_pad,
-            patch_size=int(arch["patch_size"]),
+            patch_size=patch_size,
             in_channels=n_fields,
             cond_channels=cond_channels,
             hidden_size=int(arch["hidden_size"]),
@@ -5897,6 +5977,9 @@ class SiTAdapter(BaseBaselineAdapter):
                 "n_fields": n_fields,
                 "cond_mode": str(conditioning_cfg["cond_mode"]),
                 "tokenizer": str(arch["tokenizer"]),
+                "grid_order": grid_info["grid_order"],
+                "point_to_grid": grid_info["point_to_grid"],
+                "grid_info": grid_info,
                 "huber_beta": float(training["huber_beta"]),
                 "spike_state": {"ema_loss": None, "ema_grad": None, "skipped": 0},
                 "all_params_fn": all_params_fn,
@@ -5904,12 +5987,71 @@ class SiTAdapter(BaseBaselineAdapter):
         )
 
     def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
-        bundle.model.load_state_dict(checkpoint["model"], strict=False)
+        if "model" not in checkpoint:
+            raise KeyError("SiT checkpoint is missing required 'model' state_dict.")
+        model_state = checkpoint["model"]
+        if not isinstance(model_state, dict):
+            raise TypeError(f"SiT checkpoint['model'] must be a state_dict, got {type(model_state)!r}.")
+        model_state = dict(model_state)
+        model_state.pop("_metadata", None)
+
+        expected_keys = set(bundle.model.state_dict().keys())
+        found_keys = set(model_state.keys())
+        missing_keys = sorted(expected_keys - found_keys)
+        unexpected_keys = sorted(found_keys - expected_keys)
+        benign_missing: set[str] = set()
+        benign_unexpected: set[str] = set()
+        bad_missing = [key for key in missing_keys if key not in benign_missing]
+        bad_unexpected = [key for key in unexpected_keys if key not in benign_unexpected]
+        if bad_missing or bad_unexpected:
+            raise RuntimeError(
+                "SiT checkpoint/model state_dict mismatch. Refusing to load with "
+                "silent strict=False behavior because this usually means the run "
+                "config changed (patch_size, hidden_size, depth, cond_channels, "
+                "tokenizer, or related architecture settings). "
+                f"Missing keys: {bad_missing[:20]}"
+                f"{' ...' if len(bad_missing) > 20 else ''}. "
+                f"Unexpected keys: {bad_unexpected[:20]}"
+                f"{' ...' if len(bad_unexpected) > 20 else ''}. "
+                f"Context: {self._checkpoint_context(bundle, checkpoint)}"
+            )
+        try:
+            bundle.model.load_state_dict(model_state, strict=True)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "SiT checkpoint tensors do not match the current model even though "
+                "the key sets match. This commonly indicates an architecture/config "
+                "mismatch. "
+                f"Context: {self._checkpoint_context(bundle, checkpoint)}"
+            ) from exc
         if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
             bundle.optimizer.load_state_dict(checkpoint["optimizer"])
         if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:
             bundle.scheduler.load_state_dict(checkpoint["scheduler"])
         if bundle.ema is not None and checkpoint.get("ema") is not None:
+            ema_state = checkpoint["ema"]
+            shadow = ema_state.get("shadow") if isinstance(ema_state, dict) else None
+            live_params = bundle.components["all_params_fn"]()
+            if shadow is not None:
+                if len(shadow) != len(live_params):
+                    raise RuntimeError(
+                        "SiT EMA checkpoint length does not match the current model "
+                        f"({len(shadow)} shadow tensors vs {len(live_params)} parameters). "
+                        f"Context: {self._checkpoint_context(bundle, checkpoint)}"
+                    )
+                mismatched = [
+                    (idx, tuple(saved.shape), tuple(param.shape))
+                    for idx, (saved, param) in enumerate(zip(shadow, live_params))
+                    if tuple(saved.shape) != tuple(param.shape)
+                ]
+                if mismatched:
+                    preview = mismatched[:10]
+                    raise RuntimeError(
+                        "SiT EMA checkpoint tensor shapes do not match the current model. "
+                        f"First mismatches: {preview}"
+                        f"{' ...' if len(mismatched) > 10 else ''}. "
+                        f"Context: {self._checkpoint_context(bundle, checkpoint)}"
+                    )
             bundle.ema.load_state_dict(checkpoint["ema"])
         if checkpoint.get("spike_state") is not None:
             bundle.components["spike_state"] = dict(checkpoint["spike_state"])
@@ -5987,6 +6129,7 @@ class SiTAdapter(BaseBaselineAdapter):
             file_tag=f"sit_N{n_steps}",
             tokenizer=bundle.components["tokenizer"],
             cond_mode=bundle.components["cond_mode"],
+            point_to_grid=bundle.components.get("point_to_grid"),
             save_obs_consistency_plots=save_obs_consistency_plots,
         )
 

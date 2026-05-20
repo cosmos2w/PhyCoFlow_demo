@@ -61,6 +61,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--snapshot-index", type=int, default=0)
     parser.add_argument("--n-steps", type=int, default=None, help="Optional sampling-step override for evaluation.")
     parser.add_argument(
+        "--ode-solver",
+        type=str,
+        default=None,
+        choices=["euler", "heun"],
+        help="Optional ODE solver override for SiT evaluation.",
+    )
+    parser.add_argument(
+        "--vis-cond-fields",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional SiT visualization conditioning-field override, e.g. --vis-cond-fields 2 3.",
+    )
+    parser.add_argument(
+        "--vis-n-obs-list",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional SiT visualization sensor-count override, e.g. --vis-n-obs-list 256 256.",
+    )
+    parser.add_argument(
         "--save-obs-consistency-plots",
         action="store_true",
         help="Save SenConsis relative L2 sensor-consistency metrics and figures.",
@@ -115,6 +136,19 @@ def main() -> None:
     cfg = validate_and_normalize_config(cfg)
 
     run_dir, checkpoint_path, cfg = _resolve_run_and_checkpoint(args, cfg)
+    if cfg["baseline_model"] == "sit":
+        shared_cond = cfg["shared"]["conditioning"]
+        if args.vis_cond_fields is not None:
+            shared_cond["vis_cond_fields"] = [int(v) for v in args.vis_cond_fields]
+        if args.vis_n_obs_list is not None:
+            shared_cond["vis_n_obs_list"] = [int(v) for v in args.vis_n_obs_list]
+        if args.ode_solver is not None:
+            cfg["sit_params"]["sampling"]["ode_solver"] = str(args.ode_solver)
+    elif args.vis_cond_fields is not None or args.vis_n_obs_list is not None or args.ode_solver is not None:
+        print(
+            "[Warning] --vis-cond-fields, --vis-n-obs-list, and --ode-solver "
+            "are currently applied only for baseline_model='sit'; ignoring them."
+        )
     stage_cfg = resolve_stage_config(cfg)
     checkpoint = safe_torch_load(checkpoint_path, map_location="cpu")
     if cfg["baseline_model"] == "latent_fm" and int(cfg["training_stage"]) == 2:
@@ -154,6 +188,17 @@ def main() -> None:
             save_obs_consistency_plots=args.save_obs_consistency_plots,
         )
 
+    shared_cond = cfg["shared"]["conditioning"]
+    sampling_cfg = stage_cfg.get("sampling", {})
+    if args.n_steps is not None:
+        effective_n_steps = int(args.n_steps)
+    elif "sampling_N" in sampling_cfg:
+        effective_n_steps = int(sampling_cfg["sampling_N"])
+    elif sampling_cfg.get("benchmark_n_steps"):
+        effective_n_steps = int(sampling_cfg["benchmark_n_steps"][0])
+    else:
+        effective_n_steps = None
+    effective_ode_solver = sampling_cfg.get("ode_solver")
     summary = {
         "baseline_model": cfg["baseline_model"],
         "training_stage": int(cfg["training_stage"]),
@@ -162,6 +207,10 @@ def main() -> None:
         "split": args.split,
         "snapshot_index": int(args.snapshot_index),
         "n_steps_override": args.n_steps,
+        "effective_vis_cond_fields": [int(v) for v in shared_cond.get("vis_cond_fields", [])],
+        "effective_vis_n_obs_list": [int(v) for v in shared_cond.get("vis_n_obs_list", [])],
+        "effective_n_steps": effective_n_steps,
+        "effective_ode_solver": effective_ode_solver,
         "stage_sampling_defaults": stage_cfg.get("sampling", {}),
         "metrics": metrics,
     }

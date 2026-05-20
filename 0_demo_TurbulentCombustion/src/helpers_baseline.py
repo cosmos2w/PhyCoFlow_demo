@@ -910,21 +910,39 @@ def validate_regular_grid_compatibility(
     Num_x: Optional[int],
     Num_y: Optional[int],
     decimals: int = 6,
-) -> None:
+    atol: float = 1e-5,
+) -> Dict[str, object]:
     """
     Validate that a point-cloud dataset can be interpreted as a Num_x by Num_y regular grid.
 
-    Required behavior for the FNO branch:
+    Required behavior for grid baselines:
       - Num_x and Num_y must be provided in YAML / args
       - Num_x * Num_y must match the number of points
       - the coordinate set must contain exactly Num_x unique x-values
         and Num_y unique y-values (up to rounding)
+      - every (x, y) tensor-product grid cell must exist exactly once
+
+    Like the FFM-FNO path, this function does not require row-major HDF5 point
+    order or uniform physical spacing. It reports those facts and returns a
+    coordinate-derived row-major permutation so direct-reshape grid baselines
+    can reorder fields/observations safely before reshaping.
 
     Raises ValueError if the dataset is not compatible with the requested grid.
+    Returns a small diagnostics dict for launch-time logging.
     """
+    def _grid_baseline_error(reason: str) -> ValueError:
+        return ValueError(
+            "Regular-grid validation failed for a grid baseline "
+            f"(SiT/FNO/S3GM-style): {reason} The dataset may be a valid point "
+            "cloud, but it cannot be safely interpreted as a complete structured "
+            "grid for this baseline. Use a point-cloud model or add an explicit "
+            "dataset-specific gridding/interpolation step."
+        )
+
     if Num_x is None or Num_y is None:
         raise ValueError(
-            "FNO backbone requires Num_x and Num_y to be explicitly provided in YAML / args."
+            "Direct-reshape grid baselines require Num_x and Num_y to be explicitly "
+            "provided in YAML / args."
         )
 
     Num_x = int(Num_x)
@@ -935,7 +953,7 @@ def validate_regular_grid_compatibility(
 
     expected_points = Num_x * Num_y
     if int(dataset.num_points) != expected_points:
-        raise ValueError(
+        raise _grid_baseline_error(
             f"Grid mismatch: dataset has {dataset.num_points} points, but "
             f"Num_x * Num_y = {Num_x} * {Num_y} = {expected_points}."
         )
@@ -948,11 +966,110 @@ def validate_regular_grid_compatibility(
     unique_y = int(torch.unique(y).numel())
 
     if unique_x != Num_x or unique_y != Num_y:
-        raise ValueError(
-            "[x] Grid compatibility check failed. "
+        raise _grid_baseline_error(
             f"Dataset unique counts are ({unique_x}, {unique_y}) in (x, y), "
             f"but requested (Num_x, Num_y)=({Num_x}, {Num_y})."
         )
+
+    unique_x_vals = torch.unique(x, sorted=True)
+    unique_y_vals = torch.unique(y, sorted=True)
+
+    def _spacing_stats(values: torch.Tensor) -> tuple[bool, torch.Tensor]:
+        if values.numel() <= 1:
+            diffs = torch.ones(1, dtype=values.dtype, device=values.device)
+            return True, diffs
+        diffs = values[1:] - values[:-1]
+        if diffs.numel() <= 1:
+            return True, diffs
+        regular = bool(torch.allclose(diffs, diffs.median().expand_as(diffs), atol=atol, rtol=1e-4))
+        return regular, diffs
+
+    x_spacing_regular, x_diffs = _spacing_stats(unique_x_vals)
+    y_spacing_regular, y_diffs = _spacing_stats(unique_y_vals)
+    coord_dim = int(coords.shape[-1])
+    coords_grid = coords.reshape(Num_y, Num_x, coord_dim)
+    x_grid = torch.round(coords_grid[..., 0] * (10 ** decimals)) / (10 ** decimals)
+    y_grid = torch.round(coords_grid[..., 1] * (10 ** decimals)) / (10 ** decimals)
+
+    x_first_row = x_grid[0]
+    y_first_col = y_grid[:, 0]
+    x_expected_asc = unique_x_vals
+    x_expected_desc = torch.flip(unique_x_vals, dims=[0])
+    y_expected_asc = unique_y_vals
+    y_expected_desc = torch.flip(unique_y_vals, dims=[0])
+
+    x_constant_down_columns = bool(torch.allclose(
+        x_grid,
+        x_first_row.view(1, Num_x).expand(Num_y, Num_x),
+        atol=atol,
+        rtol=1e-4,
+    ))
+    y_constant_across_rows = bool(torch.allclose(
+        y_grid,
+        y_first_col.view(Num_y, 1).expand(Num_y, Num_x),
+        atol=atol,
+        rtol=1e-4,
+    ))
+    x_varies_along_axis1 = bool(
+        torch.allclose(x_first_row, x_expected_asc, atol=atol, rtol=1e-4)
+        or torch.allclose(x_first_row, x_expected_desc, atol=atol, rtol=1e-4)
+    )
+    y_varies_along_axis0 = bool(
+        torch.allclose(y_first_col, y_expected_asc, atol=atol, rtol=1e-4)
+        or torch.allclose(y_first_col, y_expected_desc, atol=atol, rtol=1e-4)
+    )
+
+    row_major = (
+        x_constant_down_columns
+        and y_constant_across_rows
+        and x_varies_along_axis1
+        and y_varies_along_axis0
+    )
+
+    _, x_rank = torch.unique(x, sorted=True, return_inverse=True)
+    _, y_rank = torch.unique(y, sorted=True, return_inverse=True)
+    point_to_grid = (y_rank.long() * Num_x + x_rank.long()).contiguous()
+    unique_cells = int(torch.unique(point_to_grid).numel())
+    if unique_cells != expected_points:
+        raise _grid_baseline_error(
+            "The coordinate set is not a complete tensor-product grid. "
+            f"Detected unique counts are (x={unique_x}, y={unique_y}), but "
+            f"unique (x, y) cells are {unique_cells} out of {expected_points}."
+        )
+
+    diagnostics = []
+    if not x_spacing_regular:
+        diagnostics.append("unique x coordinates are not approximately regularly spaced")
+    if not y_spacing_regular:
+        diagnostics.append("unique y coordinates are not approximately regularly spaced")
+    if not row_major:
+        diagnostics.append(
+            "flattened point order is not row-major; grid baselines will apply a coordinate-derived permutation"
+        )
+
+    grid_order = torch.argsort(point_to_grid).contiguous()
+    return {
+        "Num_x": Num_x,
+        "Num_y": Num_y,
+        "num_points": expected_points,
+        "unique_x": unique_x,
+        "unique_y": unique_y,
+        "complete_tensor_product": True,
+        "row_major": row_major,
+        "requires_permutation": not row_major,
+        "spacing_regular": x_spacing_regular and y_spacing_regular,
+        "x_spacing_min": float(x_diffs.min().item()),
+        "x_spacing_median": float(x_diffs.median().item()),
+        "x_spacing_max": float(x_diffs.max().item()),
+        "y_spacing_min": float(y_diffs.min().item()),
+        "y_spacing_median": float(y_diffs.median().item()),
+        "y_spacing_max": float(y_diffs.max().item()),
+        "diagnostics": diagnostics,
+        "grid_order": grid_order,
+        "point_to_grid": point_to_grid,
+        "first_row_original_indices": [int(v) for v in grid_order[: min(8, grid_order.numel())].tolist()],
+        "first_original_to_grid_indices": [int(v) for v in point_to_grid[: min(8, point_to_grid.numel())].tolist()],
+    }
 
 # ═════════ §4. Grid ↔ point-cloud interchange ═════════
 
@@ -1945,26 +2062,48 @@ def compute_pad_size(Num_y: int, Num_x: int, factor: int) -> Tuple[int, int]:
     return H_pad, W_pad
 
 
-def pointcloud_to_grid_padded(x: torch.Tensor, Num_y: int, Num_x: int,
-                              H_pad: int, W_pad: int) -> torch.Tensor:
+def pointcloud_to_grid_padded(
+    x: torch.Tensor,
+    Num_y: int,
+    Num_x: int,
+    H_pad: int,
+    W_pad: int,
+    grid_order: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """[B, N, C] -> [B, C, H_pad, W_pad] with zero padding if needed.
 
     Distinct from `pointcloud_to_grid` above (which returns unpadded
     [B, C, Num_y, Num_x]); this variant produces the padded tensor that
-    fully-convolutional / patch-tokenized architectures require.
+    fully-convolutional / patch-tokenized architectures require. If
+    grid_order is supplied, it maps row-major grid cells to original point
+    indices and is applied before reshape, matching the FFM-FNO path.
     """
     B = x.shape[0]
+    if grid_order is not None:
+        x = x[:, grid_order.to(device=x.device), :]
     g = x.reshape(B, Num_y, Num_x, -1).permute(0, 3, 1, 2).contiguous()
     if H_pad > Num_y or W_pad > Num_x:
         g = F.pad(g, (0, W_pad - Num_x, 0, H_pad - Num_y), mode="constant", value=0)
     return g
 
 
-def grid_to_pointcloud(x_grid: torch.Tensor, Num_y: int, Num_x: int) -> torch.Tensor:
-    """[B, C, H_pad, W_pad] -> [B, N, C], cropping padding back off."""
+def grid_to_pointcloud(
+    x_grid: torch.Tensor,
+    Num_y: int,
+    Num_x: int,
+    point_to_grid: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """[B, C, H_pad, W_pad] -> [B, N, C], cropping padding back off.
+
+    If point_to_grid is supplied, it maps original point indices to row-major
+    grid cells and is used to return the point cloud in original dataset order.
+    """
     x_crop = x_grid[:, :, :Num_y, :Num_x]
     B, C, H, W = x_crop.shape
-    return x_crop.permute(0, 2, 3, 1).reshape(B, H * W, C).contiguous()
+    x = x_crop.permute(0, 2, 3, 1).reshape(B, H * W, C).contiguous()
+    if point_to_grid is not None:
+        x = x[:, point_to_grid.to(device=x.device), :]
+    return x
 
 
 def build_obs_grid_mask(
@@ -1978,6 +2117,7 @@ def build_obs_grid_mask(
     Num_x: int,
     H_pad: int,
     W_pad: int,
+    point_to_grid: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Convert PhyCoFlow-style sparse obs tensors into dense grid maps
     (observation values + binary mask), padded to (H_pad, W_pad).
@@ -1994,6 +2134,8 @@ def build_obs_grid_mask(
         if not valid.any():
             continue
         idx = obs_indices[b, valid].long()
+        if point_to_grid is not None:
+            idx = point_to_grid.to(device=device)[idx]
         fld = obs_field_ids[b, valid].long()
         val = obs_values[b, valid, 0]
         value_flat[b, fld, idx] = val
