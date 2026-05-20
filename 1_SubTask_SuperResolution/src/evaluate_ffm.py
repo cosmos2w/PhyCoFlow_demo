@@ -28,6 +28,7 @@ from helpers import (
     TurbulentCombustionH5Dataset,
     PDEBenchMultiResDataset,
     save_obs_consistency_comparison,
+    validate_regular_grid_compatibility,
     visualize_reconstruction,
     build_sparse_condition,
     _save_single_field_plot,
@@ -70,6 +71,12 @@ def parse_args():
                    help="Which checkpoint to load from the recovered run directory.")
     p.add_argument("--n-steps-generation", type=int, default = 8,
                    help="Override generation steps. Defaults to YAML n_steps_generation if present.")
+    p.add_argument(
+        "--ode-solver",
+        choices=["euler", "heun"],
+        default=None,
+        help="ODE solver for generation. Defaults to YAML ode_solver, then euler.",
+    )
     p.add_argument("--device", type=str, default=None, help="e.g. cuda:0 or cpu")
 
     p.add_argument(
@@ -251,6 +258,9 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             n_modes_y=cfg.get("fno_modes_y", 8),
             hidden_channels=cfg.get("fno_hidden_channels", 64),
             n_layers=cfg.get("fno_n_layers", 4),
+            condition_blur=cfg.get("condition_blur", False),
+            condition_blur_kernel=cfg.get("condition_blur_kernel", 5),
+            condition_blur_sigma=cfg.get("condition_blur_sigma", 1.0),
         )
         model = FNOFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
@@ -840,20 +850,14 @@ def main():
     if cfg.get("dataset_mode", "default") == "pdebench_multires":
         manifest_path = build_or_find_multires_manifest_for_eval(demo_root, cfg)
 
-        # FNO is a fixed-grid backbone. For the PDEBench multires task, we evaluate it
-        # on the same forced H grid used during training.
-        force_resolution = "H" if cfg.get("backbone", "mlp_rbf") == "fno" else None
-
-        if force_resolution == "H" and args.eval_resolution != "H":
-            print(
-                f"[Warning: !] backbone='fno' uses a fixed H grid. "
-                f"Requested eval_resolution={args.eval_resolution} will be overridden to H."
-            )
+        # FNO infers the current grid from coords, so evaluation can use the
+        # requested L/M/H resolution instead of being forced to H.
+        force_resolution = None
 
         dataset = PDEBenchMultiResDataset(
             manifest_path=manifest_path,
             split=args.split,
-            eval_resolution="H" if force_resolution == "H" else args.eval_resolution,
+            eval_resolution=args.eval_resolution,
             force_resolution=force_resolution,
             stats_path=str(model_root / "dataset_stats.pt"),
         )
@@ -866,6 +870,15 @@ def main():
             time_stride=cfg.get("time_stride", 1),
             stats_path=str(model_root / "dataset_stats.pt"),
         )
+
+    if cfg.get("backbone") == "fno":
+        grid_info = validate_regular_grid_compatibility(dataset, cfg.get("Num_x", None), cfg.get("Num_y", None))
+        for tag, info in grid_info["resolutions"].items():
+            print(
+                "[*] FNO grid detected: "
+                f"res={tag} {info['Num_x']}x{info['Num_y']} N={info['num_points']} "
+                f"row_major={info['row_major']}."
+            )
 
     try:
         model = _build_model(cfg, dataset).to(device)
@@ -885,6 +898,13 @@ def main():
         model.load_state_dict(state_dict, strict=True)
     except Exception as e:
         print(f"[Warning: !] Checkpoint is incompatible with the reconstructed model: {e}")
+        if cfg.get("backbone") == "fno":
+            print(
+                "[Warning: !] FNO conditioning now uses normalized, support-weighted, "
+                "and soft-support channels (4 * n_fields + 1 inputs). Older FNO "
+                "checkpoints trained with the previous 3 * n_fields + 1 input layout "
+                "must be retrained."
+            )
         raise SystemExit(1)
 
     model.eval()
@@ -898,7 +918,10 @@ def main():
         args.n_steps_generation if args.n_steps_generation is not None
         else cfg.get("n_steps_generation", 100)
     )
-    print(f'\nResults are generated from n_steps={n_steps_generation}\n')
+    ode_solver = args.ode_solver if args.ode_solver is not None else cfg.get("ode_solver", "euler")
+    if ode_solver not in ("euler", "heun"):
+        raise ValueError(f"Unsupported ode_solver={ode_solver!r}; expected 'euler' or 'heun'.")
+    print(f'\nResults are generated from solver={ode_solver}, n_steps={n_steps_generation}\n')
 
     eval_timestamp = torch.tensor([])  # dummy to avoid importing datetime twice
     from datetime import datetime
@@ -927,8 +950,9 @@ def main():
             cond_fields=vis_cond_fields,
             n_obs=vis_n_obs_list,
             n_steps=n_steps_generation,
+            ode_solver=ode_solver,
             snapshot_index=args.snapshot_index,
-            file_tag=f"snapshot_{args.snapshot_index:04d}",
+            file_tag=f"snapshot_{args.snapshot_index:04d}_{ode_solver}",
             save_metrics_json=True,
             return_payload=need_payload,
             obs_consistency_mode=args.obs_consistency_mode,
@@ -959,8 +983,9 @@ def main():
                 cond_fields=vis_cond_fields,
                 n_obs=vis_n_obs_list,
                 n_steps=n_steps_generation,
+                ode_solver=ode_solver,
                 snapshot_index=args.snapshot_index,
-                file_tag=f"snapshot_{args.snapshot_index:04d}_{mode}",
+                file_tag=f"snapshot_{args.snapshot_index:04d}_{ode_solver}_{mode}",
                 save_metrics_json=True,
                 return_payload=True,
                 obs_consistency_mode=mode,
@@ -1087,6 +1112,7 @@ def main():
         "vis_cond_fields": [int(v) for v in vis_cond_fields],
         "vis_n_obs_list": [int(v) for v in vis_n_obs_list],
         "n_steps_generation": int(n_steps_generation),
+        "ode_solver": ode_solver,
         "obs_consistency_mode": args.obs_consistency_mode,
         "obs_consistency_strength": float(args.obs_consistency_strength),
         "obs_consistency_sigma": float(args.obs_consistency_sigma),

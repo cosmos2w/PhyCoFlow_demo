@@ -11,6 +11,7 @@ With this patch:
 
 import os
 import csv
+import inspect
 import torch
 import numpy as np
 import json
@@ -37,17 +38,18 @@ def validate_regular_grid_compatibility(
     Num_x: Optional[int],
     Num_y: Optional[int],
     decimals: int = 6,
-) -> None:
+) -> Dict[str, object]:
     """
-    Validate that a point-cloud dataset can be interpreted as a Num_x by Num_y regular grid.
+    Validate that a dataset can be interpreted as regular tensor-product grids.
 
     Required behavior for the FNO branch:
-      - Num_x and Num_y must be provided in YAML / args
-      - Num_x * Num_y must match the number of points
-      - the coordinate set must contain exactly Num_x unique x-values
-        and Num_y unique y-values (up to rounding)
+      - Num_x and Num_y must be provided in YAML / args as the H/reference grid
+      - each active resolution must have one point for every detected (x, y) cell
+      - non-row-major point order is allowed because the FNO backbone internally
+        applies a coordinate-derived row-major permutation
 
     Raises ValueError if the dataset is not compatible with the requested grid.
+    Returns diagnostics for launch-time logging.
     """
     if Num_x is None or Num_y is None:
         raise ValueError(
@@ -56,9 +58,101 @@ def validate_regular_grid_compatibility(
 
     Num_x = int(Num_x)
     Num_y = int(Num_y)
-
     if Num_x <= 0 or Num_y <= 0:
         raise ValueError(f"Num_x and Num_y must be positive, got Num_x={Num_x}, Num_y={Num_y}.")
+
+    def _spacing_is_regular(values: torch.Tensor, atol: float = 1e-5) -> bool:
+        if values.numel() <= 2:
+            return True
+        diffs = values[1:] - values[:-1]
+        return bool(torch.allclose(diffs, diffs.median().expand_as(diffs), atol=atol, rtol=1e-4))
+
+    def _diagnose_coords(tag: str, coords_in: torch.Tensor) -> Dict[str, object]:
+        coords = coords_in.cpu()
+        x = torch.round(coords[:, 0] * (10 ** decimals)) / (10 ** decimals)
+        y = torch.round(coords[:, 1] * (10 ** decimals)) / (10 ** decimals)
+        unique_x_vals, x_rank = torch.unique(x, sorted=True, return_inverse=True)
+        unique_y_vals, y_rank = torch.unique(y, sorted=True, return_inverse=True)
+        unique_x = int(unique_x_vals.numel())
+        unique_y = int(unique_y_vals.numel())
+        n_pts = int(coords.shape[0])
+        expected_points = unique_x * unique_y
+
+        if expected_points != n_pts:
+            raise ValueError(
+                "FNO regular-grid validation failed: "
+                f"resolution {tag!r} has N={n_pts}, but detected unique "
+                f"(x, y)=({unique_x}, {unique_y}) implies {expected_points} grid cells."
+            )
+
+        point_to_grid = y_rank.long() * unique_x + x_rank.long()
+        unique_cells = int(torch.unique(point_to_grid).numel())
+        if unique_cells != n_pts:
+            raise ValueError(
+                "FNO regular-grid validation failed: "
+                f"resolution {tag!r} has duplicate or missing tensor-product grid cells "
+                f"({unique_cells} unique cells for {n_pts} points)."
+            )
+
+        x_grid = x.reshape(unique_y, unique_x)
+        y_grid = y.reshape(unique_y, unique_x)
+        x_first_row = x_grid[0]
+        y_first_col = y_grid[:, 0]
+        row_major = (
+            bool(torch.allclose(x_grid, x_first_row.view(1, unique_x).expand(unique_y, unique_x), atol=1e-5, rtol=1e-4))
+            and bool(torch.allclose(y_grid, y_first_col.view(unique_y, 1).expand(unique_y, unique_x), atol=1e-5, rtol=1e-4))
+            and bool((y_grid.max(dim=1).values - y_grid.min(dim=1).values <= 1e-5).all())
+            and bool((x_grid.max(dim=0).values - x_grid.min(dim=0).values <= 1e-5).all())
+        )
+
+        x_diffs = unique_x_vals[1:] - unique_x_vals[:-1] if unique_x_vals.numel() > 1 else torch.ones(1)
+        y_diffs = unique_y_vals[1:] - unique_y_vals[:-1] if unique_y_vals.numel() > 1 else torch.ones(1)
+        diagnostics = []
+        if not _spacing_is_regular(unique_x_vals):
+            diagnostics.append("unique x coordinates are not approximately regularly spaced")
+        if not _spacing_is_regular(unique_y_vals):
+            diagnostics.append("unique y coordinates are not approximately regularly spaced")
+        if not row_major:
+            diagnostics.append("flattened point order is not row-major; FNO will apply an internal permutation")
+
+        order = torch.argsort(point_to_grid)
+        return {
+            "tag": tag,
+            "Num_x": unique_x,
+            "Num_y": unique_y,
+            "num_points": n_pts,
+            "row_major": row_major,
+            "requires_permutation": not row_major,
+            "x_spacing_min": float(x_diffs.min().item()),
+            "x_spacing_median": float(x_diffs.median().item()),
+            "x_spacing_max": float(x_diffs.max().item()),
+            "y_spacing_min": float(y_diffs.min().item()),
+            "y_spacing_median": float(y_diffs.median().item()),
+            "y_spacing_max": float(y_diffs.max().item()),
+            "spacing_regular": len([d for d in diagnostics if "spaced" in d]) == 0,
+            "diagnostics": diagnostics,
+            "first_row_original_indices": [int(v) for v in order[: min(8, order.numel())].tolist()],
+            "first_original_to_grid_indices": [int(v) for v in point_to_grid[: min(8, point_to_grid.numel())].tolist()],
+        }
+
+    if hasattr(dataset, "coords_by_res"):
+        infos = {
+            str(tag): _diagnose_coords(str(tag), coords)
+            for tag, coords in sorted(dataset.coords_by_res.items(), key=lambda item: _resolution_sort_key(str(item[0])))
+        }
+        h_info = infos.get("H")
+        if h_info is not None and (h_info["Num_x"] != Num_x or h_info["Num_y"] != Num_y):
+            raise ValueError(
+                "FNO reference-grid mismatch: YAML/args provide "
+                f"(Num_x, Num_y)=({Num_x}, {Num_y}), but H resolution is "
+                f"({h_info['Num_x']}, {h_info['Num_y']})."
+            )
+        return {
+            "reference_Num_x": Num_x,
+            "reference_Num_y": Num_y,
+            "mixed_resolution": True,
+            "resolutions": infos,
+        }
 
     expected_points = Num_x * Num_y
     if int(dataset.num_points) != expected_points:
@@ -67,19 +161,19 @@ def validate_regular_grid_compatibility(
             f"Num_x * Num_y = {Num_x} * {Num_y} = {expected_points}."
         )
 
-    coords = dataset.coords.cpu()
-    x = torch.round(coords[:, 0] * (10 ** decimals)) / (10 ** decimals)
-    y = torch.round(coords[:, 1] * (10 ** decimals)) / (10 ** decimals)
-
-    unique_x = int(torch.unique(x).numel())
-    unique_y = int(torch.unique(y).numel())
-
-    if unique_x != Num_x or unique_y != Num_y:
+    info = _diagnose_coords("single", dataset.coords)
+    if info["Num_x"] != Num_x or info["Num_y"] != Num_y:
         raise ValueError(
             "[x] Grid compatibility check failed. "
-            f"Dataset unique counts are ({unique_x}, {unique_y}) in (x, y), "
+            f"Dataset unique counts are ({info['Num_x']}, {info['Num_y']}) in (x, y), "
             f"but requested (Num_x, Num_y)=({Num_x}, {Num_y})."
         )
+    return {
+        "reference_Num_x": Num_x,
+        "reference_Num_y": Num_y,
+        "mixed_resolution": False,
+        "resolutions": {"single": info},
+    }
 
 def normalize_coords(coords: torch.Tensor) -> torch.Tensor:
     cmin = coords.min(dim=0).values
@@ -984,6 +1078,7 @@ def visualize_reconstruction(
     cond_fields: Union[int, Sequence[int]] = (2,),
     n_obs: Union[int, Sequence[int]] = 256,
     n_steps: int = 32,
+    ode_solver: Optional[str] = None,
     snapshot_index: int = 0,
     file_tag: Optional[str] = None,
     save_metrics_json: bool = True,
@@ -1037,7 +1132,7 @@ def visualize_reconstruction(
         obs_indices = sparse_condition["obs_indices"].to(device)
         obs_field_ids = sparse_condition["obs_field_ids"].to(device)
 
-    recon = model.sample(
+    sample_kwargs = dict(
         coords=coords,
         obs_coords=obs_coords,
         obs_values=obs_values,
@@ -1052,6 +1147,11 @@ def visualize_reconstruction(
         obs_consistency_final_clamp=obs_consistency_final_clamp,
         obs_consistency_chunk_size=obs_consistency_chunk_size,
     )
+    sig = inspect.signature(model.sample)
+    if "ode_solver" in sig.parameters and ode_solver is not None:
+        sample_kwargs["ode_solver"] = ode_solver
+
+    recon = model.sample(**sample_kwargs)
 
     mean = dataset.mean.to(device)
     std = dataset.std.to(device)
@@ -1115,6 +1215,7 @@ def visualize_reconstruction(
             "cond_fields": [int(v) for v in cond_fields],
             "n_obs": [int(v) for v in n_obs],
             "n_steps": int(n_steps),
+            "ode_solver": ode_solver,
             "obs_consistency_mode": obs_consistency_mode,
             "metrics": metrics,
         }
@@ -1141,6 +1242,7 @@ def visualize_reconstruction(
         "cond_fields": [int(v) for v in cond_fields],
         "n_obs": [int(v) for v in n_obs],
         "n_steps": int(n_steps),
+        "ode_solver": ode_solver,
         "obs_consistency_mode": obs_consistency_mode,
         "resolution_tag": str(sample.get("resolution_tag", "")),
     }

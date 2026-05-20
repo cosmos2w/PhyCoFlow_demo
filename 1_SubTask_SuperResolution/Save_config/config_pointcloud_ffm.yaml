@@ -118,11 +118,17 @@ Num_y: 128
 # ----------------------------------------------------------
 # Hyperparameters for FNO backbone
 # The tensor fed to FNO is shaped [B, C, Num_y, Num_x], so modes are specified separately along x and y.
+# FNO now supports grouped mixed-resolution L/M/H batches by inferring each batch grid from coords.
+# Its sparse conditioning uses normalized value, support-weighted value, and soft-support maps.
+# Retrain FNO checkpoints after this change; older FNO checkpoints are architecture-incompatible.
 # ----------------------------------------------------------
 fno_modes_x: 16
 fno_modes_y: 16
 fno_hidden_channels: 64
 fno_n_layers: 4
+condition_blur: true
+condition_blur_kernel: 15
+condition_blur_sigma: 2.5
 
 # ----------------------------------------------------------
 # These are hyperparameters for the training process

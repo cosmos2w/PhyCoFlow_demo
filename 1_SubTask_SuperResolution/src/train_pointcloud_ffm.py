@@ -200,6 +200,18 @@ def parse_args():
         help="Hidden channel width of the neuraloperator FNO baseline.",)
     p.add_argument( "--fno-n-layers", type=int, default=4,
         help="Number of Fourier layers in the FNO baseline.",)
+    p.add_argument(
+        "--condition-blur", action="store_true",
+        help="Use Gaussian splatting for FNO sparse-conditioning maps.",
+    )
+    p.add_argument(
+        "--condition-blur-kernel", type=int, default=5,
+        help="Odd Gaussian kernel size for FNO sparse-conditioning blur.",
+    )
+    p.add_argument(
+        "--condition-blur-sigma", type=float, default=1.0,
+        help="Gaussian sigma for FNO sparse-conditioning blur.",
+    )
 
     # ------------------------------
     # These are hyperparameters for training process
@@ -767,9 +779,9 @@ def main():
     if args.dataset_mode == "pdebench_multires":
         manifest_path = build_or_find_multires_manifest(demo_dir, args)
 
-        # For grid-based FNO/FNOFFM baseline, all samples must be returned on one common grid size. 
-        # The cleanest default is to force everything to H.
-        force_resolution = "H" if args.backbone == "fno" else None
+        # FNO can train on grouped L/M/H batches because the backbone infers
+        # the current grid size from coords. Do not force all samples to H.
+        force_resolution = None
 
         train_set = PDEBenchMultiResDataset(
             manifest_path=manifest_path,
@@ -794,8 +806,8 @@ def main():
         print(f"[*] Train cases  : fraction={args.multires_train_case_fraction} counts="
               f"{ {k: len(v) for k, v in train_set.manifest['split']['train_cases_by_res'].items()} }")
         print(f"[*] Val res      : H")
-        if force_resolution is not None:
-            print(f"[*] force_resolution={force_resolution} because backbone='{args.backbone}' requires a fixed grid.")
+        if args.backbone == "fno":
+            print("[*] FNO mixed-resolution mode: L/M/H batches keep their native grids.")
 
     else:
         train_set = TurbulentCombustionH5Dataset(
@@ -911,13 +923,26 @@ def main():
     elif args.backbone == "fno":
         # FNO requires an explicit regular-grid interpretation of the dataset.
         try:
-            validate_regular_grid_compatibility(train_set, args.Num_x, args.Num_y)
+            grid_info = validate_regular_grid_compatibility(train_set, args.Num_x, args.Num_y)
             validate_regular_grid_compatibility(val_set, args.Num_x, args.Num_y)
         except ValueError as e:
             print(f"\n[Warning: !] {e}")
             print("[Warning: !] FNO baseline cannot start because the provided Num_x / Num_y "
                   "are missing or incompatible with the dataset.\n")
             raise SystemExit(1)
+
+        for tag, info in grid_info["resolutions"].items():
+            print(
+                "[*] FNO grid detected: "
+                f"res={tag} {info['Num_x']}x{info['Num_y']} N={info['num_points']} "
+                f"row_major={info['row_major']}."
+            )
+            if info["requires_permutation"]:
+                print(
+                    "[*] FNO grid order: "
+                    f"res={tag} is not row-major; the backbone will internally "
+                    "permute to row-major grid order and invert on output."
+                )
 
         backbone = FNO(
             n_fields=train_set.num_fields,
@@ -927,10 +952,13 @@ def main():
             n_modes_y=args.fno_modes_y,
             hidden_channels=args.fno_hidden_channels,
             n_layers=args.fno_n_layers,
+            condition_blur=args.condition_blur,
+            condition_blur_kernel=args.condition_blur_kernel,
+            condition_blur_sigma=args.condition_blur_sigma,
         )
         model = FNOFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
 
-        print(f"[*] Using grid-based FNO baseline with Num_x={args.Num_x}, Num_y={args.Num_y}")
+        print(f"[*] Using grid-based FNO baseline with H/reference Num_x={args.Num_x}, Num_y={args.Num_y}")
         print("[*] Note: n_query_points is ignored for FNO because it requires the full grid.\n")
     else:
         raise ValueError(
@@ -943,7 +971,18 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     if reload_ckpt is not None:
-        model.load_state_dict(reload_ckpt["model"])
+        try:
+            model.load_state_dict(reload_ckpt["model"])
+        except Exception as e:
+            print(f"[Warning: !] Checkpoint is incompatible with the reconstructed model: {e}")
+            if args.backbone == "fno":
+                print(
+                    "[Warning: !] FNO conditioning now uses normalized, support-weighted, "
+                    "and soft-support channels (4 * n_fields + 1 inputs). Older FNO "
+                    "checkpoints trained with the previous 3 * n_fields + 1 input layout "
+                    "must be retrained."
+                )
+            raise
         if "optimizer" in reload_ckpt:
             optimizer.load_state_dict(reload_ckpt["optimizer"])
         if "scheduler" in reload_ckpt:
@@ -1046,6 +1085,7 @@ def main():
                     cond_fields=args.vis_cond_fields,
                     n_obs=args.vis_n_obs_list,
                     n_steps=nfe,
+                    ode_solver=args.ode_solver,
                     snapshot_index=0,
                     file_tag=f"{args.ode_solver}_nfe{nfe}",
                     save_metrics_json = True,
