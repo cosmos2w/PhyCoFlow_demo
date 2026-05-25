@@ -103,7 +103,7 @@ decode_chunk_size: 4096
 share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
-gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
+gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
 gather_topk: 32
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true

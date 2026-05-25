@@ -198,6 +198,14 @@ def _normalize_eval_config(cfg: dict) -> dict:
     if cfg.get("backbone") is None:
         cfg["backbone"] = "mlp_rbf"
 
+    gather_modes = ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
+    if cfg.get("gather_mode") is None:
+        cfg["gather_mode"] = "rbf"
+    if cfg.get("gather_mode") not in gather_modes:
+        raise ValueError(
+            f"gather_mode must be one of {gather_modes}, got {cfg.get('gather_mode')}"
+        )
+
     if cfg.get("dataset_mode", "default") == "pdebench_multires":
         cfg["cond_fields"] = [0]
         cfg["vis_cond_fields"] = [0]

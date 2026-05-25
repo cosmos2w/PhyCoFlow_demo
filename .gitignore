@@ -12,6 +12,9 @@ ForViewDataset/
 ForOfflineEvaluation/
 bk/
 Save_PhyCoEval/
+.agents/
+
+figures/generated/
 
 
 *.pt

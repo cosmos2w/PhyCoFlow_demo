@@ -638,6 +638,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
            - "rbf": Full dense RBF distance-based aggregation.
            - "topk_rbf": Sparse K-Nearest Neighbor RBF aggregation.
            - "topk_rbf_gate": Top-K RBF aggregation modulated by a learned query-sensor content gate.
+           - "topk_rbf_glres": Top-K RBF plus cheap global residual readout/scaffold terms.
       5) Global Summary: Extract a global summary from the latents (via 'cls' or 'mean') and 
          concatenate it separately to every query point.
          The latent summary / CLS-like token acts strictly as a concatenated global feature 
@@ -667,7 +668,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         rbf_sigma: float = 0.05,
         summary_type: str = "cls",   # ["cls", "mean"]
 
-        gather_mode: str = "rbf",    # ["rbf", "topk_rbf", "topk_rbf_gate"]
+        gather_mode: str = "rbf",    # ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
         gather_topk: int = 32,
         gather_query_chunk_size: Optional[int] = None,
         learnable_rbf_sigma: bool = False,
@@ -693,9 +694,10 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         ) if use_fourier_pe else None
         self.coord_feat_dim = self.pos_enc.out_dim if self.pos_enc is not None else coord_dim
 
-        if gather_mode not in ["rbf", "topk_rbf", "topk_rbf_gate"]:
+        gather_modes = ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
+        if gather_mode not in gather_modes:
             raise ValueError(
-                f"gather_mode must be one of ['rbf', 'topk_rbf', 'topk_rbf_gate'], got {gather_mode}"
+                f"gather_mode must be one of {gather_modes}, got {gather_mode}"
             )
         if neighbor_backend not in ["auto", "torch", "keops"]:
             raise ValueError(
@@ -710,10 +712,13 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         if self.gather_mode == "rbf": print(f"\nThe gather mode is {gather_mode} as default choice.\n")
         else: 
             print(f"\nNOTICE: The gather mode is {gather_mode} with top-k {gather_topk} !!!\n")
+            # Historical super-resolution checkpoints include these gate weights
+            # for all non-rbf modes, including plain topk_rbf. Keep them here so
+            # strict checkpoint loading remains compatible.
             # Project query features to the same local-conditioning space so a
             # lightweight content gate can compare query state and refined sensors.
             self.query_to_cond = nn.Linear(hidden_dim, cond_dim, bias=False)
-            # Small gate used only in the optional "topk_rbf_gate" mode.
+            # The gate is applied only by topk_rbf_gate during forward.
             # Input = [projected query feat, refined sensor feat, relative coord, distance]
             gate_in_dim = cond_dim + cond_dim + coord_dim + 1
             self.gather_gate = nn.Sequential(
@@ -763,6 +768,39 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             out_dim=cond_dim,
             depth=2,
         )
+
+        if self.gather_mode == "topk_rbf_glres":
+            # Cheap query-to-latent readout: attends over L latents, not K sensors per query.
+            self.query_readout_in = nn.Linear(hidden_dim, latent_dim, bias=False)
+            self.query_latent_readout = CrossAttentionBlock(
+                dim=latent_dim,
+                num_heads=max(1, min(num_heads, 4)),
+                ff_mult=max(1, ff_mult // 2),
+                attn_dropout=attn_dropout,
+                mlp_dropout=mlp_dropout,
+            )
+            self.query_readout_out = nn.Linear(latent_dim, hidden_dim, bias=False)
+            self.query_readout_scale = nn.Parameter(torch.tensor(0.0))
+
+            # Coarse scaffold is summary-driven and pointwise, so it avoids [B, N, K, C] tensors.
+            self.coarse_film = nn.Linear(hidden_dim, 2 * hidden_dim)
+            self.coarse_head = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(hidden_dim, n_fields),
+            )
+            self.coarse_scale = nn.Parameter(torch.tensor(0.0))
+
+            # Sensor importance is computed once per refined sensor token, then gathered as scalars.
+            self.sensor_importance = nn.Sequential(
+                nn.LayerNorm(cond_dim),
+                nn.Linear(cond_dim, cond_dim),
+                nn.GELU(),
+                nn.Linear(cond_dim, 1),
+            )
+            self.sensor_importance_scale = nn.Parameter(torch.tensor(0.0))
 
         # -------------------------
         # Latent global processor
@@ -887,6 +925,53 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
         return self.summary_proj(summary)    # [B, H]
 
+    def _readout_query_global_chunked(
+        self,
+        point_feat: torch.Tensor,
+        latents: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Query-to-latent readout in chunks. This is O(B * N * L), avoiding query-sensor
+        [B, N, K, C] feature materialization.
+        """
+        n_query = point_feat.shape[1]
+        chunk_size = self.gather_query_chunk_size
+        if chunk_size is None and n_query > 4096:
+            chunk_size = 4096
+
+        if chunk_size is None or n_query <= chunk_size:
+            q = self.query_readout_in(point_feat)
+            readout = self.query_latent_readout(q=q, kv=latents, kv_padding_mask=None)
+            return self.query_readout_out(readout)
+
+        outputs = []
+        for start in range(0, n_query, chunk_size):
+            end = min(start + chunk_size, n_query)
+            q = self.query_readout_in(point_feat[:, start:end])
+            readout = self.query_latent_readout(q=q, kv=latents, kv_padding_mask=None)
+            outputs.append(self.query_readout_out(readout))
+        return torch.cat(outputs, dim=1)
+
+    def _predict_global_coarse(
+        self,
+        point_feat: torch.Tensor,
+        global_feat: torch.Tensor,
+    ) -> torch.Tensor:
+        gamma, beta = self.coarse_film(global_feat).chunk(2, dim=-1)
+        coarse_feat = (
+            point_feat * (1.0 + torch.tanh(gamma).unsqueeze(1))
+            + beta.unsqueeze(1)
+        )
+        return self.coarse_head(coarse_feat)
+
+    def _compute_sensor_importance_bias(
+        self,
+        refined_sensor_feat: torch.Tensor,
+        obs_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        bias = self.sensor_importance(refined_sensor_feat).squeeze(-1)
+        return bias * obs_mask.to(dtype=bias.dtype)
+
     def _use_keops(self) -> bool:
         """
         Decide whether to use KeOps.
@@ -951,7 +1036,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         refined_sensor_feat: torch.Tensor,  # [B, M, Cc]
         obs_mask: torch.Tensor,             # [B, M]
         k: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Top-k neighbor search using KeOps Kmin_argKmin.
         """
@@ -980,7 +1065,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         topk_sensor_coords = batched_gather_3d(obs_coords, topk_idx)
         topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
 
-        return topk_d2, topk_sensor_feat, topk_sensor_coords, topk_valid
+        return topk_d2, topk_idx, topk_sensor_feat, topk_sensor_coords, topk_valid
 
     def _knn_search_torch(
         self,
@@ -989,7 +1074,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         refined_sensor_feat: torch.Tensor,
         obs_mask: torch.Tensor,
         k: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Fallback KNN search using torch.cdist + torch.topk.
         """
@@ -1003,7 +1088,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         topk_sensor_coords = batched_gather_3d(obs_coords, topk_idx)
         topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
 
-        return topk_d2, topk_sensor_feat, topk_sensor_coords, topk_valid
+        return topk_d2, topk_idx, topk_sensor_feat, topk_sensor_coords, topk_valid
 
     def _get_topk_neighbors(
         self,
@@ -1012,7 +1097,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         refined_sensor_feat: torch.Tensor,
         obs_mask: torch.Tensor,
         k: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Unified top-k neighbor retrieval.
         """
@@ -1040,6 +1125,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         obs_coords: torch.Tensor,           # [B, M, D]
         refined_sensor_feat: torch.Tensor,  # [B, M, Cc]
         obs_mask: torch.Tensor,             # [B, M]
+        sensor_importance_bias: Optional[torch.Tensor] = None,  # [B, M]
     ) -> torch.Tensor:
         """
         Aggregate one query chunk.
@@ -1072,7 +1158,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # --------------------------------------------------
         k = min(self.gather_topk, obs_coords.shape[1])
 
-        topk_d2, topk_sensor_feat, topk_sensor_coords, topk_valid = self._get_topk_neighbors(
+        topk_d2, topk_idx, topk_sensor_feat, topk_sensor_coords, topk_valid = self._get_topk_neighbors(
             query_coords=query_coords,
             obs_coords=obs_coords,
             refined_sensor_feat=refined_sensor_feat,
@@ -1094,6 +1180,10 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
             logits = logits + gate_logits
 
+        if sensor_importance_bias is not None:
+            topk_sensor_bias = batched_gather_2d(sensor_importance_bias, topk_idx)
+            logits = logits + self.sensor_importance_scale * topk_sensor_bias
+
         logits = logits.masked_fill(~topk_valid, -1e9)
         weights = torch.softmax(logits, dim=-1)
         local_cond = torch.sum(weights.unsqueeze(-1) * topk_sensor_feat, dim=2)
@@ -1106,6 +1196,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         obs_coords: torch.Tensor,
         refined_sensor_feat: torch.Tensor,
         obs_mask: torch.Tensor,
+        sensor_importance_bias: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Gather the globally enriched local sensor features back to query points.
@@ -1114,6 +1205,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
           - rbf: with KeOps, chunking can usually be disabled
           - topk_rbf: with KeOps, chunking can usually be disabled
           - topk_rbf_gate: still keep optional chunking because gate tensors are [B, N, K, U]
+          - topk_rbf_glres: keeps top-k gather cheap and chunks query-latent readout when needed
         """
         n_query = query_coords.shape[1]
 
@@ -1129,6 +1221,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 obs_coords=obs_coords,
                 refined_sensor_feat=refined_sensor_feat,
                 obs_mask=obs_mask,
+                sensor_importance_bias=sensor_importance_bias,
             )
 
         outputs = []
@@ -1141,6 +1234,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 obs_coords=obs_coords,
                 refined_sensor_feat=refined_sensor_feat,
                 obs_mask=obs_mask,
+                sensor_importance_bias=sensor_importance_bias,
             )
             outputs.append(local_chunk)
 
@@ -1184,6 +1278,9 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # -------------------------
         latents = self._encode_latents(sensor_tokens=sensor_tokens, obs_mask=obs_mask)  # [B, L, D]
 
+        if self.gather_mode == "topk_rbf_glres":
+            global_feat = self._extract_global_summary(latents)                 # [B, H]
+
         # -------------------------
         # Double-dip refinement:
         # sensor tokens query back into the latent memory
@@ -1200,6 +1297,28 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # Project refined sensor tokens to the local conditioning width
         refined_sensor_feat = self.sensor_out_proj(refined_sensor_tokens)   # [B, M, cond_dim]
         refined_sensor_feat = refined_sensor_feat * obs_mask.unsqueeze(-1)
+
+        if self.gather_mode == "topk_rbf_glres":
+            sensor_importance_bias = self._compute_sensor_importance_bias(
+                refined_sensor_feat=refined_sensor_feat,
+                obs_mask=obs_mask,
+            )
+
+            local_cond = self.aggregate_sparse_obs(
+                query_coords=coords,
+                query_feat=point_feat,
+                obs_coords=obs_coords,
+                refined_sensor_feat=refined_sensor_feat,
+                obs_mask=obs_mask,
+                sensor_importance_bias=sensor_importance_bias,
+            )  # [B, N, cond_dim]
+
+            query_global = self._readout_query_global_chunked(point_feat, latents)  # [B, N, H]
+            global_for_head = global_feat.unsqueeze(1) + self.query_readout_scale * query_global
+            coarse_pred = self.coarse_scale * self._predict_global_coarse(point_feat, global_feat)
+
+            residual = self.head(torch.cat([point_feat, global_for_head, local_cond], dim=-1))
+            return coarse_pred + residual
 
         # -------------------------
         # Gather back to queries

@@ -164,7 +164,7 @@ def parse_args():
     # Hybrid local-global gather options
     # ----------------------------------------------------------
     p.add_argument(
-        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate"],
+        "--gather-mode", type=str, default="rbf", choices=["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"],
         help="Gather mode used by ConditionalPointHybridLocalGlobalRBF. 'rbf' preserves the current full gather as default.",
     )
     p.add_argument(
