@@ -34,12 +34,12 @@
 #   multires_train_case_fraction: 0.3333333333
 
 #----------------------------------------------------------
-# Zero-shot super-resolution: test on 1:1:0 for CFD, use upgraded topk_rbf gathering
-# Retrained 0518
+# NOT Using Fourier positional encoding for RD 1:1:1
+# Use Perceiver
 #----------------------------------------------------------
 
-Demo_Num: 12
-device_ids: [1]
+Demo_Num: 24
+device_ids: [2]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
@@ -62,19 +62,19 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 # PDEBench multi-resolution settings
 # ----------------------------------------------------------
-pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
+pdebench_dataset_name: "RD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
-selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-Vx
-multires_ratio: "1:1:0"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
+selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
+multires_ratio: "1:1:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
 multires_train_case_fraction: 1     # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
-Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.0
+Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
 
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "GL_rbf" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "perceiver" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -84,10 +84,9 @@ cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
-
-USE_FOURIER_PE: true  # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
-fourier_pe_num_bands: 24  # 24 for RD-mixed and CFD, 32 for RD-H-only
-fourier_pe_max_freq: 48   # 48 for for RD-mixed, 32 for CFD-mixed, 48 for CFD-H-only and 64 for RD-H-only
+USE_FOURIER_PE: false  # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf
@@ -103,7 +102,7 @@ decode_chunk_size: 4096
 share_query_proj: false
 
 summary_type: "cls" # Only for GL_rbf, mean or cls
-gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
+gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
 gather_topk: 32
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
@@ -118,17 +117,11 @@ Num_y: 128
 # ----------------------------------------------------------
 # Hyperparameters for FNO backbone
 # The tensor fed to FNO is shaped [B, C, Num_y, Num_x], so modes are specified separately along x and y.
-# FNO now supports grouped mixed-resolution L/M/H batches by inferring each batch grid from coords.
-# Its sparse conditioning uses normalized value, support-weighted value, and soft-support maps.
-# Retrain FNO checkpoints after this change; older FNO checkpoints are architecture-incompatible.
 # ----------------------------------------------------------
 fno_modes_x: 16
 fno_modes_y: 16
 fno_hidden_channels: 64
 fno_n_layers: 4
-condition_blur: true
-condition_blur_kernel: 15
-condition_blur_sigma: 2.5
 
 # ----------------------------------------------------------
 # These are hyperparameters for the training process
@@ -140,6 +133,7 @@ rff_lengthscale : 0.15
 
 eval_every : 5
 save_every : 500         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
+n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # ----------------------------------------------------------
 # Setting up the conditioning process
