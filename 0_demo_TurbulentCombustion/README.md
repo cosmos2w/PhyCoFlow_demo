@@ -3,7 +3,7 @@
 This demo currently contains two related but distinct pipelines:
 
 - the main conditional point-cloud flow-matching workflow for turbulent combustion field reconstruction
-- a unified baseline pipeline for several alternative generative models
+- unified baseline pipelines for alternative generative and deterministic models
 
 The previous `README.md` mostly described the baseline side. This version documents both.
 
@@ -119,24 +119,31 @@ This script is especially useful after training because it can:
 
 The main point-cloud workflow writes artifacts to several places:
 
-- checkpoints:
-  - `Save_TrainedModel/ffm_tc_pointcloud_DemoN<id>_<timestamp>/`
-- backed-up configs:
-  - `Save_config/pointcloud_ffm/`
-- loss logs:
-  - `Save_loss_csv/`
-- reconstruction and evaluation outputs:
-  - `Save_reconstruction_files/`
+```text
+Save_TrainedModel/ffm_tc_pointcloud_DemoN<id>_<timestamp>/
+```
+
+Inside each run directory, training stores checkpoints, logs, normalization
+stats, and reconstruction previews together:
 
 Typical files include:
 
 - `best.pt`
 - `last.pt`
 - `args.json`
+- `run_config.yaml`
 - `dataset_stats.pt`
-- loss CSVs / JSON logs
-- saved reconstruction figures
-- evaluation metrics JSON files
+- `loss_history.csv`
+- `loss_history.json`
+- `loss_history.png`
+- `Evaluation/epoch_XXXX/`
+
+Backed-up launch configs are also stored under:
+
+- `Save_config/pointcloud_ffm/`
+
+The older shared `Save_loss_csv/` and `Save_reconstruction_files/` roots are no
+longer used by `src/train_pointcloud_ffm.py` for new training runs.
 
 ### 1.6 Main workflow example commands
 
@@ -283,7 +290,7 @@ Train S3GM:
 python src/train_Gen_Baseline.py \
   --config Save_config/config_baseline_Gen.yaml \
   --baseline-model s3gm \
-  --training-stage 1
+  --training-stage 1 \
   --device cuda:1
 ```
 
@@ -323,16 +330,170 @@ python src/evaluate_Gen_Baseline.py \
   --training-stage 1
 ```
 
-## 3. Relationship Between the Two Pipelines
+## 3. Unified Deterministic Baselines
+
+The deterministic baseline workflow uses the same dataset loading, sparse sensor
+conditioning, logging, checkpoint layout, and reconstruction plotting conventions
+as the unified generative baseline workflow, but trains direct supervised
+regressors instead of generative samplers.
+
+The deterministic baseline files are:
+
+- `Save_config/config_baseline_Det.yaml`
+- `src/train_Det_Baseline.py`
+- `src/evaluate_Det_Baseline.py`
+- `src/model_baseline.py`
+- `src/helpers_baseline.py`
+
+### 3.1 Deterministic baseline families
+
+The config selector is:
+
+- `baseline_model`
+
+Supported deterministic values are:
+
+- `mlp_rbf`: the original point-cloud FFM MLP-RBF sparse-gather backbone used in direct supervised mode
+- `senseiver`: Perceiver-IO / Senseiver sparse-sensor reconstruction model
+- `geofno`: supervised Geo-FNO / neuraloperator FNO sparse-to-full regressor
+
+All deterministic baselines currently use:
+
+- `training_stage: 1`
+- direct MSE supervised training
+- the unified run naming pattern:
+
+```text
+Save_TrainedModel/Baseline_<baseline>_Stage1_DemoN<demo_num>_<timestamp>/
+```
+
+### 3.2 Default comparison settings
+
+`Save_config/config_baseline_Det.yaml` is set up to match the generative
+baseline defaults for fair comparison:
+
+- default conditioning is temperature-only:
+  - `cond_fields: [2]`
+  - `n_obs_min_list: [192]`
+  - `n_obs_max_list: [384]`
+  - `vis_n_obs_list: [256]`
+- 10,000 epochs by default
+- `eval_every: 5`
+- `save_every: 500`
+- grid size:
+  - `num_x: 403`
+  - `num_y: 100`
+
+The config comments also include launch variants for `T + U_1` and
+`CO + T + U_1 + p`, matching the generative baseline template.
+
+The default batch sizes are chosen for a 48 GB GPU:
+
+- `mlp_rbf`: `batch_size: 128`
+- `senseiver`: `batch_size: 64`
+- `geofno`: `batch_size: 96`
+
+For four-field conditioning, reduce `mlp_rbf` and `senseiver` batch sizes if
+you hit memory limits. `geofno` processes full grids rather than subsampled
+query points, so its memory profile is different from the point-cloud models.
+
+### 3.3 Deterministic model notes
+
+`mlp_rbf` reuses the existing `ConditionalPointMLPRBF` block from the FFM
+model family, but wraps it for direct deterministic regression. Internally it
+passes `t=0` and a zero field state to the original backbone, so the sparse
+conditioning API remains compatible with the main FFM model.
+
+`senseiver` uses sparse sensor tokens and query coordinates directly. It
+subsamples query points during training via `n_query_points` and reconstructs
+the full field during visualization/evaluation.
+
+`geofno` uses `neuraloperator`. In this workspace, `phycoflow_env` has
+`neuralop` available; if another environment is used, install
+`neuraloperator` or use the environment that already provides it.
+
+The default Geo-FNO spectral modes are aligned with the current FFM-FNO launch:
+
+- `fno_modes_x: 24`
+- `fno_modes_y: 12`
+
+### 3.4 Deterministic example commands
+
+Run commands below from `0_demo_TurbulentCombustion/`.
+
+Train MLP-RBF deterministic baseline:
+
+```bash
+python src/train_Det_Baseline.py \
+  --config Save_config/config_baseline_Det.yaml \
+  --baseline-model mlp_rbf \
+  --training-stage 1 \
+  --device cuda:1
+```
+
+Train Senseiver:
+
+```bash
+python src/train_Det_Baseline.py \
+  --config Save_config/config_baseline_Det.yaml \
+  --baseline-model senseiver \
+  --training-stage 1 \
+  --device cuda:1
+```
+
+Train Geo-FNO:
+
+```bash
+python src/train_Det_Baseline.py \
+  --config Save_config/config_baseline_Det.yaml \
+  --baseline-model geofno \
+  --training-stage 1 \
+  --device cuda:1
+```
+
+Resume the latest matching deterministic run:
+
+```bash
+python src/train_Det_Baseline.py \
+  --config Save_config/config_baseline_Det.yaml \
+  --baseline-model mlp_rbf \
+  --training-stage 1 \
+  --reload
+```
+
+Evaluate the latest matching deterministic run:
+
+```bash
+python src/evaluate_Det_Baseline.py \
+  --config Save_config/config_baseline_Det.yaml \
+  --baseline-model mlp_rbf \
+  --training-stage 1 \
+  --split test \
+  --snapshot-index 0
+```
+
+Override visualization sensors at evaluation time:
+
+```bash
+python src/evaluate_Det_Baseline.py \
+  --config Save_config/config_baseline_Det.yaml \
+  --baseline-model senseiver \
+  --training-stage 1 \
+  --vis-cond-fields 2 3 \
+  --vis-n-obs-list 256 256
+```
+
+## 4. Relationship Between the Pipelines
 
 To avoid confusion:
 
 - `src/Model.py` + `train_pointcloud_ffm.py` + `evaluate_ffm.py` describe the main point-cloud FFM workflow used for sparse-conditioned reconstruction
-- `src/model_baseline.py` + `train_Gen_Baseline.py` + `evaluate_Gen_Baseline.py` describe the separate unified baseline benchmarking workflow
+- `src/model_baseline.py` + `train_Gen_Baseline.py` + `evaluate_Gen_Baseline.py` describe the unified generative baseline benchmarking workflow
+- `src/model_baseline.py` + `train_Det_Baseline.py` + `evaluate_Det_Baseline.py` describe the unified deterministic baseline benchmarking workflow
 
 They live in the same demo folder because they use the same turbulent combustion dataset and related sparse-conditioning ideas, but they are not the same training/evaluation stack.
 
-## 4. Recommended Starting Point
+## 5. Recommended Starting Point
 
 If you want to understand the primary workflow of this demo, read the files in this order:
 
@@ -347,3 +508,10 @@ If you want to compare against alternative baselines, then move to:
 2. `src/model_baseline.py`
 3. `src/evaluate_Gen_Baseline.py`
 4. `src/helpers_baseline.py`
+
+For deterministic baseline comparisons, read:
+
+1. `src/train_Det_Baseline.py`
+2. `Save_config/config_baseline_Det.yaml`
+3. `src/model_baseline.py`
+4. `src/evaluate_Det_Baseline.py`

@@ -12,6 +12,7 @@ With this patch:
 '''
 
 import argparse
+import csv
 import yaml
 import shutil
 import json
@@ -25,15 +26,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from datetime import datetime
 
 from helpers import (
-    MetricsLogger,
     TurbulentCombustionH5Dataset,
     validate_regular_grid_compatibility,
-    create_recon_dir,
     visualize_reconstruction,
     build_sparse_condition,
 )
@@ -499,6 +499,77 @@ def backup_existing_artifact(path: Path) -> None:
     else:
         shutil.copy2(path, target)
 
+
+class TrainingHistoryLogger:
+    def __init__(self, run_dir: Path) -> None:
+        self.csv_path = run_dir / "loss_history.csv"
+        self.json_path = run_dir / "loss_history.json"
+        self.plot_path = run_dir / "loss_history.png"
+        self.rows = []
+        with open(self.csv_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["epoch", "train_loss", "val_loss"])
+
+    def log_and_plot(self, epoch: int, train_loss: float, val_loss: Optional[float] = None) -> None:
+        row = {
+            "epoch": int(epoch),
+            "train_loss": float(train_loss),
+            "val_loss": None if val_loss is None else float(val_loss),
+        }
+        self.rows.append(row)
+
+        with open(self.csv_path, "a", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow([
+                row["epoch"],
+                row["train_loss"],
+                "" if row["val_loss"] is None else row["val_loss"],
+            ])
+        with open(self.json_path, "w", encoding="utf-8") as handle:
+            json.dump(self.rows, handle, indent=2)
+
+        train_points = [
+            (item["epoch"], item["train_loss"])
+            for item in self.rows
+            if item["train_loss"] is not None and item["train_loss"] > 0.0
+        ]
+        val_points = [
+            (item["epoch"], item["val_loss"])
+            for item in self.rows
+            if item["val_loss"] is not None and item["val_loss"] > 0.0
+        ]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        if train_points:
+            ax.plot(
+                [item[0] for item in train_points],
+                [item[1] for item in train_points],
+                label="Train Loss",
+                marker="o",
+                color="blue",
+                markersize=4,
+            )
+        if val_points:
+            ax.plot(
+                [item[0] for item in val_points],
+                [item[1] for item in val_points],
+                label="Validation Loss",
+                marker="s",
+                color="orange",
+                markersize=5,
+            )
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title("Conditional Point-Cloud FFM Training Progress")
+        if train_points or val_points:
+            ax.set_yscale("log")
+            ax.legend()
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        fig.tight_layout()
+        fig.savefig(self.plot_path, dpi=150)
+        plt.close(fig)
+
+
 def main():
 
     args = parse_args()
@@ -561,26 +632,26 @@ def main():
 
     # Save the final parsed args to a JSON in the model folder just to be safe
     with open(save_dir / "args.json", "w") as f:
-        import json
         json.dump(vars(args), f, indent=2)
+    if os.path.exists(config_path):
+        shutil.copy(config_path, save_dir / "run_config.yaml")
 
-    # Setup CSV and Recon Dirs
-    csv_base_dir = os.path.join(demo_dir, f"Save_loss_csv")
-    recon_base_dir = os.path.join(demo_dir, f"Save_reconstruction_files")
+    # Keep all run artifacts under the model directory, matching the unified
+    # baseline trainers. The old Save_loss_csv/ and Save_reconstruction_files/
+    # roots are no longer used by this trainer.
+    recon_dir = save_dir / "Evaluation"
 
     if args.RELOAD and reload_ckpt is not None:
-        loss_dir = Path(csv_base_dir) / f"Loss_DemoN{args.Demo_Num}_{run_timestamp}"
-        recon_dir_existing = Path(recon_base_dir) / "ffm_tc_pointcloud" / f"demo_N{args.Demo_Num}_{run_timestamp}"
-
-        backup_existing_artifact(loss_dir)
-        backup_existing_artifact(recon_dir_existing)
+        for loss_artifact in ("loss_history.csv", "loss_history.json", "loss_history.png"):
+            backup_existing_artifact(save_dir / loss_artifact)
+        backup_existing_artifact(recon_dir)
 
     # Initialize helpers
-    logger = MetricsLogger(base_dir=csv_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
-    recon_dir = create_recon_dir(base_dir=recon_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
+    logger = TrainingHistoryLogger(save_dir)
+    recon_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"[*] Model checkpoints will save to: {save_dir}")
-    print(f"[*] Logging losses to: {logger.save_dir}")
+    print(f"[*] Logging losses to: {save_dir}")
     print(f"[*] Saving recon plots to: {recon_dir}\n")
 
     device_ids = args.device_ids
@@ -821,8 +892,8 @@ def main():
         if epoch % args.save_every == 0:
             # Benchmark the same validation snapshot at several NFEs.
 
-            recon_dir_epoch = os.path.join(recon_dir, f"Epoch_{epoch}")
-            os.makedirs(recon_dir_epoch, exist_ok=True)
+            recon_dir_epoch = recon_dir / f"epoch_{epoch:04d}"
+            recon_dir_epoch.mkdir(parents=True, exist_ok=True)
             
             step_list = args.benchmark_n_steps if args.benchmark_n_steps else [args.n_steps_generation]
             for nfe in step_list:
@@ -847,7 +918,7 @@ def main():
                     dataset=val_set,
                     epoch=epoch,
                     device=device,
-                    save_dir=recon_dir_epoch,
+                    save_dir=str(recon_dir_epoch),
 
                     cond_fields=args.vis_cond_fields,
                     n_obs=args.vis_n_obs_list,

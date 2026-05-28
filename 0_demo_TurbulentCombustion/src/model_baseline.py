@@ -1,6 +1,7 @@
 # ═════════ Imports ═════════
 import abc
 import math, torch
+import os, sys
 import numpy as np
 from abc import abstractmethod
 from typing import Dict, Optional, Tuple, Sequence
@@ -12,7 +13,15 @@ from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 try:
     from neuralop.models import FNO as NeuralOpFNO  # pip install neuraloperator
 except ImportError:
-    NeuralOpFNO = None  # resolved lazily; FNO/FNOFFM classes will raise at instantiation
+    _neuralop_path = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "FNO", "neuraloperator"
+    )
+    if os.path.isdir(_neuralop_path) and _neuralop_path not in sys.path:
+        sys.path.insert(0, _neuralop_path)
+    try:
+        from neuralop.models import FNO as NeuralOpFNO
+    except ImportError:
+        NeuralOpFNO = None  # resolved lazily; FNO/FNOFFM classes will raise at instantiation
 try:
     from pykeops.torch import LazyTensor
 except ImportError:
@@ -23,6 +32,7 @@ FIELD_NAMES = ("CH4", "CO", "T", "U_1", "p")
 __all__ = [
     "FIELD_NAMES",
     "make_mlp",
+    "FourierPositionalEncoding",
     "batched_gather_2d",
     "batched_gather_3d",
     "IIDGaussianPrior",
@@ -31,10 +41,17 @@ __all__ = [
     "CrossAttentionBlock",
     "SelfAttentionBlock",
     "ConditionalPointMLPRBF",
+    "DeterministicMLPRBFRegressor",
     "ConditionalPointPerceiver",
     "ConditionalPointHybridLocalGlobalRBF",
     "ConditionalPointFFM",
     "FNO",
+    "SenseiverFourierPositionalEncoding",
+    "SenseiverSelfAttentionBlock",
+    "SenseiverEncoderBlock",
+    "Senseiver",
+    "FNOSupervisedGrid",
+    "FNOSupervisedIrregular",
     "PointCloudFFM",
     "FNOFFM",
     "ConvAE",
@@ -100,6 +117,24 @@ def make_mlp(in_dim: int, hidden_dim: int, out_dim: int, depth: int = 3, act=nn.
         dim = hidden_dim
     layers.append(nn.Linear(dim, out_dim))
     return nn.Sequential(*layers)
+
+
+class FourierPositionalEncoding(nn.Module):
+    """Sine-cosine frequency encoding for spatial coordinates."""
+
+    def __init__(self, coord_dim: int, num_bands: int = 32, max_freq: float = 64.0):
+        super().__init__()
+        self.coord_dim = int(coord_dim)
+        self.num_bands = int(num_bands)
+        self.out_dim = self.coord_dim * self.num_bands * 2
+        freqs = torch.linspace(1.0, float(max_freq) / 2.0, self.num_bands)
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        coords = coords[..., : self.coord_dim] * 2.0 - 1.0
+        x = coords.unsqueeze(-1) * self.freqs * math.pi
+        enc = torch.cat([x.sin(), x.cos()], dim=-1)
+        return enc.reshape(*coords.shape[:-1], self.out_dim)
 
 # ------------------------------
 # for gathering in GL_rbf
@@ -288,15 +323,25 @@ class ConditionalPointMLPRBF(nn.Module):
         cond_dim: int = 128,
         field_embed_dim: int = 32,
         rbf_sigma: float = 0.05,
+        use_fourier_pe: bool = False,
+        fourier_pe_num_bands: int = 32,
+        fourier_pe_max_freq: float = 64.0,
     ) -> None:
         super().__init__()
         self.n_fields = n_fields
         self.coord_dim = coord_dim
         self.rbf_sigma = rbf_sigma
+        self.use_fourier_pe = bool(use_fourier_pe)
+        self.pos_enc = FourierPositionalEncoding(
+            coord_dim,
+            num_bands=fourier_pe_num_bands,
+            max_freq=fourier_pe_max_freq,
+        ) if use_fourier_pe else None
+        self.coord_feat_dim = self.pos_enc.out_dim if self.pos_enc is not None else coord_dim
 
         self.field_embed = nn.Embedding(n_fields, field_embed_dim)
 
-        self.point_encoder = make_mlp(coord_dim + n_fields + 1, hidden_dim, hidden_dim, depth=3)
+        self.point_encoder = make_mlp(self.coord_feat_dim + n_fields + 1, hidden_dim, hidden_dim, depth=3)
         self.obs_encoder = make_mlp(coord_dim + 1 + field_embed_dim, cond_dim, cond_dim, depth=3)
         self.global_encoder = make_mlp(hidden_dim, hidden_dim, hidden_dim, depth=2)
 
@@ -347,11 +392,48 @@ class ConditionalPointMLPRBF(nn.Module):
         bsz, n_pts, _ = x_t.shape
         t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
 
-        point_feat = self.point_encoder(torch.cat([coords, x_t, t_feat], dim=-1))
+        coord_feat = self.pos_enc(coords) if self.pos_enc is not None else coords
+        point_feat = self.point_encoder(torch.cat([coord_feat, x_t, t_feat], dim=-1))
         local_cond = self.aggregate_sparse_obs(coords, obs_coords, obs_values, obs_mask, obs_field_ids)
         global_feat = self.global_encoder(point_feat.mean(dim=1)).unsqueeze(1).expand(bsz, n_pts, -1)
 
         return self.head(torch.cat([point_feat, global_feat, local_cond], dim=-1))
+
+
+class DeterministicMLPRBFRegressor(nn.Module):
+    """Supervised sparse-sensor regressor using the existing FFM MLP-RBF backbone."""
+
+    def __init__(self, backbone: ConditionalPointMLPRBF):
+        super().__init__()
+        self.backbone = backbone
+        self.n_fields = int(backbone.n_fields)
+
+    def forward(
+        self,
+        query_coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        bsz, n_query, _ = query_coords.shape
+        x_t = torch.zeros(
+            bsz,
+            n_query,
+            self.n_fields,
+            device=query_coords.device,
+            dtype=query_coords.dtype,
+        )
+        t = torch.zeros(bsz, device=query_coords.device, dtype=query_coords.dtype)
+        return self.backbone(
+            t=t,
+            x_t=x_t,
+            coords=query_coords,
+            obs_coords=obs_coords,
+            obs_values=obs_values,
+            obs_mask=obs_mask,
+            obs_field_ids=obs_field_ids,
+        )
 
 class ConditionalPointPerceiver(nn.Module):
     """
@@ -3858,7 +3940,291 @@ splat_obs_to_grid = BASELINE_HELPERS.splat_obs_to_grid
 _save_single_field_plot = BASELINE_HELPERS._save_single_field_plot
 _build_structured_triangulation = BASELINE_HELPERS._build_structured_triangulation
 
-SUPPORTED_BASELINES = {"s3gm", "latent_fm", "sit"}
+SUPPORTED_BASELINES = {"s3gm", "latent_fm", "sit", "senseiver", "geofno", "mlp_rbf"}
+
+
+class SenseiverFourierPositionalEncoding(nn.Module):
+    """Sine-cosine frequency encoding for spatial coordinates."""
+
+    def __init__(self, coord_dim: int = 2, num_bands: int = 32, max_freq: float = 64.0):
+        super().__init__()
+        self.coord_dim = int(coord_dim)
+        self.num_bands = int(num_bands)
+        self.out_dim = self.coord_dim * self.num_bands * 2
+        freqs = torch.linspace(1.0, float(max_freq) / 2.0, self.num_bands)
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, coords: torch.Tensor) -> torch.Tensor:
+        coords = coords[..., : self.coord_dim] * 2.0 - 1.0
+        x = coords.unsqueeze(-1) * self.freqs * math.pi
+        enc = torch.cat([x.sin(), x.cos()], dim=-1)
+        return enc.reshape(*coords.shape[:-1], self.out_dim)
+
+
+class SenseiverSelfAttentionBlock(nn.Module):
+    """Pre-norm self-attention + MLP with residual connections."""
+
+    def __init__(self, dim: int, num_heads: int, ff_mult: int = 4, dropout: float = 0.0):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
+        self.norm2 = nn.LayerNorm(dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, dim * ff_mult),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(dim * ff_mult, dim),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.norm1(x)
+        h, _ = self.attn(h, h, h)
+        x = x + h
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+
+class SenseiverEncoderBlock(nn.Module):
+    """One cross-attention sensor-to-latent block followed by latent self-attention."""
+
+    def __init__(
+        self,
+        latent_dim: int,
+        kv_dim: int,
+        num_cross_heads: int,
+        num_self_heads: int,
+        num_self_attn_layers: int = 3,
+        ff_mult: int = 4,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.norm_q = nn.LayerNorm(latent_dim)
+        self.norm_kv = nn.LayerNorm(kv_dim)
+        self.cross_attn = nn.MultiheadAttention(
+            latent_dim,
+            num_cross_heads,
+            kdim=kv_dim,
+            vdim=kv_dim,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.self_attn_layers = nn.ModuleList(
+            [
+                SenseiverSelfAttentionBlock(latent_dim, num_self_heads, ff_mult, dropout)
+                for _ in range(num_self_attn_layers)
+            ]
+        )
+
+    def forward(
+        self,
+        latent: torch.Tensor,
+        kv: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        q = self.norm_q(latent)
+        k = self.norm_kv(kv)
+        h, _ = self.cross_attn(q, k, k, key_padding_mask=key_padding_mask)
+        latent = latent + h
+        for layer in self.self_attn_layers:
+            latent = layer(latent)
+        return latent
+
+
+class Senseiver(nn.Module):
+    """Perceiver-IO sparse-sensor-to-full-field deterministic baseline."""
+
+    def __init__(
+        self,
+        n_fields: int,
+        coord_dim: int = 2,
+        num_latents: int = 128,
+        latent_dim: int = 256,
+        num_encoder_layers: int = 3,
+        num_self_attn_per_block: int = 3,
+        num_cross_attn_heads: int = 4,
+        num_self_attn_heads: int = 4,
+        dec_num_cross_attn_heads: int = 4,
+        field_embed_dim: int = 32,
+        space_bands: int = 32,
+        max_freq: float = 64.0,
+        ff_mult: int = 4,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.n_fields = int(n_fields)
+        self.coord_dim = int(coord_dim)
+
+        self.pos_enc = SenseiverFourierPositionalEncoding(coord_dim, space_bands, max_freq)
+        pos_dim = self.pos_enc.out_dim
+        self.field_embed = nn.Embedding(n_fields, field_embed_dim)
+        self.encoder_preproc = nn.Linear(1 + field_embed_dim + pos_dim, latent_dim)
+        self.latent = nn.Parameter(torch.randn(num_latents, latent_dim) * 0.02)
+        self.encoder_blocks = nn.ModuleList(
+            [
+                SenseiverEncoderBlock(
+                    latent_dim=latent_dim,
+                    kv_dim=latent_dim,
+                    num_cross_heads=num_cross_attn_heads,
+                    num_self_heads=num_self_attn_heads,
+                    num_self_attn_layers=num_self_attn_per_block,
+                    ff_mult=ff_mult,
+                    dropout=dropout,
+                )
+                for _ in range(num_encoder_layers)
+            ]
+        )
+
+        self.decoder_query_token = nn.Parameter(torch.randn(1, latent_dim) * 0.02)
+        self.decoder_preproc = nn.Linear(pos_dim + latent_dim, latent_dim)
+        self.decoder_norm_q = nn.LayerNorm(latent_dim)
+        self.decoder_norm_kv = nn.LayerNorm(latent_dim)
+        self.decoder_cross_attn = nn.MultiheadAttention(
+            latent_dim,
+            dec_num_cross_attn_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.decoder_postproc = nn.Sequential(
+            nn.LayerNorm(latent_dim),
+            nn.Linear(latent_dim, n_fields),
+        )
+
+    def forward(
+        self,
+        query_coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, n_query, _ = query_coords.shape
+
+        sensor_pos = self.pos_enc(obs_coords)
+        sensor_field = self.field_embed(obs_field_ids.long().clamp(min=0))
+        sensor_input = torch.cat([obs_values, sensor_field, sensor_pos], dim=-1)
+        sensor_input = self.encoder_preproc(sensor_input)
+
+        key_pad_mask = ~obs_mask.bool()
+        latent = self.latent.unsqueeze(0).expand(batch_size, -1, -1)
+        for block in self.encoder_blocks:
+            latent = block(latent, sensor_input, key_padding_mask=key_pad_mask)
+
+        query_pos = self.pos_enc(query_coords)
+        dq = self.decoder_query_token.expand(batch_size, n_query, -1)
+        query_input = self.decoder_preproc(torch.cat([query_pos, dq], dim=-1))
+        q = self.decoder_norm_q(query_input)
+        kv = self.decoder_norm_kv(latent)
+        h, _ = self.decoder_cross_attn(q, kv, kv)
+        return self.decoder_postproc(query_input + h)
+
+
+class FNOSupervisedGrid(nn.Module):
+    """neuraloperator FNO for regular-grid supervised sparse-to-full regression."""
+
+    def __init__(
+        self,
+        n_fields: int,
+        Num_x: int,
+        Num_y: int,
+        n_modes_x: int = 32,
+        n_modes_y: int = 8,
+        hidden_channels: int = 64,
+        n_layers: int = 4,
+    ):
+        super().__init__()
+        if NeuralOpFNO is None:
+            raise ImportError("neuraloperator is required for the Geo-FNO baseline.")
+        self.n_fields = int(n_fields)
+        self.Num_x = int(Num_x)
+        self.Num_y = int(Num_y)
+        self.fno = NeuralOpFNO(
+            n_modes=(int(n_modes_y), int(n_modes_x)),
+            in_channels=2 * int(n_fields),
+            out_channels=int(n_fields),
+            hidden_channels=int(hidden_channels),
+            n_layers=int(n_layers),
+            positional_embedding="grid",
+        )
+
+    def forward(self, obs_value_grid: torch.Tensor, obs_mask_grid: torch.Tensor) -> torch.Tensor:
+        return self.fno(torch.cat([obs_value_grid, obs_mask_grid], dim=1))
+
+
+class FNOSupervisedIrregular(nn.Module):
+    """FNO + sparse scatter/gather wrapper for irregular 2-D meshes."""
+
+    def __init__(
+        self,
+        n_fields: int,
+        latent_Nx: int = 64,
+        latent_Ny: int = 64,
+        n_modes_x: int = 24,
+        n_modes_y: int = 24,
+        hidden_channels: int = 64,
+        n_layers: int = 4,
+    ):
+        super().__init__()
+        if NeuralOpFNO is None:
+            raise ImportError("neuraloperator is required for the Geo-FNO baseline.")
+        self.n_fields = int(n_fields)
+        self.latent_Nx = int(latent_Nx)
+        self.latent_Ny = int(latent_Ny)
+        self.fno = NeuralOpFNO(
+            n_modes=(int(n_modes_y), int(n_modes_x)),
+            in_channels=2 * int(n_fields),
+            out_channels=int(n_fields),
+            hidden_channels=int(hidden_channels),
+            n_layers=int(n_layers),
+            positional_embedding="grid",
+        )
+
+    def _gather_from_grid(self, grid: torch.Tensor, coords_2d: torch.Tensor) -> torch.Tensor:
+        sample_pts = (coords_2d * 2.0 - 1.0).unsqueeze(2)
+        gathered = F.grid_sample(
+            grid,
+            sample_pts,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )
+        return gathered.squeeze(-1).permute(0, 2, 1)
+
+    def forward(
+        self,
+        coords_2d: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+        obs_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size = coords_2d.shape[0]
+        n_fields = self.n_fields
+        n_y, n_x = self.latent_Ny, self.latent_Nx
+        device = coords_2d.device
+        dtype = coords_2d.dtype
+
+        val_grid = torch.zeros(batch_size, n_fields, n_y * n_x, device=device, dtype=dtype)
+        mask_grid = torch.zeros(batch_size, n_fields, n_y * n_x, device=device, dtype=dtype)
+
+        for b_idx in range(batch_size):
+            valid = obs_mask[b_idx].bool()
+            if not valid.any():
+                continue
+            idx = obs_indices[b_idx, valid].long()
+            fld = obs_field_ids[b_idx, valid].long()
+            val = obs_values[b_idx, valid, 0]
+            obs_xy = coords_2d[b_idx, idx]
+            ix = (obs_xy[:, 0] * (n_x - 1)).long().clamp(0, n_x - 1)
+            iy = (obs_xy[:, 1] * (n_y - 1)).long().clamp(0, n_y - 1)
+            flat = iy * n_x + ix
+            val_grid[b_idx, fld, flat] = val
+            mask_grid[b_idx, fld, flat] = 1.0
+
+        val_grid = val_grid.reshape(batch_size, n_fields, n_y, n_x)
+        mask_grid = mask_grid.reshape(batch_size, n_fields, n_y, n_x)
+        pred_grid = self.fno(torch.cat([val_grid, mask_grid], dim=1))
+        return self._gather_from_grid(pred_grid, coords_2d)
 
 
 def _attach_senconsis_outputs(
@@ -3970,7 +4336,7 @@ def validate_and_normalize_config(cfg: dict) -> dict:
         raise ValueError("training_stage must be 1 or 2.")
     cfg["training_stage"] = training_stage
 
-    if baseline_model in {"s3gm", "sit"} and training_stage != 1:
+    if baseline_model in {"s3gm", "sit", "senseiver", "geofno", "mlp_rbf"} and training_stage != 1:
         raise ValueError(
             f"baseline_model={baseline_model!r} only supports training_stage=1."
         )
@@ -4523,6 +4889,189 @@ def run_epoch_sit(bundle: BaselineBundle, loader: DataLoader, training: bool, ep
                     grad_norm if ema_grad is None else beta * ema_grad + (1.0 - beta) * grad_norm
                 )
 
+        total_loss += current_loss
+        count += 1
+        pbar.set_postfix_str(f"loss={current_loss:.6e}")
+
+    return total_loss / max(count, 1)
+
+
+def run_epoch_senseiver(bundle: BaselineBundle, loader: DataLoader, training: bool, epoch: int) -> float:
+    model = bundle.model
+    optimizer = bundle.optimizer if training else None
+    shared_cond = bundle.config["shared"]["conditioning"]
+    stage_cfg = resolve_stage_config(bundle.config)
+    n_query_points = int(stage_cfg["training"].get("n_query_points", 4096))
+
+    model.train(training)
+    total_loss = 0.0
+    count = 0
+    pbar = tqdm(loader, desc=f"Senseiver Epoch {epoch:04d} [{'Train' if training else 'Eval'}]", leave=False)
+
+    for batch in pbar:
+        coords = batch["coords"].to(bundle.device)
+        fields = batch["fields"].to(bundle.device)
+        batch_size, n_pts, _ = coords.shape
+        valid_mask = batch.get("valid_sensor_mask")
+        if valid_mask is not None:
+            valid_mask = valid_mask.to(bundle.device)
+
+        obs_coords, obs_values, obs_mask, _, obs_field_ids = build_sparse_condition(
+            coords_full=coords,
+            fields_full=fields,
+            cond_fields=shared_cond["cond_fields"],
+            n_obs_min=shared_cond["n_obs_min_list"],
+            n_obs_max=shared_cond["n_obs_max_list"],
+            valid_mask=valid_mask,
+        )
+
+        if 0 < n_query_points < n_pts:
+            idx = torch.randperm(n_pts, device=bundle.device)[:n_query_points]
+            query_coords = coords[:, idx]
+            query_fields = fields[:, idx]
+        else:
+            query_coords = coords
+            query_fields = fields
+
+        pred = model(query_coords, obs_coords, obs_values, obs_mask, obs_field_ids)
+        loss = F.mse_loss(pred, query_fields)
+
+        if training and optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+        current_loss = float(loss.detach().cpu())
+        total_loss += current_loss * batch_size
+        count += batch_size
+        pbar.set_postfix_str(f"loss={current_loss:.6e}")
+
+    return total_loss / max(count, 1)
+
+
+def run_epoch_mlp_rbf(bundle: BaselineBundle, loader: DataLoader, training: bool, epoch: int) -> float:
+    model = bundle.model
+    optimizer = bundle.optimizer if training else None
+    shared_cond = bundle.config["shared"]["conditioning"]
+    stage_cfg = resolve_stage_config(bundle.config)
+    n_query_points = int(stage_cfg["training"].get("n_query_points", 4096))
+
+    model.train(training)
+    total_loss = 0.0
+    count = 0
+    pbar = tqdm(loader, desc=f"MLP-RBF Epoch {epoch:04d} [{'Train' if training else 'Eval'}]", leave=False)
+
+    for batch in pbar:
+        coords = batch["coords"].to(bundle.device)
+        fields = batch["fields"].to(bundle.device)
+        batch_size, n_pts, _ = coords.shape
+        valid_mask = batch.get("valid_sensor_mask")
+        if valid_mask is not None:
+            valid_mask = valid_mask.to(bundle.device)
+
+        obs_coords, obs_values, obs_mask, _, obs_field_ids = build_sparse_condition(
+            coords_full=coords,
+            fields_full=fields,
+            cond_fields=shared_cond["cond_fields"],
+            n_obs_min=shared_cond["n_obs_min_list"],
+            n_obs_max=shared_cond["n_obs_max_list"],
+            valid_mask=valid_mask,
+        )
+
+        if 0 < n_query_points < n_pts:
+            idx = torch.randperm(n_pts, device=bundle.device)[:n_query_points]
+            query_coords = coords[:, idx]
+            query_fields = fields[:, idx]
+        else:
+            query_coords = coords
+            query_fields = fields
+
+        pred = model(query_coords, obs_coords, obs_values, obs_mask, obs_field_ids)
+        loss = F.mse_loss(pred, query_fields)
+
+        if training and optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+        current_loss = float(loss.detach().cpu())
+        total_loss += current_loss * batch_size
+        count += batch_size
+        pbar.set_postfix_str(f"loss={current_loss:.6e}")
+
+    return total_loss / max(count, 1)
+
+
+def run_epoch_geofno(bundle: BaselineBundle, loader: DataLoader, training: bool, epoch: int) -> float:
+    model = bundle.model
+    optimizer = bundle.optimizer if training else None
+    shared_cond = bundle.config["shared"]["conditioning"]
+    num_y = int(bundle.config["shared"]["data"]["num_y"])
+    num_x = int(bundle.config["shared"]["data"]["num_x"])
+    variant = str(bundle.components["variant"])
+    point_to_grid = bundle.components.get("point_to_grid")
+    grid_order = bundle.components.get("grid_order")
+
+    model.train(training)
+    total_loss = 0.0
+    count = 0
+    pbar = tqdm(loader, desc=f"Geo-FNO Epoch {epoch:04d} [{'Train' if training else 'Eval'}]", leave=False)
+
+    for batch in pbar:
+        coords = batch["coords"].to(bundle.device)
+        fields = batch["fields"].to(bundle.device)
+        valid_mask = batch.get("valid_sensor_mask")
+        if valid_mask is not None:
+            valid_mask = valid_mask.to(bundle.device)
+
+        _, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+            coords_full=coords,
+            fields_full=fields,
+            cond_fields=shared_cond["cond_fields"],
+            n_obs_min=shared_cond["n_obs_min_list"],
+            n_obs_max=shared_cond["n_obs_max_list"],
+            valid_mask=valid_mask,
+        )
+
+        if variant == "irregular":
+            pred = model(coords[..., :2], obs_values, obs_mask, obs_field_ids, obs_indices)
+            loss = F.mse_loss(pred, fields)
+        else:
+            n_fields = fields.shape[2]
+            n_pts = fields.shape[1]
+            obs_value_grid, obs_mask_grid = build_obs_grid_mask(
+                obs_values,
+                obs_mask,
+                obs_field_ids,
+                obs_indices,
+                n_fields,
+                n_pts,
+                num_y,
+                num_x,
+                num_y,
+                num_x,
+                point_to_grid=point_to_grid,
+            )
+            target_grid = pointcloud_to_grid_padded(
+                fields,
+                num_y,
+                num_x,
+                num_y,
+                num_x,
+                grid_order=grid_order,
+            )
+            pred_grid = model(obs_value_grid, obs_mask_grid)
+            loss = F.mse_loss(pred_grid, target_grid)
+
+        if training and optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+        current_loss = float(loss.detach().cpu())
         total_loss += current_loss
         count += 1
         pbar.set_postfix_str(f"loss={current_loss:.6e}")
@@ -5385,6 +5934,154 @@ def visualize_reconstruction_sit(
     return metrics
 
 
+@torch.no_grad()
+def visualize_reconstruction_deterministic(
+    bundle: BaselineBundle,
+    dataset,
+    save_dir: Path,
+    epoch: int,
+    snapshot_index: int = 0,
+    file_tag: Optional[str] = None,
+    save_obs_consistency_plots: bool = False,
+) -> dict[str, float]:
+    model = bundle.model
+    model.eval()
+    shared_cond = bundle.config["shared"]["conditioning"]
+    cond_fields = shared_cond["vis_cond_fields"]
+    n_obs = shared_cond["vis_n_obs_list"]
+    if isinstance(cond_fields, int):
+        cond_fields = [cond_fields]
+    if isinstance(n_obs, int):
+        n_obs = [n_obs] * len(cond_fields)
+
+    sample = dataset[snapshot_index]
+    coords = sample["coords"].unsqueeze(0).to(bundle.device)
+    coords_raw = sample["coords_raw"].unsqueeze(0).to(bundle.device)
+    truth = sample["fields"].unsqueeze(0).to(bundle.device)
+    valid_mask = sample.get("valid_sensor_mask")
+    if valid_mask is not None:
+        valid_mask = valid_mask.unsqueeze(0).to(bundle.device)
+
+    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+        coords_full=coords,
+        fields_full=truth,
+        cond_fields=cond_fields,
+        n_obs_min=n_obs,
+        n_obs_max=n_obs,
+        valid_mask=valid_mask,
+    )
+
+    method = bundle.baseline_model
+    if method in {"senseiver", "mlp_rbf"}:
+        recon = model(coords, obs_coords, obs_values, obs_mask, obs_field_ids)
+        method_label = "Senseiver" if method == "senseiver" else "MLP_RBF_supervised"
+    elif method == "geofno":
+        variant = str(bundle.components["variant"])
+        if variant == "irregular":
+            recon = model(coords[..., :2], obs_values, obs_mask, obs_field_ids, obs_indices)
+        else:
+            n_fields = dataset.num_fields
+            n_pts = dataset.num_points
+            num_y = int(bundle.config["shared"]["data"]["num_y"])
+            num_x = int(bundle.config["shared"]["data"]["num_x"])
+            obs_value_grid, obs_mask_grid = build_obs_grid_mask(
+                obs_values,
+                obs_mask,
+                obs_field_ids,
+                obs_indices,
+                n_fields,
+                n_pts,
+                num_y,
+                num_x,
+                num_y,
+                num_x,
+                point_to_grid=bundle.components.get("point_to_grid"),
+            )
+            pred_grid = model(obs_value_grid, obs_mask_grid)
+            recon = grid_to_pointcloud(
+                pred_grid,
+                num_y,
+                num_x,
+                point_to_grid=bundle.components.get("point_to_grid"),
+            )
+        method_label = "GeoFNO_supervised"
+    else:
+        raise ValueError(f"Deterministic visualizer does not support {method!r}.")
+
+    mean = dataset.mean.to(bundle.device)
+    std = dataset.std.to(bundle.device)
+    recon_phys = recon * std.view(1, 1, -1) + mean.view(1, 1, -1)
+    truth_phys = truth * std.view(1, 1, -1) + mean.view(1, 1, -1)
+    recon_np = recon_phys[0].cpu().numpy()
+    truth_np = truth_phys[0].cpu().numpy()
+
+    valid = obs_mask[0].bool()
+    obs_indices_cpu = obs_indices[0, valid].cpu().numpy()
+    obs_field_ids_cpu = obs_field_ids[0, valid].cpu().numpy()
+    coords_np = coords_raw[0].cpu().numpy()
+    coords_xy = coords_np[:, :2]
+
+    triang = None
+    body_polygon = None
+    if hasattr(dataset, "grid_shape") and dataset.grid_shape is not None:
+        triang = _build_structured_triangulation(coords_xy, dataset.grid_shape)
+    if hasattr(dataset, "airfoil_body_indices") and dataset.airfoil_body_indices is not None:
+        body_polygon = coords_xy[dataset.airfoil_body_indices]
+
+    field_names = (
+        dataset.field_names
+        if len(dataset.field_names) == truth_np.shape[1]
+        else tuple(f"field_{idx}" for idx in range(truth_np.shape[1]))
+    )
+    metrics: dict[str, float] = {}
+    for field_idx, field_name in enumerate(field_names):
+        sensor_coords = None
+        field_sensor_mask = obs_field_ids_cpu == field_idx
+        if np.any(field_sensor_mask):
+            sensor_coords = coords_xy[obs_indices_cpu[field_sensor_mask]]
+        metrics[field_name] = _save_single_field_plot(
+            true_f=truth_np[:, field_idx],
+            pred_f=recon_np[:, field_idx],
+            coords_xy=coords_xy,
+            sensor_coords=sensor_coords,
+            field_name=field_name,
+            epoch=epoch,
+            save_dir=str(save_dir),
+            file_prefix=file_tag,
+            triang=triang,
+            body_polygon=body_polygon,
+        )
+
+    _attach_senconsis_outputs(
+        metrics=metrics,
+        recon=recon,
+        truth=truth,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_indices=obs_indices,
+        obs_field_ids=obs_field_ids,
+        coords=coords,
+        coords_xy=coords_xy,
+        field_names=field_names,
+        save_dir=save_dir,
+        save_obs_consistency_plots=save_obs_consistency_plots,
+    )
+
+    prefix = file_tag or f"epoch_{epoch:04d}"
+    payload = {
+        "epoch": int(epoch),
+        "snapshot_index": int(snapshot_index),
+        "cond_fields": [int(v) for v in cond_fields],
+        "n_obs": [int(v) for v in n_obs],
+        "method": method_label,
+        "metrics": metrics,
+    }
+    with open(Path(save_dir) / f"{prefix}_metrics.json", "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    return metrics
+
+
 class BaseBaselineAdapter(abc.ABC):
     name: str
 
@@ -6134,12 +6831,318 @@ class SiTAdapter(BaseBaselineAdapter):
         )
 
 
+class SenseiverAdapter(BaseBaselineAdapter):
+    name = "senseiver"
+
+    def build_for_training(self, cfg: dict, device: torch.device, run_dir: Path, train_set, val_set) -> BaselineBundle:
+        stage_cfg = resolve_stage_config(cfg)
+        arch = stage_cfg["architecture"]
+        training = stage_cfg["training"]
+
+        model = Senseiver(
+            n_fields=train_set.num_fields,
+            coord_dim=int(arch["coord_dim"]),
+            num_latents=int(arch["num_latents"]),
+            latent_dim=int(arch["latent_dim"]),
+            num_encoder_layers=int(arch["num_encoder_layers"]),
+            num_self_attn_per_block=int(arch["num_self_attn_per_block"]),
+            num_cross_attn_heads=int(arch["num_cross_attn_heads"]),
+            num_self_attn_heads=int(arch["num_self_attn_heads"]),
+            dec_num_cross_attn_heads=int(arch["dec_num_cross_attn_heads"]),
+            field_embed_dim=int(arch["field_embed_dim"]),
+            space_bands=int(arch["space_bands"]),
+            max_freq=float(arch["max_freq"]),
+            ff_mult=int(arch["ff_mult"]),
+            dropout=float(arch["dropout"]),
+        ).to(device)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=float(training["learning_rate"]),
+            weight_decay=float(training["weight_decay"]),
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=int(training["epochs"]),
+        )
+        return BaselineBundle(
+            baseline_model=self.name,
+            training_stage=1,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            ema=None,
+            device=device,
+            run_dir=run_dir,
+            config=cfg,
+            dataset_train=train_set,
+            dataset_val=val_set,
+        )
+
+    def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
+        bundle.model.load_state_dict(checkpoint["model"])
+        if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
+            bundle.optimizer.load_state_dict(checkpoint["optimizer"])
+        if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:
+            bundle.scheduler.load_state_dict(checkpoint["scheduler"])
+
+    def run_epoch(self, bundle: BaselineBundle, loader: DataLoader, training: bool, epoch: int) -> float:
+        return run_epoch_senseiver(bundle, loader, training, epoch)
+
+    def build_checkpoint(self, bundle: BaselineBundle, epoch: int, train_loss: float, val_loss: float) -> dict:
+        stage_cfg = resolve_stage_config(bundle.config)
+        arch = stage_cfg["architecture"]
+        return {
+            "baseline_model": bundle.baseline_model,
+            "training_stage": bundle.training_stage,
+            "model": bundle.model.state_dict(),
+            "optimizer": bundle.optimizer.state_dict() if bundle.optimizer is not None else None,
+            "scheduler": bundle.scheduler.state_dict() if bundle.scheduler is not None else None,
+            "epoch": int(epoch),
+            "train_loss": float(train_loss),
+            "val_loss": float(val_loss),
+            "mean": bundle.dataset_train.mean,
+            "std": bundle.dataset_train.std,
+            "field_names": bundle.dataset_train.field_names,
+            "method": "Senseiver",
+            "Num_x": int(bundle.config["shared"]["data"]["num_x"]),
+            "Num_y": int(bundle.config["shared"]["data"]["num_y"]),
+            "n_fields": int(bundle.dataset_train.num_fields),
+            "coord_dim": int(arch["coord_dim"]),
+            "num_latents": int(arch["num_latents"]),
+            "latent_dim": int(arch["latent_dim"]),
+            "dataset": bundle.config["shared"]["data"]["dataset_name"],
+        }
+
+    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None, save_obs_consistency_plots: bool = False) -> dict[str, float]:
+        return visualize_reconstruction_deterministic(
+            bundle=bundle,
+            dataset=dataset,
+            save_dir=save_dir,
+            epoch=epoch,
+            snapshot_index=snapshot_index,
+            file_tag="senseiver",
+            save_obs_consistency_plots=save_obs_consistency_plots,
+        )
+
+
+class MLPRBFAdapter(BaseBaselineAdapter):
+    name = "mlp_rbf"
+
+    def build_for_training(self, cfg: dict, device: torch.device, run_dir: Path, train_set, val_set) -> BaselineBundle:
+        stage_cfg = resolve_stage_config(cfg)
+        arch = stage_cfg["architecture"]
+        training = stage_cfg["training"]
+        backbone = ConditionalPointMLPRBF(
+            n_fields=train_set.num_fields,
+            coord_dim=int(arch["coord_dim"]),
+            hidden_dim=int(arch["hidden_dim"]),
+            cond_dim=int(arch["cond_dim"]),
+            field_embed_dim=int(arch["field_embed_dim"]),
+            rbf_sigma=float(arch["rbf_sigma"]),
+            use_fourier_pe=bool(arch.get("use_fourier_pe", False)),
+            fourier_pe_num_bands=int(arch.get("fourier_pe_num_bands", 32)),
+            fourier_pe_max_freq=float(arch.get("fourier_pe_max_freq", 64.0)),
+        )
+        model = DeterministicMLPRBFRegressor(backbone).to(device)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=float(training["learning_rate"]),
+            weight_decay=float(training["weight_decay"]),
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=int(training["epochs"]),
+        )
+        return BaselineBundle(
+            baseline_model=self.name,
+            training_stage=1,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            ema=None,
+            device=device,
+            run_dir=run_dir,
+            config=cfg,
+            dataset_train=train_set,
+            dataset_val=val_set,
+        )
+
+    def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
+        bundle.model.load_state_dict(checkpoint["model"])
+        if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
+            bundle.optimizer.load_state_dict(checkpoint["optimizer"])
+        if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:
+            bundle.scheduler.load_state_dict(checkpoint["scheduler"])
+
+    def run_epoch(self, bundle: BaselineBundle, loader: DataLoader, training: bool, epoch: int) -> float:
+        return run_epoch_mlp_rbf(bundle, loader, training, epoch)
+
+    def build_checkpoint(self, bundle: BaselineBundle, epoch: int, train_loss: float, val_loss: float) -> dict:
+        stage_cfg = resolve_stage_config(bundle.config)
+        arch = stage_cfg["architecture"]
+        return {
+            "baseline_model": bundle.baseline_model,
+            "training_stage": bundle.training_stage,
+            "model": bundle.model.state_dict(),
+            "optimizer": bundle.optimizer.state_dict() if bundle.optimizer is not None else None,
+            "scheduler": bundle.scheduler.state_dict() if bundle.scheduler is not None else None,
+            "epoch": int(epoch),
+            "train_loss": float(train_loss),
+            "val_loss": float(val_loss),
+            "mean": bundle.dataset_train.mean,
+            "std": bundle.dataset_train.std,
+            "field_names": bundle.dataset_train.field_names,
+            "method": "MLP_RBF_supervised",
+            "Num_x": int(bundle.config["shared"]["data"]["num_x"]),
+            "Num_y": int(bundle.config["shared"]["data"]["num_y"]),
+            "n_fields": int(bundle.dataset_train.num_fields),
+            "coord_dim": int(arch["coord_dim"]),
+            "hidden_dim": int(arch["hidden_dim"]),
+            "cond_dim": int(arch["cond_dim"]),
+            "field_embed_dim": int(arch["field_embed_dim"]),
+            "rbf_sigma": float(arch["rbf_sigma"]),
+            "use_fourier_pe": bool(arch.get("use_fourier_pe", False)),
+            "fourier_pe_num_bands": int(arch.get("fourier_pe_num_bands", 32)),
+            "fourier_pe_max_freq": float(arch.get("fourier_pe_max_freq", 64.0)),
+            "dataset": bundle.config["shared"]["data"]["dataset_name"],
+        }
+
+    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None, save_obs_consistency_plots: bool = False) -> dict[str, float]:
+        return visualize_reconstruction_deterministic(
+            bundle=bundle,
+            dataset=dataset,
+            save_dir=save_dir,
+            epoch=epoch,
+            snapshot_index=snapshot_index,
+            file_tag="mlp_rbf",
+            save_obs_consistency_plots=save_obs_consistency_plots,
+        )
+
+
+class GeoFNOAdapter(BaseBaselineAdapter):
+    name = "geofno"
+
+    def build_for_training(self, cfg: dict, device: torch.device, run_dir: Path, train_set, val_set) -> BaselineBundle:
+        stage_cfg = resolve_stage_config(cfg)
+        arch = stage_cfg["architecture"]
+        training = stage_cfg["training"]
+        variant = str(arch.get("geofno_variant", "fno")).lower()
+        num_y = int(cfg["shared"]["data"]["num_y"])
+        num_x = int(cfg["shared"]["data"]["num_x"])
+
+        grid_info = None
+        if variant == "fno":
+            grid_info = validate_regular_grid_compatibility(train_set, num_x, num_y)
+            if val_set is not train_set:
+                validate_regular_grid_compatibility(val_set, num_x, num_y)
+            model = FNOSupervisedGrid(
+                n_fields=train_set.num_fields,
+                Num_x=num_x,
+                Num_y=num_y,
+                n_modes_x=int(arch["fno_modes_x"]),
+                n_modes_y=int(arch["fno_modes_y"]),
+                hidden_channels=int(arch["fno_hidden_channels"]),
+                n_layers=int(arch["fno_n_layers"]),
+            ).to(device)
+        elif variant == "irregular":
+            model = FNOSupervisedIrregular(
+                n_fields=train_set.num_fields,
+                latent_Nx=int(arch["latent_Nx"]),
+                latent_Ny=int(arch["latent_Ny"]),
+                n_modes_x=int(arch["fno_modes_x"]),
+                n_modes_y=int(arch["fno_modes_y"]),
+                hidden_channels=int(arch["fno_hidden_channels"]),
+                n_layers=int(arch["fno_n_layers"]),
+            ).to(device)
+        else:
+            raise ValueError("geofno_params.architecture.geofno_variant must be 'fno' or 'irregular'.")
+
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=float(training["learning_rate"]),
+            weight_decay=float(training["weight_decay"]),
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=int(training["epochs"]),
+        )
+        return BaselineBundle(
+            baseline_model=self.name,
+            training_stage=1,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            ema=None,
+            device=device,
+            run_dir=run_dir,
+            config=cfg,
+            dataset_train=train_set,
+            dataset_val=val_set,
+            components={
+                "variant": variant,
+                "grid_info": grid_info,
+                "grid_order": None if grid_info is None else grid_info["grid_order"],
+                "point_to_grid": None if grid_info is None else grid_info["point_to_grid"],
+            },
+        )
+
+    def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
+        bundle.model.load_state_dict(checkpoint["model"])
+        if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
+            bundle.optimizer.load_state_dict(checkpoint["optimizer"])
+        if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:
+            bundle.scheduler.load_state_dict(checkpoint["scheduler"])
+
+    def run_epoch(self, bundle: BaselineBundle, loader: DataLoader, training: bool, epoch: int) -> float:
+        return run_epoch_geofno(bundle, loader, training, epoch)
+
+    def build_checkpoint(self, bundle: BaselineBundle, epoch: int, train_loss: float, val_loss: float) -> dict:
+        stage_cfg = resolve_stage_config(bundle.config)
+        arch = stage_cfg["architecture"]
+        return {
+            "baseline_model": bundle.baseline_model,
+            "training_stage": bundle.training_stage,
+            "model": bundle.model.state_dict(),
+            "optimizer": bundle.optimizer.state_dict() if bundle.optimizer is not None else None,
+            "scheduler": bundle.scheduler.state_dict() if bundle.scheduler is not None else None,
+            "epoch": int(epoch),
+            "train_loss": float(train_loss),
+            "val_loss": float(val_loss),
+            "mean": bundle.dataset_train.mean,
+            "std": bundle.dataset_train.std,
+            "field_names": bundle.dataset_train.field_names,
+            "method": "GeoFNO_supervised",
+            "geofno_variant": str(bundle.components["variant"]),
+            "Num_x": int(bundle.config["shared"]["data"]["num_x"]),
+            "Num_y": int(bundle.config["shared"]["data"]["num_y"]),
+            "fno_modes_x": int(arch["fno_modes_x"]),
+            "fno_modes_y": int(arch["fno_modes_y"]),
+            "fno_hidden_channels": int(arch["fno_hidden_channels"]),
+            "fno_n_layers": int(arch["fno_n_layers"]),
+            "dataset": bundle.config["shared"]["data"]["dataset_name"],
+        }
+
+    def visualize(self, bundle: BaselineBundle, dataset, save_dir: Path, epoch: int, snapshot_index: int, n_steps: Optional[int] = None, save_obs_consistency_plots: bool = False) -> dict[str, float]:
+        return visualize_reconstruction_deterministic(
+            bundle=bundle,
+            dataset=dataset,
+            save_dir=save_dir,
+            epoch=epoch,
+            snapshot_index=snapshot_index,
+            file_tag="geofno_supervised",
+            save_obs_consistency_plots=save_obs_consistency_plots,
+        )
+
+
 def get_baseline_adapter(baseline_model: str) -> BaseBaselineAdapter:
     baseline_model = str(baseline_model).strip().lower()
     registry: dict[str, BaseBaselineAdapter] = {
         "s3gm": S3GMAdapter(),
         "latent_fm": LatentFMAdapter(),
         "sit": SiTAdapter(),
+        "senseiver": SenseiverAdapter(),
+        "mlp_rbf": MLPRBFAdapter(),
+        "geofno": GeoFNOAdapter(),
     }
     if baseline_model not in registry:
         raise ValueError(
