@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -52,6 +52,30 @@ def empirical_w2_1d_sorted(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.mean((x_sorted - y_sorted) ** 2)
 
 
+def empirical_w2_1d_columns(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """
+    Vectorized empirical squared 2-Wasserstein distance for column batches.
+
+    Args:
+        x, y: tensors with shape [N, K] or [N]. Shapes must match.
+
+    Returns:
+        Tensor [K] for 2D inputs. For 1D inputs, returns a length-1 tensor that
+        remains scalar-compatible via reshape/squeeze by callers.
+    """
+    if x.shape != y.shape:
+        raise ValueError(f"empirical_w2_1d_columns expects equal shapes, got {tuple(x.shape)} and {tuple(y.shape)}")
+    if x.ndim == 1:
+        x = x[:, None]
+        y = y[:, None]
+    elif x.ndim != 2:
+        raise ValueError(f"empirical_w2_1d_columns expects [N] or [N, K], got shape {tuple(x.shape)}")
+
+    x_sorted = torch.sort(x, dim=0)[0]
+    y_sorted = torch.sort(y, dim=0)[0]
+    return torch.mean((x_sorted - y_sorted) ** 2, dim=0)
+
+
 def per_channel_w2(x_gen: torch.Tensor, x_ref: torch.Tensor) -> torch.Tensor:
     """
     Per-channel 1D Wasserstein anchors.
@@ -66,11 +90,7 @@ def per_channel_w2(x_gen: torch.Tensor, x_ref: torch.Tensor) -> torch.Tensor:
     if x_gen.shape != x_ref.shape:
         raise ValueError(f"Shape mismatch: {tuple(x_gen.shape)} vs {tuple(x_ref.shape)}")
 
-    n_fields = x_gen.shape[1]
-    vals = []
-    for c in range(n_fields):
-        vals.append(empirical_w2_1d_sorted(x_gen[:, c], x_ref[:, c]))
-    return torch.stack(vals, dim=0)
+    return empirical_w2_1d_columns(x_gen, x_ref)
 
 
 # -----------------------------------------------------------------------------
@@ -107,6 +127,104 @@ def project_channels(x: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         projected: [N_pt, K]
     """
     return x @ theta.t()
+
+
+def make_projection_bank(
+    n_fields: int,
+    num_directions: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    seed: Optional[int] = None,
+    include_axes: bool = True,
+    qmc: bool = True,
+) -> torch.Tensor:
+    """
+    Build a deterministic bank of unit directions in channel space.
+
+    Canonical axes are included first when requested. Remaining directions use a
+    Sobol quasi-random normal construction when available, with a seeded random
+    fallback for older torch builds or unsupported devices.
+    """
+    if n_fields <= 0:
+        raise ValueError(f"n_fields must be positive, got {n_fields}")
+    if num_directions <= 0:
+        raise ValueError(f"num_directions must be positive, got {num_directions}")
+    effective_seed = 0 if seed is None else int(seed)
+
+    parts: List[torch.Tensor] = []
+    if include_axes:
+        n_axes = min(int(num_directions), int(n_fields))
+        parts.append(torch.eye(n_fields, device=device, dtype=dtype)[:n_axes])
+
+    remaining = int(num_directions) - sum(p.shape[0] for p in parts)
+    if remaining > 0:
+        z: Optional[torch.Tensor] = None
+        if qmc:
+            try:
+                sobol = torch.quasirandom.SobolEngine(
+                    dimension=int(n_fields),
+                    scramble=True,
+                    seed=effective_seed,
+                )
+                u = sobol.draw(remaining).to(device=device, dtype=dtype)
+                eps = torch.finfo(dtype).eps if dtype.is_floating_point else 1e-7
+                u = u.clamp(float(eps), 1.0 - float(eps))
+                z = math.sqrt(2.0) * torch.erfinv(2.0 * u - 1.0)
+            except Exception:
+                z = None
+
+        if z is None:
+            gen = torch.Generator(device=device)
+            gen.manual_seed(effective_seed)
+            z = torch.randn(remaining, n_fields, device=device, dtype=dtype, generator=gen)
+        parts.append(z)
+
+    theta = torch.cat(parts, dim=0) if len(parts) > 1 else parts[0]
+    return normalize_directions(theta[: int(num_directions)])
+
+
+def fixed_bank_topk_swd(
+    x_gen: torch.Tensor,
+    x_ref: torch.Tensor,
+    num_directions: int = 64,
+    top_frac: float = 0.10,
+    seed: Optional[int] = None,
+    include_axes: bool = True,
+    qmc: bool = True,
+) -> Dict[str, torch.Tensor]:
+    """
+    Fixed-bank robust sliced-Wasserstein joint score.
+
+    Projects snapshots onto a deterministic direction bank and averages the
+    largest top_frac of projected empirical W2 values as a stable approximation
+    of worst projection discrepancies.
+    """
+    if x_gen.shape != x_ref.shape:
+        raise ValueError(f"Shape mismatch: {tuple(x_gen.shape)} vs {tuple(x_ref.shape)}")
+
+    n_fields = x_gen.shape[1]
+    theta = make_projection_bank(
+        n_fields=n_fields,
+        num_directions=int(num_directions),
+        device=x_gen.device,
+        dtype=x_gen.dtype,
+        seed=seed,
+        include_axes=include_axes,
+        qmc=qmc,
+    )
+    proj_gen = project_channels(x_gen, theta)
+    proj_ref = project_channels(x_ref, theta)
+    per_dir = empirical_w2_1d_columns(proj_gen, proj_ref)
+    k_top = max(1, min(per_dir.numel(), int(math.ceil(float(top_frac) * per_dir.numel()))))
+    top_vals, top_indices = torch.topk(per_dir, k=k_top, largest=True, sorted=True)
+
+    return {
+        "score": top_vals.mean(),
+        "per_direction_w2": per_dir,
+        "theta": theta,
+        "top_indices": top_indices,
+        "top_frac": torch.tensor(float(top_frac), device=x_gen.device, dtype=x_gen.dtype),
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -169,10 +287,7 @@ def batched_max_swd(
         proj_gen = project_channels(x_gen, theta_n)   # [N_pt, K]
         proj_ref = project_channels(x_ref, theta_n)   # [N_pt, K]
 
-        per_dir = torch.stack([
-            empirical_w2_1d_sorted(proj_gen[:, k], proj_ref[:, k])
-            for k in range(theta_n.shape[0])
-        ])
+        per_dir = empirical_w2_1d_columns(proj_gen, proj_ref)
 
         # Max-SW uses ascent on the discrepancy, with a small diversity penalty.
         objective = per_dir.mean() - ortho_reg * orthogonality_penalty(theta_n)
@@ -185,10 +300,7 @@ def batched_max_swd(
     theta_star = normalize_directions(theta.detach())
     proj_gen = project_channels(x_gen, theta_star)
     proj_ref = project_channels(x_ref, theta_star)
-    per_dir = torch.stack([
-        empirical_w2_1d_sorted(proj_gen[:, k], proj_ref[:, k])
-        for k in range(theta_star.shape[0])
-    ])
+    per_dir = empirical_w2_1d_columns(proj_gen, proj_ref)
 
     return {
         "score": per_dir.mean(),
@@ -249,10 +361,7 @@ def pairwise_2d_swd_matrix(
             proj_gen = x_pair_gen @ directions.t()  # [N_pt, n_proj]
             proj_ref = x_pair_ref @ directions.t()  # [N_pt, n_proj]
 
-            vals = torch.stack([
-                empirical_w2_1d_sorted(proj_gen[:, p], proj_ref[:, p])
-                for p in range(n_proj)
-            ])
+            vals = empirical_w2_1d_columns(proj_gen, proj_ref)
             score = vals.mean()
             mat[i, j] = score
             mat[j, i] = score
@@ -275,19 +384,25 @@ class GlobalDistConfig:
     n_proj_pairwise: int = 32
     include_pairwise: bool = True
     seed: Optional[int] = None
+    joint_method: str = "topk_swd"
+    joint_top_frac: float = 0.10
+    joint_qmc: bool = True
+    include_axes: bool = True
+    lambda_pairwise: float = 0.25
+    include_pairwise_in_score: bool = True
 
 
 def compute_global_distribution_coherence(
     x_gen: torch.Tensor,
     x_ref: torch.Tensor,
     cfg: Optional[GlobalDistConfig] = None,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, Any]:
     """
     Compute the global distributional coherence package.
 
     This implements the recommended default design:
       - per-channel 1D Wasserstein anchors
-      - batched Max-SW over full channel-state vectors
+      - fixed-bank top-k SWD or adaptive Max-SW over channel-state vectors
       - optional pairwise 2D marginal diagnostics
 
     Args:
@@ -301,25 +416,48 @@ def compute_global_distribution_coherence(
     cfg = cfg or GlobalDistConfig()
 
     marg = per_channel_w2(x_gen, x_ref)                              # [C]
-    joint = batched_max_swd(
-        x_gen=x_gen,
-        x_ref=x_ref,
-        num_directions=cfg.num_directions,
-        n_iter=cfg.n_iter_theta,
-        lr_theta=cfg.lr_theta,
-        ortho_reg=cfg.ortho_reg,
-        seed=cfg.seed,
-    )
+    if cfg.joint_method == "adaptive_maxswd":
+        joint = batched_max_swd(
+            x_gen=x_gen,
+            x_ref=x_ref,
+            num_directions=cfg.num_directions,
+            n_iter=cfg.n_iter_theta,
+            lr_theta=cfg.lr_theta,
+            ortho_reg=cfg.ortho_reg,
+            seed=cfg.seed,
+        )
+    elif cfg.joint_method == "topk_swd":
+        joint = fixed_bank_topk_swd(
+            x_gen=x_gen,
+            x_ref=x_ref,
+            num_directions=cfg.num_directions,
+            top_frac=cfg.joint_top_frac,
+            seed=cfg.seed,
+            include_axes=cfg.include_axes,
+            qmc=cfg.joint_qmc,
+        )
+    else:
+        raise ValueError(f"Unknown joint_method={cfg.joint_method!r}; expected 'topk_swd' or 'adaptive_maxswd'")
 
-    out: Dict[str, torch.Tensor] = {
-        "mode_score": cfg.lambda_marg * marg.mean() + cfg.lambda_joint * joint["score"],
+    base_score = cfg.lambda_marg * marg.mean() + cfg.lambda_joint * joint["score"]
+
+    out: Dict[str, Any] = {
         "marginal_score": marg.mean(),
         "per_channel_w2": marg,
         "joint_score": joint["score"],
         "per_direction_w2": joint["per_direction_w2"],
         "theta": joint["theta"],
-        "theta_init": joint["theta_init"],
+        "base_score": base_score,
+        "joint_method": cfg.joint_method,
+        "pairwise_score_included": False,
+        "lambda_pairwise": float(cfg.lambda_pairwise),
     }
+    if "theta_init" in joint:
+        out["theta_init"] = joint["theta_init"]
+    if "top_indices" in joint:
+        out["top_indices"] = joint["top_indices"]
+    if "top_frac" in joint:
+        out["top_frac"] = joint["top_frac"]
 
     if cfg.include_pairwise:
         pairwise = pairwise_2d_swd_matrix(
@@ -333,10 +471,18 @@ def compute_global_distribution_coherence(
         denom = max(c * (c - 1), 1)
         out["pairwise_mean"] = pairwise.sum() / denom
 
+    mode_score = base_score
+    if cfg.include_pairwise and cfg.include_pairwise_in_score and "pairwise_mean" in out:
+        mode_score = mode_score + cfg.lambda_pairwise * out["pairwise_mean"]
+        out["pairwise_score_included"] = True
+
+    out["mode_score"] = mode_score
+    out["global_dist_score"] = mode_score
+
     return out
 
 
-def coherence_result_to_scalars(result: Dict[str, torch.Tensor]) -> Dict[str, float]:
+def coherence_result_to_scalars(result: Dict[str, Any]) -> Dict[str, float]:
     """
     Extract scalar coherence diagnostics without mutating the input result.
 
@@ -356,6 +502,8 @@ def coherence_result_to_scalars(result: Dict[str, torch.Tensor]) -> Dict[str, fl
         return float(value)
 
     return {
+        "global_dist_score": _scalar("global_dist_score"),
+        "base_score": _scalar("base_score"),
         "marginal_score": _scalar("marginal_score"),
         "joint_score": _scalar("joint_score"),
         "pairwise_mean": _scalar("pairwise_mean"),
@@ -367,12 +515,12 @@ def coherence_result_to_scalars(result: Dict[str, torch.Tensor]) -> Dict[str, fl
 # Registry for future coherence terms
 # -----------------------------------------------------------------------------
 
-COHERENCE_REGISTRY: Dict[str, Callable[..., Dict[str, torch.Tensor]]] = {
+COHERENCE_REGISTRY: Dict[str, Callable[..., Dict[str, Any]]] = {
     "global_dist": compute_global_distribution_coherence,
 }
 
 
-def compute_coherence(mode: str, x_gen: torch.Tensor, x_ref: torch.Tensor, **kwargs) -> Dict[str, torch.Tensor]:
+def compute_coherence(mode: str, x_gen: torch.Tensor, x_ref: torch.Tensor, **kwargs) -> Dict[str, Any]:
     """
     Dispatch coherence computation by mode name.
     """

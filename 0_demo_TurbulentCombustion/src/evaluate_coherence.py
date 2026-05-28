@@ -2,7 +2,7 @@
 Evaluate data-driven physical coherence terms on trained reconstruction models.
 
 Current supported mode:
-    - global_dist : global distributional coherence
+    - global_dist : global state-distribution discrepancy
 
 Design goal:
     This script is written to be extensible.
@@ -23,6 +23,22 @@ python src/evaluate_coherence.py \
   --n-steps 2
 
 This reconstructs the requested snapshot(s) and saves detailed per-snapshot coherence plots and metrics.
+By default, global_dist now uses a deterministic fixed-bank top-k sliced
+Wasserstein joint score:
+
+  --joint-method topk_swd \
+  --num-directions 64 \
+  --joint-top-frac 0.10 \
+  --include-pairwise-in-score
+
+The older adaptive projection-pursuit score is still available:
+
+  --joint-method adaptive_maxswd
+
+Pairwise 2D SWD remains available as a diagnostic and can be included in the
+overall mode_score with --include-pairwise-in-score or excluded with
+--no-include-pairwise-in-score. All global_dist scores are discrepancies, so
+lower is better.
 
 2) Statistical-analysis mode
 
@@ -252,14 +268,26 @@ def parse_args() -> argparse.Namespace:
     # Global distribution coherence hyperparameters
     p.add_argument("--lambda-marg", type=float, default=1.0)
     p.add_argument("--lambda-joint", type=float, default=1.0)
+    p.add_argument("--joint-method", type=str, default="topk_swd", choices=["topk_swd", "adaptive_maxswd"],
+                   help="Joint channel-space discrepancy: deterministic fixed-bank top-k SWD or adaptive Max-SWD.")
+    p.add_argument("--joint-top-frac", type=float, default=0.10,
+                   help="Fraction of largest fixed-bank projected W2 values averaged by --joint-method topk_swd.")
+    p.add_argument("--joint-qmc", action=argparse.BooleanOptionalAction, default=True,
+                   help="Use Sobol quasi-random directions for the fixed projection bank when available.")
+    p.add_argument("--include-axes", action=argparse.BooleanOptionalAction, default=True,
+                   help="Include canonical channel axes at the start of the fixed projection bank.")
+    p.add_argument("--lambda-pairwise", type=float, default=0.25,
+                   help="Weight for pairwise_mean when pairwise diagnostics are included in mode_score.")
+    p.add_argument("--include-pairwise-in-score", action=argparse.BooleanOptionalAction, default=True,
+                   help="Add lambda_pairwise * pairwise_mean into mode_score when pairwise diagnostics are enabled.")
     p.add_argument("--num-directions", type=int, default=None,
-                   help="Number of Max-SW channel directions. Defaults to an auto choice based on field count.")
+                   help="Number of joint channel directions. Defaults depend on --joint-method.")
     p.add_argument("--n-iter-theta", type=int, default=None,
-                   help="Inner optimization steps for Max-SW directions. Defaults to an auto choice.")
+                   help="Inner optimization steps for adaptive_maxswd directions. Defaults to an auto choice.")
     p.add_argument("--lr-theta", type=float, default=None,
-                   help="Inner optimization step size for Max-SW directions. Defaults to an auto choice.")
+                   help="Inner optimization step size for adaptive_maxswd directions. Defaults to an auto choice.")
     p.add_argument("--ortho-reg", type=float, default=None,
-                   help="Orthogonality regularization for Max-SW directions. Defaults to an auto choice.")
+                   help="Orthogonality regularization for adaptive_maxswd directions. Defaults to an auto choice.")
     p.add_argument("--n-proj-pairwise", type=int, default=None,
                    help="Random projection count for pairwise 2D SWD. Defaults to an auto choice.")
     p.add_argument("--disable-pairwise", action="store_true")
@@ -1241,9 +1269,11 @@ def _despine(ax: Any) -> None:
 def _format_metric_label(name: str) -> str:
     return {
         "marginal_score": "Marginal",
-        "joint_score": "Joint Max-SW",
+        "joint_score": "Joint SWD",
         "pairwise_mean": "Pairwise",
-        "mode_score": "Overall",
+        "mode_score": "Global dist.",
+        "global_dist_score": "Global dist.",
+        "base_score": "Base global dist.",
         "relative_l2": r"Relative $L_2$ error",
         "obs_consistency_error": "Observation consistency error",
     }.get(name, name)
@@ -1255,6 +1285,8 @@ def save_statistical_table_csv(path: Path, rows: Sequence[Dict[str, Any]]) -> No
         "snapshot_index",
         "relative_l2",
         "obs_consistency_error",
+        "global_dist_score",
+        "base_score",
         "marginal_score",
         "joint_score",
         "pairwise_mean",
@@ -1279,6 +1311,8 @@ def build_statistical_summary(
     metrics = [
         "relative_l2",
         "obs_consistency_error",
+        "global_dist_score",
+        "base_score",
         "marginal_score",
         "joint_score",
         "pairwise_mean",
@@ -1292,7 +1326,7 @@ def build_statistical_summary(
         "relative_l2_mode_score_correlation": _compute_l2_mode_correlations(rows),
         "relative_l2_correlations": {
             key: _compute_l2_metric_correlations(rows, key)
-            for key in ["marginal_score", "joint_score", "pairwise_mean", "mode_score"]
+            for key in ["global_dist_score", "base_score", "marginal_score", "joint_score", "pairwise_mean", "mode_score"]
         },
     }
     if _finite_array(rows, "pairwise_mean").size == 0:
@@ -1390,9 +1424,11 @@ def save_coherence_l2_scatter(
     spearman = correlations.get("spearman_rho")
     stat_lines = [f"n = {int(mask.sum())}"]
     if int(mask.sum()) >= 3:
-        stat_lines.append(f"Pearson r = {pearson:.2f}" if pearson is not None else "Pearson r = n/a")
+        if pearson is not None:
+            stat_lines.append(f"Pearson r = {pearson:.2f}, R^2 = {pearson * pearson:.2f}")
+        else:
+            stat_lines.append("Pearson r = n/a, R^2 = n/a")
         stat_lines.append(f"Spearman \u03c1 = {spearman:.2f}" if spearman is not None else "Spearman \u03c1 = n/a")
-    stat_lines.extend(note_lines)
     ax.text(
         0.04,
         0.96,
@@ -1403,9 +1439,20 @@ def save_coherence_l2_scatter(
         fontsize=8,
         bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.9),
     )
+    if note_lines:
+        ax.text(
+            0.04,
+            0.73,
+            "\n".join(note_lines),
+            transform=ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=6.5,
+            color="0.3",
+        )
 
     ax.set_xlabel(r"Relative $L_2$ error")
-    ax.set_ylabel("Global coherence score")
+    ax.set_ylabel("Global state-distribution discrepancy")
     if bool(args.stat_panel_labels):
         _add_panel_label(ax, "(a)")
     else:
@@ -1428,9 +1475,9 @@ def save_aggregate_violin(
 ) -> None:
     metric_specs = [
         ("marginal_score", "Marginal"),
-        ("joint_score", "Joint Max-SW"),
+        ("joint_score", "Joint SWD"),
         ("pairwise_mean", "Pairwise"),
-        ("mode_score", "Overall"),
+        ("mode_score", "Global dist."),
     ]
     palette = {
         "marginal_score": "#4C78A8",
@@ -1482,14 +1529,14 @@ def save_aggregate_violin(
         all_vals = np.concatenate(data)
         if bool(args.stat_log_y) and np.all(all_vals > 0.0):
             ax.set_yscale("log")
-            ax.set_ylabel("Score (log scale)")
+            ax.set_ylabel("Discrepancy (log scale)")
         else:
             if bool(args.stat_log_y) and not np.all(all_vals > 0.0):
                 print("[stat] Aggregate violin uses linear y-scale because nonpositive scores are present.")
-            ax.set_ylabel("Score")
+            ax.set_ylabel("Discrepancy")
     else:
         ax.text(0.5, 0.5, "No finite coherence scores available", ha="center", va="center", transform=ax.transAxes)
-        ax.set_ylabel("Score")
+        ax.set_ylabel("Discrepancy")
 
     ax.set_xlabel("")
     if bool(args.stat_panel_labels):
@@ -1694,6 +1741,8 @@ def run_statistical_analysis(
                     field_mean=obs_field_mean,
                     field_std=obs_field_std,
                 ),
+                "global_dist_score": scalars["global_dist_score"],
+                "base_score": scalars["base_score"],
                 "marginal_score": scalars["marginal_score"],
                 "joint_score": scalars["joint_score"],
                 "pairwise_mean": scalars["pairwise_mean"],
@@ -1787,11 +1836,12 @@ def resolve_global_dist_config(
         sources[name] = "auto"
         return recommended
 
-    recommended_num_directions = min(max(num_fields, 1), 5)
+    joint_method = str(args.joint_method)
+    recommended_num_directions = 64 if joint_method == "topk_swd" else min(max(num_fields, 1), 5)
     recommended_n_iter_theta = 20 if num_fields <= 8 else 12
     recommended_lr_theta = 0.05
     recommended_ortho_reg = 1e-2
-    recommended_n_proj_pairwise = 64 if num_fields <= 6 else 48
+    recommended_n_proj_pairwise = 32
 
     num_directions = int(pick("num_directions", args.num_directions, recommended_num_directions))
     n_iter_theta = int(pick("n_iter_theta", args.n_iter_theta, recommended_n_iter_theta))
@@ -1800,10 +1850,16 @@ def resolve_global_dist_config(
     n_proj_pairwise = int(pick("n_proj_pairwise", args.n_proj_pairwise, recommended_n_proj_pairwise))
 
     if sources["num_directions"] == "auto":
-        notes.append(
-            f"Auto-selected num_directions={num_directions}: this problem has {num_fields} fields, "
-            "so using one direction per channel dimension avoids leaving a field-space axis unexplored."
-        )
+        if joint_method == "topk_swd":
+            notes.append(
+                f"Auto-selected num_directions={num_directions}: fixed-bank top-k SWD benefits from a larger "
+                "deterministic projection bank while remaining cheap because only channel-space projections are sorted."
+            )
+        else:
+            notes.append(
+                f"Auto-selected num_directions={num_directions}: adaptive Max-SWD uses at most a few learned directions "
+                "in the low-dimensional channel space."
+            )
     if sources["n_iter_theta"] == "auto":
         notes.append(
             f"Auto-selected n_iter_theta={n_iter_theta}: the previous very short inner optimization can under-fit "
@@ -1820,21 +1876,35 @@ def resolve_global_dist_config(
         )
     if sources["n_proj_pairwise"] == "auto":
         notes.append(
-            f"Auto-selected n_proj_pairwise={n_proj_pairwise}: with only {num_fields} fields there are few channel pairs, "
-            "so using more slice directions reduces Monte Carlo noise in the pairwise diagnostics."
+            f"Auto-selected n_proj_pairwise={n_proj_pairwise}: this keeps pairwise 2D SWD stable enough for scoring or "
+            "diagnostics without making the global distribution evaluator unnecessarily expensive."
         )
 
     notes.append(
         "Kept lambda_marg = lambda_joint = 1.0 by default because both terms are squared Wasserstein discrepancies in "
         "the same units, so equal weighting is the most interpretable baseline."
     )
+    if joint_method == "topk_swd":
+        notes.append(
+            "topk_swd uses a deterministic projection bank and averages the top fraction of projected discrepancies, "
+            "providing a stable approximation of worst projection mismatches."
+        )
+    else:
+        notes.append(
+            "adaptive_maxswd preserves the older adaptive projection-pursuit SWD behavior; n_iter_theta, lr_theta, "
+            "and ortho_reg only affect this mode."
+        )
     if args.disable_pairwise:
         notes.append(
             "Pairwise diagnostics were disabled, so pairwise 2D dependence mismatches will not be visualized."
         )
+    elif args.include_pairwise_in_score:
+        notes.append(
+            f"pairwise_mean is included in mode_score with lambda_pairwise={float(args.lambda_pairwise):.3g}."
+        )
     else:
         notes.append(
-            "Pairwise 2D SWD is treated as a diagnostic term only; it is not added into mode_score."
+            "pairwise_mean is computed as a diagnostic but excluded from mode_score because include_pairwise_in_score=False."
         )
 
     cfg = GlobalDistConfig(
@@ -1847,6 +1917,12 @@ def resolve_global_dist_config(
         n_proj_pairwise=n_proj_pairwise,
         include_pairwise=not args.disable_pairwise,
         seed=args.seed,
+        joint_method=joint_method,
+        joint_top_frac=float(args.joint_top_frac),
+        joint_qmc=bool(args.joint_qmc),
+        include_axes=bool(args.include_axes),
+        lambda_pairwise=float(args.lambda_pairwise),
+        include_pairwise_in_score=bool(args.include_pairwise_in_score),
     )
     return cfg, sources, notes
 
@@ -1868,6 +1944,16 @@ def build_interpretation_guide_text(
     hparam_notes: Sequence[str],
 ) -> str:
     cond_field_names = [field_names[idx] if 0 <= idx < len(field_names) else str(idx) for idx in cond_fields]
+    joint_label = (
+        "adaptive projection-pursuit SWD"
+        if coherence_cfg.joint_method == "adaptive_maxswd"
+        else "fixed-bank top-k sliced Wasserstein"
+    )
+    pairwise_score_text = (
+        "included in mode_score"
+        if coherence_cfg.include_pairwise and coherence_cfg.include_pairwise_in_score
+        else "not included in mode_score"
+    )
     lines = [
         "PhyCoFlow coherence evaluation guide",
         "===================================",
@@ -1886,23 +1972,30 @@ def build_interpretation_guide_text(
         "---------------------",
         "All main discrepancy values are squared Wasserstein distances, so smaller is better and zero is ideal.",
         "The metrics compare the reconstructed snapshot distribution against the reference snapshot distribution over spatial points.",
+        "This is a global state-distribution discrepancy, not a full physical-law residual.",
         "These metrics do not directly measure pointwise spatial alignment; they measure whether the distribution of field states is realistic.",
+        "Spatial alignment is not directly measured by the scalar score.",
         "",
         "mode_score",
-        "  lambda_marg * marginal_score + lambda_joint * joint_score.",
+        "  base_score plus an optional pairwise contribution.",
         "  This is the main scalar summary used by this evaluator.",
+        f"  Here pairwise_mean is {pairwise_score_text}.",
+        "",
+        "base_score",
+        "  lambda_marg * marginal_score + lambda_joint * joint_score.",
+        "  This excludes the optional pairwise contribution.",
         "",
         "marginal_score",
         "  Mean of the per-channel 1D Wasserstein distances.",
         "  It answers: does each field individually have the right value distribution?",
         "",
         "joint_score",
-        "  Mean Max-Sliced Wasserstein discrepancy over learned channel-combination directions.",
+        f"  Joint channel-space discrepancy from {joint_label}.",
         "  It answers: do cross-field combinations such as T/U_1 or CH4/CO behave correctly when fields are mixed together?",
         "",
         "pairwise_mean",
         "  Mean pairwise 2D sliced Wasserstein discrepancy over all channel pairs.",
-        "  It is diagnostic only in the current implementation and is not included in mode_score.",
+        f"  Depending on config, it may be diagnostic only or added to mode_score; for this run it is {pairwise_score_text}.",
         "",
         "How to interpret each figure",
         "----------------------------",
@@ -1912,17 +2005,21 @@ def build_interpretation_guide_text(
         "  The number above each bar shows the absolute error and its percentage contribution to the sum across channels.",
         "",
         "2_maxswd_theta.png",
-        "  Learned channel-combination directions ranked by per-direction W2^2.",
+        f"  Channel-combination directions from {joint_label}, ranked by per-direction W2^2.",
         "  A large positive or negative coefficient means that field contributes strongly to the discrepancy direction.",
         "  Use this plot to identify which cross-field combinations dominate the joint mismatch.",
         "",
+        "2b_joint_projection_spectrum.png",
+        "  Ranked projected W2^2 values across the joint projection directions.",
+        "  Highlighted points mark directions included in the top-k joint score when available.",
+        "",
         "3_maxswd_projected_diagnostics.png",
-        "  For the worst Max-SW directions, the top panel compares sorted projected values and the bottom panel shows quantile-wise residuals.",
+        "  For the worst joint projection directions, the top panel compares sorted projected values and the bottom panel shows quantile-wise residuals.",
         "  If the two sorted curves separate systematically, the model is misrepresenting that projected distribution.",
         "  The title reports W2^2 for each direction; larger shaded gaps mean larger transport discrepancy.",
         "",
         "4_worst_direction_spatial.png",
-        "  Spatial view of the single worst Max-SW direction.",
+        "  Spatial view of the single worst joint projection direction.",
         "  Left: projected reference field. Middle: projected reconstruction. Right: projected discrepancy (recon - ref).",
         "  This figure localizes where the worst joint channel discrepancy lives in physical space.",
         "",
@@ -1951,12 +2048,18 @@ def build_interpretation_guide_text(
         "--------------------------------------------",
         f"lambda_marg     : {coherence_cfg.lambda_marg}",
         f"lambda_joint    : {coherence_cfg.lambda_joint}",
+        f"joint_method    : {coherence_cfg.joint_method}",
+        f"joint_top_frac  : {coherence_cfg.joint_top_frac}",
+        f"joint_qmc       : {coherence_cfg.joint_qmc}",
+        f"include_axes    : {coherence_cfg.include_axes}",
         f"num_directions  : {coherence_cfg.num_directions} ({hparam_sources.get('num_directions', 'n/a')})",
         f"n_iter_theta    : {coherence_cfg.n_iter_theta} ({hparam_sources.get('n_iter_theta', 'n/a')})",
         f"lr_theta        : {coherence_cfg.lr_theta} ({hparam_sources.get('lr_theta', 'n/a')})",
         f"ortho_reg       : {coherence_cfg.ortho_reg} ({hparam_sources.get('ortho_reg', 'n/a')})",
         f"n_proj_pairwise : {coherence_cfg.n_proj_pairwise} ({hparam_sources.get('n_proj_pairwise', 'n/a')})",
         f"include_pairwise: {coherence_cfg.include_pairwise}",
+        f"lambda_pairwise : {coherence_cfg.lambda_pairwise}",
+        f"include_pairwise_in_score: {coherence_cfg.include_pairwise_in_score}",
         "",
         "Hyperparameter assessment",
         "-------------------------",
@@ -1969,7 +2072,7 @@ def build_interpretation_guide_text(
         "-----------------------",
         "Start with aggregate_metrics.json for the global numbers.",
         "Then inspect 1_per_channel_w2.png to find which fields are most problematic.",
-        "Next inspect 5_pairwise_2d_swd.png and 2_maxswd_theta.png to understand whether the problem is mainly pairwise coupling or higher-order channel mixing.",
+        "Next inspect 2b_joint_projection_spectrum.png, 5_pairwise_2d_swd.png, and 2_maxswd_theta.png to understand whether the problem is mainly pairwise coupling or higher-order channel mixing.",
         "Finally use 3_maxswd_projected_diagnostics.png and 4_worst_direction_spatial.png to see how the worst discrepancy appears in quantile space and physical space.",
         "",
     ])
@@ -1986,7 +2089,7 @@ def save_worst_direction_spatial_map(
     title: str = "",
 ) -> None:
     """
-    Visualize the worst Max-SW projection back in physical space.
+    Visualize the worst joint projection back in physical space.
 
     Panels:
       1) projected reference field
@@ -2190,7 +2293,7 @@ def save_theta_bar(
     top_dirs: int = 4,
 ) -> None:
     """
-    Save the learned Max-SW directions as bar charts.
+    Save the joint projection directions as bar charts.
 
     Directions are optionally sorted by descending per-direction discrepancy.
     """
@@ -2234,6 +2337,49 @@ def save_theta_bar(
     fig.savefig(path, dpi=180)
     plt.close(fig)
 
+
+def save_joint_projection_spectrum(
+    path: Path,
+    per_direction_w2: Any,
+    top_indices: Optional[Any] = None,
+    title: str = "",
+) -> None:
+    """
+    Plot ranked projected W2^2 values for the joint projection directions.
+    """
+    vals = np.asarray(per_direction_w2.detach().cpu() if torch.is_tensor(per_direction_w2) else per_direction_w2, dtype=float).reshape(-1)
+    if vals.size == 0:
+        return
+
+    order = np.argsort(-vals)
+    sorted_vals = vals[order]
+    ranks = np.arange(1, sorted_vals.size + 1)
+
+    top_mask = np.zeros_like(sorted_vals, dtype=bool)
+    if top_indices is not None:
+        top_np = np.asarray(top_indices.detach().cpu() if torch.is_tensor(top_indices) else top_indices, dtype=int).reshape(-1)
+        if top_np.size > 0:
+            top_mask = np.isin(order, top_np)
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    ax.plot(ranks, sorted_vals, color="#4C78A8", linewidth=1.4, marker="o", markersize=3.2, label="projection bank")
+    if np.any(top_mask):
+        ax.scatter(ranks[top_mask], sorted_vals[top_mask], color="#F58518", s=34, zorder=3, label="included in top-k")
+        lo = int(np.min(ranks[top_mask]))
+        hi = int(np.max(ranks[top_mask]))
+        ax.axvspan(lo - 0.5, hi + 0.5, color="#F58518", alpha=0.10, linewidth=0)
+
+    ax.set_xlabel("Projection rank")
+    ax.set_ylabel("Projected W2^2")
+    ax.set_title(title)
+    ax.grid(axis="y", color="0.9", linewidth=0.6)
+    if np.any(top_mask):
+        ax.legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
 def save_projected_sorted_curves(
     path: Path,
     x_gen: torch.Tensor,
@@ -2245,7 +2391,7 @@ def save_projected_sorted_curves(
     add_tail_zoom: bool = True,
 ) -> None:
     """
-    Save a more diagnostic version of the Max-SW projected curve plot.
+    Save a more diagnostic version of the joint projected curve plot.
 
     For the worst directions (ranked by per_direction_w2 if provided), show:
       1) sorted projected curves with shaded absolute gap
@@ -2448,12 +2594,18 @@ def main() -> None:
         "global_dist_hparams": {
             "lambda_marg": coherence_cfg.lambda_marg,
             "lambda_joint": coherence_cfg.lambda_joint,
+            "joint_method": coherence_cfg.joint_method,
+            "joint_top_frac": coherence_cfg.joint_top_frac,
+            "joint_qmc": coherence_cfg.joint_qmc,
+            "include_axes": coherence_cfg.include_axes,
             "num_directions": coherence_cfg.num_directions,
             "n_iter_theta": coherence_cfg.n_iter_theta,
             "lr_theta": coherence_cfg.lr_theta,
             "ortho_reg": coherence_cfg.ortho_reg,
             "n_proj_pairwise": coherence_cfg.n_proj_pairwise,
             "include_pairwise": coherence_cfg.include_pairwise,
+            "lambda_pairwise": coherence_cfg.lambda_pairwise,
+            "include_pairwise_in_score": coherence_cfg.include_pairwise_in_score,
             "seed": coherence_cfg.seed,
         },
         "global_dist_hparam_sources": hparam_sources,
@@ -2500,6 +2652,7 @@ def main() -> None:
     aggregate_pairwise: List[np.ndarray] = []
     aggregate_pairwise_means: List[float] = []
     aggregate_mode_scores: List[float] = []
+    aggregate_base_scores: List[float] = []
     aggregate_joint_scores: List[float] = []
     aggregate_marg_scores: List[float] = []
 
@@ -2541,18 +2694,26 @@ def main() -> None:
             per_channel_w2=result["per_channel_w2"].detach().cpu().numpy(),
             theta=result["theta"].detach().cpu().numpy(),
             per_direction_w2=result["per_direction_w2"].detach().cpu().numpy(),
+            **({"top_indices": result["top_indices"].detach().cpu().numpy()} if "top_indices" in result else {}),
             **({"pairwise_2d_swd": result["pairwise_2d_swd"].detach().cpu().numpy()} if "pairwise_2d_swd" in result else {}),
         )
 
         snap_metrics = {
             "snapshot_index": int(snapshot_index),
             "mode_score": float(result["mode_score"].detach().cpu()),
+            "global_dist_score": float(result["global_dist_score"].detach().cpu()),
+            "base_score": float(result["base_score"].detach().cpu()),
             "marginal_score": float(result["marginal_score"].detach().cpu()),
             "joint_score": float(result["joint_score"].detach().cpu()),
+            "pairwise_score_included": bool(result.get("pairwise_score_included", False)),
+            "lambda_pairwise": float(result.get("lambda_pairwise", coherence_cfg.lambda_pairwise)),
+            "joint_method": str(result.get("joint_method", coherence_cfg.joint_method)),
             "per_channel_w2": result["per_channel_w2"].detach().cpu().tolist(),
             "per_direction_w2": result["per_direction_w2"].detach().cpu().tolist(),
             "theta": result["theta"].detach().cpu().tolist(),
         }
+        if "top_indices" in result:
+            snap_metrics["top_indices"] = result["top_indices"].detach().cpu().tolist()
         if "pairwise_mean" in result:
             snap_metrics["pairwise_mean"] = float(result["pairwise_mean"].detach().cpu())
         save_json(snap_dir / "metrics.json", snap_metrics)
@@ -2561,6 +2722,11 @@ def main() -> None:
         per_channel_np = result["per_channel_w2"].detach().cpu().numpy()
         theta_np = result["theta"].detach().cpu().numpy()
         per_dir_np = result["per_direction_w2"].detach().cpu().numpy()
+        theta_title = (
+            "Top joint projection directions (adaptive Max-SW)"
+            if str(result.get("joint_method", coherence_cfg.joint_method)) == "adaptive_maxswd"
+            else "Top projection-bank directions"
+        )
         save_per_channel_bar(
             snap_dir / "1_per_channel_w2.png",
             per_channel_np,
@@ -2571,9 +2737,15 @@ def main() -> None:
             snap_dir / "2_maxswd_theta.png",
             theta_np,
             FIELD_NAMES,
-            title=f"Max-SW directions | snapshot {snapshot_index} | joint={float(result['joint_score'].detach().cpu()):.3e}",
+            title=f"{theta_title} | snapshot {snapshot_index} | joint={float(result['joint_score'].detach().cpu()):.3e}",
             per_direction_w2=per_dir_np,
             top_dirs=3,
+        )
+        save_joint_projection_spectrum(
+            snap_dir / "2b_joint_projection_spectrum.png",
+            per_direction_w2=result["per_direction_w2"].detach(),
+            top_indices=result.get("top_indices"),
+            title=f"Joint projection spectrum | snapshot {snapshot_index}",
         )
         save_projected_sorted_curves(
             snap_dir / "3_maxswd_projected_diagnostics.png",
@@ -2613,6 +2785,7 @@ def main() -> None:
 
         aggregate_per_channel.append(result["per_channel_w2"].detach().cpu().numpy())
         aggregate_mode_scores.append(float(result["mode_score"].detach().cpu()))
+        aggregate_base_scores.append(float(result["base_score"].detach().cpu()))
         aggregate_joint_scores.append(float(result["joint_score"].detach().cpu()))
         aggregate_marg_scores.append(float(result["marginal_score"].detach().cpu()))
         if "pairwise_2d_swd" in result:
@@ -2630,6 +2803,10 @@ def main() -> None:
         "num_snapshots": len(args.snapshot_indices),
         "mode_score_mean": float(np.mean(aggregate_mode_scores)),
         "mode_score_std": float(np.std(aggregate_mode_scores)),
+        "global_dist_score_mean": float(np.mean(aggregate_mode_scores)),
+        "global_dist_score_std": float(np.std(aggregate_mode_scores)),
+        "base_score_mean": float(np.mean(aggregate_base_scores)),
+        "base_score_std": float(np.std(aggregate_base_scores)),
         "marginal_score_mean": float(np.mean(aggregate_marg_scores)),
         "marginal_score_std": float(np.std(aggregate_marg_scores)),
         "joint_score_mean": float(np.mean(aggregate_joint_scores)),
