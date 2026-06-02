@@ -120,9 +120,9 @@ senseiver_params:
     latent_dim: 256
     num_encoder_layers: 3
     num_self_attn_per_block: 3
-    num_cross_attn_heads: 4
-    num_self_attn_heads: 4
-    dec_num_cross_attn_heads: 4
+    num_cross_attn_heads: 8
+    num_self_attn_heads: 8
+    dec_num_cross_attn_heads: 8
     field_embed_dim: 32
     space_bands: 32
     max_freq: 64.0

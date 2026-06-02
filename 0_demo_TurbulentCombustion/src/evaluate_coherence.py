@@ -11,12 +11,34 @@ Design goal:
 
         Save_PhyCoEval/{coherence_mode}/{timestamp}/
 
-Usage
------
+Quick usage
+-----------
+Run from `0_demo_TurbulentCombustion/`.
+
+The most convenient path is to provide only a checkpoint. The script will infer
+whether it is a main FFM checkpoint, a unified generative baseline, or a unified
+deterministic baseline from `run_config.yaml`, the embedded checkpoint config,
+or the run directory name:
+
+python src/evaluate_coherence.py \
+  --checkpoint-path ./Save_TrainedModel/Baseline_geofno_Stage1_DemoN0_20260528_100704/best.pt \
+  --coherence-mode global_dist \
+  --snapshot-indices 0
+
+Deterministic baselines trained by `train_Det_Baseline.py` are supported:
+    mlp_rbf, senseiver, geofno
+
+Generative baselines trained by `train_Gen_Baseline.py` are supported:
+    latent_fm, s3gm, sit
+
+Main FFM checkpoints trained by `train_pointcloud_ffm.py` are also supported.
+
+Usage details
+-------------
 1) Single-snapshot diagnostic mode
 
 python src/evaluate_coherence.py \
-  --checkpoint <checkpoint_or_run_dir> \
+  --checkpoint-path <checkpoint_or_run_dir_or_pt_file> \
   --coherence-mode global_dist \
   --snapshot-indices 0 \
   --n-obs-list 256 256 \
@@ -61,23 +83,13 @@ The script is intentionally evaluation-only.
 
 Checkpoint families
 -------------------
-By default this script assumes checkpoints trained by train_pointcloud_ffm.py.
-For generative baselines trained by train_Gen_Baseline.py, pass
---baseline-model with one of:
-    latent_fm, s3gm, sit
-
-Example:
-python src/evaluate_coherence.py \
-  --baseline-model latent_fm \
-  --checkpoint-path ./Save_TrainedModel/Baseline_latent_fm_Stage2_DemoN0_20260423_083521/last.pt \
-  --coherence-mode global_dist \
-  --Statistical-Analysis both \
-  --stat-max-snapshots 20 \
-  --n-steps 8
+By default `--baseline-model auto` infers the model family. You can still force
+one of:
+    pointcloud_ffm, latent_fm, s3gm, sit, mlp_rbf, senseiver, geofno
 
 Baseline loading intentionally reuses model_baseline.py so this evaluator does
-not duplicate architecture/checkpoint construction logic from train_Gen_Baseline.py
-and evaluate_Gen_Baseline.py. O
+not duplicate architecture/checkpoint construction logic from the unified
+generative and deterministic baseline trainers/evaluators.
 """
 
 from __future__ import annotations
@@ -196,11 +208,12 @@ def parse_args() -> argparse.Namespace:
                    help="Path to a checkpoint file (.pt) or to a run directory containing best.pt/last.pt.")
     p.add_argument("--checkpoint-path", type=str, default=None,
                    help="Alias used by baseline evaluators; overrides --checkpoint when provided.")
-    p.add_argument("--baseline-model", type=str, default="pointcloud_ffm",
-                   choices=["pointcloud_ffm", "latent_fm", "s3gm", "sit"],
+    p.add_argument("--baseline-model", type=str, default="auto",
+                   choices=["auto", "pointcloud_ffm", "latent_fm", "s3gm", "sit", "mlp_rbf", "senseiver", "geofno"],
                    help=(
-                       "Checkpoint family. Default 'pointcloud_ffm' uses train_pointcloud_ffm.py checkpoints. "
-                       "Use latent_fm/s3gm/sit for train_Gen_Baseline.py checkpoints."
+                       "Checkpoint family. Default 'auto' infers from run_config.yaml, checkpoint config, or run name. "
+                       "Use pointcloud_ffm for train_pointcloud_ffm.py checkpoints; latent_fm/s3gm/sit for "
+                       "train_Gen_Baseline.py checkpoints; mlp_rbf/senseiver/geofno for train_Det_Baseline.py checkpoints."
                    ))
     p.add_argument("--data", type=str, default=None,
                    help="Dataset path. Defaults to the training run's args.json value.")
@@ -280,6 +293,8 @@ def parse_args() -> argparse.Namespace:
                    help="Weight for pairwise_mean when pairwise diagnostics are included in mode_score.")
     p.add_argument("--include-pairwise-in-score", action=argparse.BooleanOptionalAction, default=True,
                    help="Add lambda_pairwise * pairwise_mean into mode_score when pairwise diagnostics are enabled.")
+    p.add_argument("--exclude-axis-projections-when-marginal-included", action=argparse.BooleanOptionalAction, default=True,
+                   help="When canonical axes are in the top-k projection bank, exclude them from joint scoring if lambda_marg is nonzero.")
     p.add_argument("--num-directions", type=int, default=None,
                    help="Number of joint channel directions. Defaults depend on --joint-method.")
     p.add_argument("--n-iter-theta", type=int, default=None,
@@ -441,6 +456,50 @@ def choose_checkpoint(path_str: str) -> Tuple[Path, Path]:
     return pts[0], path
 
 
+def infer_checkpoint_family(
+    checkpoint_path: Path,
+    run_dir: Path,
+    checkpoint: Optional[Dict[str, Any]] = None,
+) -> str:
+    run_cfg_path = run_dir / "run_config.yaml"
+    if run_cfg_path.exists():
+        try:
+            with open(run_cfg_path, "r", encoding="utf-8") as handle:
+                run_cfg = yaml.safe_load(handle) or {}
+            baseline_name = str(run_cfg.get("baseline_model", "")).strip().lower()
+            if baseline_name:
+                return baseline_name
+        except Exception:
+            pass
+
+    if isinstance(checkpoint, dict):
+        baseline_name = str(checkpoint.get("baseline_model", "")).strip().lower()
+        if baseline_name:
+            return baseline_name
+        embedded_cfg = checkpoint.get("config")
+        if isinstance(embedded_cfg, dict):
+            baseline_name = str(embedded_cfg.get("baseline_model", "")).strip().lower()
+            if baseline_name:
+                return baseline_name
+        if checkpoint.get("backbone") is not None or checkpoint.get("method") == "1_rectified_flow":
+            return "pointcloud_ffm"
+
+    run_name = run_dir.name.lower()
+    match = re.match(r"baseline_([^_]+(?:_[^_]+)*)_stage\d+_", run_name)
+    if match:
+        candidate = match.group(1)
+        for known in ("latent_fm", "s3gm", "sit", "mlp_rbf", "senseiver", "geofno"):
+            if candidate == known:
+                return known
+    if run_name.startswith("ffm_tc_pointcloud") or "pointcloud_ffm" in run_name:
+        return "pointcloud_ffm"
+
+    raise ValueError(
+        "Could not infer checkpoint family automatically. Pass --baseline-model explicitly "
+        f"for checkpoint: {checkpoint_path}"
+    )
+
+
 def checkpoint_arg_from_args(args: argparse.Namespace) -> str:
     checkpoint_arg = args.checkpoint_path or args.checkpoint
     if checkpoint_arg is None:
@@ -477,6 +536,13 @@ def load_run_config(run_dir: Path) -> Dict[str, Any]:
     reconstruction stays identical across evaluators. Fall back to args.json
     when the YAML cannot be located.
     """
+    run_cfg_path = run_dir / "run_config.yaml"
+    if run_cfg_path.exists():
+        with open(run_cfg_path, "r", encoding="utf-8") as handle:
+            cfg = yaml.safe_load(handle) or {}
+        if "baseline_model" not in cfg:
+            return normalize_conditioning_args_dict(cfg)
+
     demo_dir = infer_demo_dir(run_dir)
     cfg_dir = demo_dir / "Save_config" / "pointcloud_ffm"
     train_timestamp = _extract_timestamp(run_dir)
@@ -703,6 +769,8 @@ def _baseline_sampling_defaults(cfg: Dict[str, Any]) -> Tuple[Optional[int], Opt
         return (None if steps is None else int(steps), str(sampling_cfg.get("ode_solver", "euler")))
     if cfg["baseline_model"] in {"s3gm", "sit"}:
         return (int(sampling_cfg.get("sampling_N", 50)), str(sampling_cfg.get("ode_solver", "euler")))
+    if cfg["baseline_model"] in {"mlp_rbf", "senseiver", "geofno"}:
+        return None, None
     return None, None
 
 
@@ -889,6 +957,51 @@ def _baseline_reconstruct_s3gm(
     return baseline_lib.grid_to_pointcloud(recon_grid, num_y, num_x)
 
 
+def _baseline_reconstruct_deterministic(
+    bundle: Any,
+    dataset: Any,
+    coords: torch.Tensor,
+    obs_coords: torch.Tensor,
+    obs_values: torch.Tensor,
+    obs_mask: torch.Tensor,
+    obs_indices: torch.Tensor,
+    obs_field_ids: torch.Tensor,
+) -> torch.Tensor:
+    if bundle.baseline_model in {"mlp_rbf", "senseiver"}:
+        return bundle.model(coords, obs_coords, obs_values, obs_mask, obs_field_ids)
+
+    if bundle.baseline_model == "geofno":
+        variant = str(bundle.components.get("variant", "fno"))
+        if variant == "irregular":
+            return bundle.model(coords[..., :2], obs_values, obs_mask, obs_field_ids, obs_indices)
+
+        num_x, num_y = _baseline_num_xy(bundle.config)
+        n_fields = dataset.num_fields
+        n_pts = dataset.num_points
+        obs_value_grid, obs_mask_grid = baseline_lib.build_obs_grid_mask(
+            obs_values,
+            obs_mask,
+            obs_field_ids,
+            obs_indices,
+            n_fields,
+            n_pts,
+            num_y,
+            num_x,
+            num_y,
+            num_x,
+            point_to_grid=bundle.components.get("point_to_grid"),
+        )
+        pred_grid = bundle.model(obs_value_grid, obs_mask_grid)
+        return baseline_lib.grid_to_pointcloud(
+            pred_grid,
+            num_y,
+            num_x,
+            point_to_grid=bundle.components.get("point_to_grid"),
+        )
+
+    raise ValueError(f"Unsupported deterministic baseline_model: {bundle.baseline_model}")
+
+
 def reconstruct_baseline_snapshot(
     model: Any,
     dataset: Any,
@@ -961,6 +1074,18 @@ def reconstruct_baseline_snapshot(
                 obs_field_ids,
                 n_steps,
             )
+        elif bundle.baseline_model in {"mlp_rbf", "senseiver", "geofno"}:
+            with torch.no_grad():
+                recon = _baseline_reconstruct_deterministic(
+                    bundle,
+                    dataset,
+                    coords,
+                    obs_coords,
+                    obs_values,
+                    obs_mask,
+                    obs_indices,
+                    obs_field_ids,
+                )
         else:
             raise ValueError(f"Unsupported baseline_model for coherence reconstruction: {bundle.baseline_model}")
 
@@ -1585,7 +1710,8 @@ def load_baseline_context(
     device: torch.device,
 ) -> Tuple[Path, Path, Dict[str, Any], Any, Any, Callable[[str], Any], int, Optional[str]]:
     """
-    Load a train_Gen_Baseline.py checkpoint using model_baseline.py adapters.
+    Load a unified generative or deterministic baseline checkpoint using
+    model_baseline.py adapters.
     """
     if baseline_lib is None:
         raise ImportError("model_baseline.py could not be imported; baseline checkpoint evaluation is unavailable.")
@@ -1604,11 +1730,12 @@ def load_baseline_context(
         )
 
     requested_baseline = str(args.baseline_model).strip().lower()
-    if requested_baseline != cfg["baseline_model"]:
+    if requested_baseline != "auto" and requested_baseline != cfg["baseline_model"]:
         print(
             f"[warning] --baseline-model={requested_baseline} does not match run_config baseline_model={cfg['baseline_model']}; "
             "using the run_config value."
         )
+    args.baseline_model = cfg["baseline_model"]
 
     if cfg["baseline_model"] == "latent_fm" and int(cfg["training_stage"]) == 2:
         ae_checkpoint = checkpoint.get("ae_checkpoint") if isinstance(checkpoint, dict) else None
@@ -1923,6 +2050,7 @@ def resolve_global_dist_config(
         include_axes=bool(args.include_axes),
         lambda_pairwise=float(args.lambda_pairwise),
         include_pairwise_in_score=bool(args.include_pairwise_in_score),
+        exclude_axis_projections_when_marginal_included=bool(args.exclude_axis_projections_when_marginal_included),
     )
     return cfg, sources, notes
 
@@ -1983,6 +2111,9 @@ def build_interpretation_guide_text(
         "",
         "base_score",
         "  lambda_marg * marginal_score + lambda_joint * joint_score.",
+        "  When canonical coordinate axes are included in the fixed projection bank and marginal_score is active,",
+        "  those axis projections are kept as diagnostics but excluded from joint_score to avoid double-counting",
+        "  the same single-field distribution mismatch.",
         "  This excludes the optional pairwise contribution.",
         "",
         "marginal_score",
@@ -2052,6 +2183,7 @@ def build_interpretation_guide_text(
         f"joint_top_frac  : {coherence_cfg.joint_top_frac}",
         f"joint_qmc       : {coherence_cfg.joint_qmc}",
         f"include_axes    : {coherence_cfg.include_axes}",
+        f"exclude_axis_projections_when_marginal_included: {coherence_cfg.exclude_axis_projections_when_marginal_included}",
         f"num_directions  : {coherence_cfg.num_directions} ({hparam_sources.get('num_directions', 'n/a')})",
         f"n_iter_theta    : {coherence_cfg.n_iter_theta} ({hparam_sources.get('n_iter_theta', 'n/a')})",
         f"lr_theta        : {coherence_cfg.lr_theta} ({hparam_sources.get('lr_theta', 'n/a')})",
@@ -2086,6 +2218,7 @@ def save_worst_direction_spatial_map(
     theta: torch.Tensor,
     field_names: Sequence[str],
     per_direction_w2: Optional[torch.Tensor] = None,
+    direction_mask: Optional[torch.Tensor] = None,
     title: str = "",
 ) -> None:
     """
@@ -2100,7 +2233,12 @@ def save_worst_direction_spatial_map(
 
     theta_np = theta.detach().cpu().numpy()
     if per_direction_w2 is not None:
-        dir_idx = int(torch.argmax(per_direction_w2).item())
+        vals = per_direction_w2.detach().clone()
+        if direction_mask is not None:
+            mask = direction_mask.detach().to(device=vals.device, dtype=torch.bool)
+            if mask.shape == vals.shape and torch.any(mask):
+                vals = vals.masked_fill(~mask, -torch.inf)
+        dir_idx = int(torch.argmax(vals).item())
         dir_w2 = float(per_direction_w2[dir_idx].detach().cpu())
     else:
         dir_idx = 0
@@ -2290,6 +2428,8 @@ def save_theta_bar(
     field_names: Sequence[str],
     title: str,
     per_direction_w2: Optional[np.ndarray] = None,
+    top_indices: Optional[Any] = None,
+    direction_mask: Optional[Any] = None,
     top_dirs: int = 4,
 ) -> None:
     """
@@ -2298,12 +2438,22 @@ def save_theta_bar(
     Directions are optionally sorted by descending per-direction discrepancy.
     """
     k_total = theta.shape[0]
-    if per_direction_w2 is not None:
+    if top_indices is not None:
+        top_np = np.asarray(top_indices.detach().cpu() if torch.is_tensor(top_indices) else top_indices, dtype=int).reshape(-1)
+        order = top_np[(top_np >= 0) & (top_np < k_total)]
+    elif per_direction_w2 is not None:
         order = np.argsort(-per_direction_w2)
     else:
         order = np.arange(k_total)
 
+    if direction_mask is not None and top_indices is None:
+        mask_np = np.asarray(direction_mask.detach().cpu() if torch.is_tensor(direction_mask) else direction_mask, dtype=bool).reshape(-1)
+        if mask_np.size == k_total and np.any(mask_np):
+            order = np.asarray([idx for idx in order if mask_np[idx]], dtype=int)
+
     order = order[: min(top_dirs, k_total)]
+    if order.size == 0:
+        return
 
     fig, axes = plt.subplots(len(order), 1, figsize=(8, max(3, 2.2 * len(order))), constrained_layout=True)
     if len(order) == 1:
@@ -2342,6 +2492,8 @@ def save_joint_projection_spectrum(
     path: Path,
     per_direction_w2: Any,
     top_indices: Optional[Any] = None,
+    axis_direction_mask: Optional[Any] = None,
+    score_mask: Optional[Any] = None,
     title: str = "",
 ) -> None:
     """
@@ -2361,8 +2513,33 @@ def save_joint_projection_spectrum(
         if top_np.size > 0:
             top_mask = np.isin(order, top_np)
 
+    axis_rank_mask = np.zeros_like(sorted_vals, dtype=bool)
+    if axis_direction_mask is not None:
+        axis_np = np.asarray(axis_direction_mask.detach().cpu() if torch.is_tensor(axis_direction_mask) else axis_direction_mask, dtype=bool).reshape(-1)
+        if axis_np.size == vals.size:
+            axis_rank_mask = axis_np[order]
+
+    excluded_rank_mask = np.zeros_like(sorted_vals, dtype=bool)
+    if score_mask is not None:
+        score_np = np.asarray(score_mask.detach().cpu() if torch.is_tensor(score_mask) else score_mask, dtype=bool).reshape(-1)
+        if score_np.size == vals.size:
+            excluded_rank_mask = ~score_np[order]
+
     fig, ax = plt.subplots(figsize=(7.2, 4.0))
     ax.plot(ranks, sorted_vals, color="#4C78A8", linewidth=1.4, marker="o", markersize=3.2, label="projection bank")
+    if np.any(axis_rank_mask):
+        ax.scatter(ranks[axis_rank_mask], sorted_vals[axis_rank_mask], color="#BAB0AC", s=38, zorder=3, label="canonical axes")
+    if np.any(excluded_rank_mask):
+        ax.scatter(
+            ranks[excluded_rank_mask],
+            sorted_vals[excluded_rank_mask],
+            facecolors="none",
+            edgecolors="#666666",
+            s=58,
+            linewidths=1.1,
+            zorder=4,
+            label="excluded from joint score",
+        )
     if np.any(top_mask):
         ax.scatter(ranks[top_mask], sorted_vals[top_mask], color="#F58518", s=34, zorder=3, label="included in top-k")
         lo = int(np.min(ranks[top_mask]))
@@ -2373,7 +2550,7 @@ def save_joint_projection_spectrum(
     ax.set_ylabel("Projected W2^2")
     ax.set_title(title)
     ax.grid(axis="y", color="0.9", linewidth=0.6)
-    if np.any(top_mask):
+    if np.any(top_mask) or np.any(axis_rank_mask) or np.any(excluded_rank_mask):
         ax.legend(frameon=False)
     fig.tight_layout()
     fig.savefig(path, dpi=180)
@@ -2386,6 +2563,8 @@ def save_projected_sorted_curves(
     x_ref: torch.Tensor,
     theta: torch.Tensor,
     per_direction_w2: Optional[torch.Tensor] = None,
+    top_indices: Optional[torch.Tensor] = None,
+    direction_mask: Optional[torch.Tensor] = None,
     title: str = "",
     top_dirs: int = 3,
     add_tail_zoom: bool = True,
@@ -2402,12 +2581,22 @@ def save_projected_sorted_curves(
 
     k_total = proj_gen.shape[1]
 
-    if per_direction_w2 is not None:
+    if top_indices is not None:
+        order = top_indices.detach().cpu().numpy().astype(int).reshape(-1)
+        order = order[(order >= 0) & (order < k_total)]
+    elif per_direction_w2 is not None:
         order = np.argsort(-per_direction_w2.detach().cpu().numpy())
     else:
         order = np.arange(k_total)
 
+    if direction_mask is not None and top_indices is None:
+        mask_np = direction_mask.detach().cpu().numpy().astype(bool).reshape(-1)
+        if mask_np.size == k_total and np.any(mask_np):
+            order = np.asarray([idx for idx in order if mask_np[idx]], dtype=int)
+
     order = order[: min(top_dirs, k_total)]
+    if order.size == 0:
+        return
 
     fig, axes = plt.subplots(
         2 * len(order),
@@ -2474,13 +2663,17 @@ def main() -> None:
     device = torch.device(args.device or ("cuda:0" if torch.cuda.is_available() else "cpu"))
 
     dataset_builder: Optional[Callable[[str], Any]] = None
+    checkpoint_path, run_dir = choose_checkpoint(checkpoint_arg)
+    checkpoint_for_infer: Optional[Dict[str, Any]] = None
+    if args.baseline_model == "auto":
+        try:
+            checkpoint_for_infer = baseline_lib.safe_torch_load(checkpoint_path, map_location="cpu") if baseline_lib is not None else torch.load(checkpoint_path, map_location="cpu")
+        except Exception:
+            checkpoint_for_infer = None
+        args.baseline_model = infer_checkpoint_family(checkpoint_path, run_dir, checkpoint_for_infer)
+        print(f"[*] Auto-detected checkpoint family: {args.baseline_model}")
+
     if args.baseline_model == "pointcloud_ffm":
-        checkpoint_path, run_dir = choose_checkpoint(checkpoint_arg)
-        if run_dir.name.startswith("Baseline_"):
-            print(
-                "[warning] The checkpoint path looks like a train_Gen_Baseline.py run, "
-                "but --baseline-model was not set. Defaulting to pointcloud_ffm loading."
-            )
         cfg = load_run_config(run_dir)
         demo_dir = infer_demo_dir(run_dir)
 
@@ -2541,7 +2734,7 @@ def main() -> None:
             device=device,
         )
         demo_dir = infer_demo_dir(run_dir)
-        data_path = Path(cfg["shared"]["paths"]["data_path"])
+        data_path = baseline_lib.ensure_absolute(cfg["shared"]["paths"]["data_path"]) if baseline_lib is not None else Path(cfg["shared"]["paths"]["data_path"])
         stats_path = run_dir / "dataset_stats.pt"
         shared_cond = cfg["shared"]["conditioning"]
         cond_fields = ensure_list(args.cond_fields) if args.cond_fields is not None else ensure_list(shared_cond.get("vis_cond_fields"))
@@ -2598,6 +2791,7 @@ def main() -> None:
             "joint_top_frac": coherence_cfg.joint_top_frac,
             "joint_qmc": coherence_cfg.joint_qmc,
             "include_axes": coherence_cfg.include_axes,
+            "exclude_axis_projections_when_marginal_included": coherence_cfg.exclude_axis_projections_when_marginal_included,
             "num_directions": coherence_cfg.num_directions,
             "n_iter_theta": coherence_cfg.n_iter_theta,
             "lr_theta": coherence_cfg.lr_theta,
@@ -2695,6 +2889,9 @@ def main() -> None:
             theta=result["theta"].detach().cpu().numpy(),
             per_direction_w2=result["per_direction_w2"].detach().cpu().numpy(),
             **({"top_indices": result["top_indices"].detach().cpu().numpy()} if "top_indices" in result else {}),
+            **({"top_values": result["top_values"].detach().cpu().numpy()} if "top_values" in result else {}),
+            **({"axis_direction_mask": result["axis_direction_mask"].detach().cpu().numpy()} if "axis_direction_mask" in result else {}),
+            **({"joint_score_mask": result["joint_score_mask"].detach().cpu().numpy()} if "joint_score_mask" in result else {}),
             **({"pairwise_2d_swd": result["pairwise_2d_swd"].detach().cpu().numpy()} if "pairwise_2d_swd" in result else {}),
         )
 
@@ -2714,6 +2911,14 @@ def main() -> None:
         }
         if "top_indices" in result:
             snap_metrics["top_indices"] = result["top_indices"].detach().cpu().tolist()
+        if "top_values" in result:
+            snap_metrics["top_values"] = result["top_values"].detach().cpu().tolist()
+        if "axis_direction_mask" in result:
+            snap_metrics["axis_direction_mask"] = result["axis_direction_mask"].detach().cpu().tolist()
+        if "joint_score_mask" in result:
+            snap_metrics["joint_score_mask"] = result["joint_score_mask"].detach().cpu().tolist()
+        if "exclude_axes_from_score" in result:
+            snap_metrics["exclude_axes_from_score"] = bool(result["exclude_axes_from_score"].detach().cpu().item())
         if "pairwise_mean" in result:
             snap_metrics["pairwise_mean"] = float(result["pairwise_mean"].detach().cpu())
         save_json(snap_dir / "metrics.json", snap_metrics)
@@ -2739,12 +2944,16 @@ def main() -> None:
             FIELD_NAMES,
             title=f"{theta_title} | snapshot {snapshot_index} | joint={float(result['joint_score'].detach().cpu()):.3e}",
             per_direction_w2=per_dir_np,
+            top_indices=result.get("top_indices"),
+            direction_mask=result.get("joint_score_mask"),
             top_dirs=3,
         )
         save_joint_projection_spectrum(
             snap_dir / "2b_joint_projection_spectrum.png",
             per_direction_w2=result["per_direction_w2"].detach(),
             top_indices=result.get("top_indices"),
+            axis_direction_mask=result.get("axis_direction_mask"),
+            score_mask=result.get("joint_score_mask"),
             title=f"Joint projection spectrum | snapshot {snapshot_index}",
         )
         save_projected_sorted_curves(
@@ -2753,6 +2962,8 @@ def main() -> None:
             x_ref=x_ref.detach(),
             theta=result["theta"].detach(),
             per_direction_w2=result["per_direction_w2"].detach(),
+            top_indices=result.get("top_indices"),
+            direction_mask=result.get("joint_score_mask"),
             title=f"Projected diagnostics | snapshot {snapshot_index} | joint={float(result['joint_score'].detach().cpu()):.3e}",
             top_dirs=3,
             add_tail_zoom=True,
@@ -2765,6 +2976,7 @@ def main() -> None:
             theta=result["theta"].detach(),
             field_names=FIELD_NAMES,
             per_direction_w2=result["per_direction_w2"].detach(),
+            direction_mask=result.get("joint_score_mask"),
             title=f"Worst projection spatial map | snapshot {snapshot_index}",
         )
         if "pairwise_2d_swd" in result:

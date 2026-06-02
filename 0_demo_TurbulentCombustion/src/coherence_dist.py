@@ -135,7 +135,7 @@ def make_projection_bank(
     device: torch.device,
     dtype: torch.dtype,
     seed: Optional[int] = None,
-    include_axes: bool = True,
+    include_axes: bool = False,
     qmc: bool = True,
 ) -> torch.Tensor:
     """
@@ -189,7 +189,8 @@ def fixed_bank_topk_swd(
     num_directions: int = 64,
     top_frac: float = 0.10,
     seed: Optional[int] = None,
-    include_axes: bool = True,
+    include_axes: bool = False,
+    exclude_axes_from_score: bool = False,
     qmc: bool = True,
 ) -> Dict[str, torch.Tensor]:
     """
@@ -215,14 +216,37 @@ def fixed_bank_topk_swd(
     proj_gen = project_channels(x_gen, theta)
     proj_ref = project_channels(x_ref, theta)
     per_dir = empirical_w2_1d_columns(proj_gen, proj_ref)
-    k_top = max(1, min(per_dir.numel(), int(math.ceil(float(top_frac) * per_dir.numel()))))
-    top_vals, top_indices = torch.topk(per_dir, k=k_top, largest=True, sorted=True)
+
+    axis_mask = torch.zeros(per_dir.shape, device=x_gen.device, dtype=torch.bool)
+    if include_axes:
+        n_axes = min(int(num_directions), int(n_fields))
+        axis_mask[:n_axes] = True
+
+    score_mask = torch.ones_like(axis_mask, dtype=torch.bool)
+    if exclude_axes_from_score:
+        score_mask = ~axis_mask
+
+    eligible_indices = torch.nonzero(score_mask, as_tuple=False).reshape(-1)
+    if eligible_indices.numel() > 0:
+        eligible_vals = per_dir[eligible_indices]
+        k_top = max(1, min(eligible_vals.numel(), int(math.ceil(float(top_frac) * eligible_vals.numel()))))
+        top_vals, top_local_indices = torch.topk(eligible_vals, k=k_top, largest=True, sorted=True)
+        top_indices = eligible_indices[top_local_indices]
+        score = top_vals.mean()
+    else:
+        top_vals = per_dir.new_empty((0,))
+        top_indices = torch.empty((0,), device=x_gen.device, dtype=torch.long)
+        score = per_dir.new_tensor(0.0)
 
     return {
-        "score": top_vals.mean(),
+        "score": score,
         "per_direction_w2": per_dir,
         "theta": theta,
         "top_indices": top_indices,
+        "top_values": top_vals,
+        "axis_direction_mask": axis_mask,
+        "joint_score_mask": score_mask,
+        "exclude_axes_from_score": torch.tensor(bool(exclude_axes_from_score), device=x_gen.device),
         "top_frac": torch.tensor(float(top_frac), device=x_gen.device, dtype=x_gen.dtype),
     }
 
@@ -387,9 +411,10 @@ class GlobalDistConfig:
     joint_method: str = "topk_swd"
     joint_top_frac: float = 0.10
     joint_qmc: bool = True
-    include_axes: bool = True
+    include_axes: bool = False
     lambda_pairwise: float = 0.25
     include_pairwise_in_score: bool = True
+    exclude_axis_projections_when_marginal_included: bool = True
 
 
 def compute_global_distribution_coherence(
@@ -434,6 +459,11 @@ def compute_global_distribution_coherence(
             top_frac=cfg.joint_top_frac,
             seed=cfg.seed,
             include_axes=cfg.include_axes,
+            exclude_axes_from_score=(
+                cfg.include_axes
+                and cfg.exclude_axis_projections_when_marginal_included
+                and float(cfg.lambda_marg) != 0.0
+            ),
             qmc=cfg.joint_qmc,
         )
     else:
@@ -456,6 +486,14 @@ def compute_global_distribution_coherence(
         out["theta_init"] = joint["theta_init"]
     if "top_indices" in joint:
         out["top_indices"] = joint["top_indices"]
+    if "top_values" in joint:
+        out["top_values"] = joint["top_values"]
+    if "axis_direction_mask" in joint:
+        out["axis_direction_mask"] = joint["axis_direction_mask"]
+    if "joint_score_mask" in joint:
+        out["joint_score_mask"] = joint["joint_score_mask"]
+    if "exclude_axes_from_score" in joint:
+        out["exclude_axes_from_score"] = joint["exclude_axes_from_score"]
     if "top_frac" in joint:
         out["top_frac"] = joint["top_frac"]
 

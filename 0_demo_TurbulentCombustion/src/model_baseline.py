@@ -6110,6 +6110,19 @@ class BaseBaselineAdapter(abc.ABC):
         yield
 
 
+def _checkpoint_model_state(checkpoint: dict, model_name: str) -> dict:
+    if "model" not in checkpoint:
+        raise KeyError(f"{model_name} checkpoint is missing required 'model' state_dict.")
+    model_state = checkpoint["model"]
+    if not isinstance(model_state, dict):
+        raise TypeError(
+            f"{model_name} checkpoint['model'] must be a state_dict, got {type(model_state)!r}."
+        )
+    model_state = dict(model_state)
+    model_state.pop("_metadata", None)
+    return model_state
+
+
 class S3GMAdapter(BaseBaselineAdapter):
     name = "s3gm"
 
@@ -6191,7 +6204,7 @@ class S3GMAdapter(BaseBaselineAdapter):
         )
 
     def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
-        bundle.model.load_state_dict(checkpoint["model"])
+        bundle.model.load_state_dict(_checkpoint_model_state(checkpoint, "S3GM"))
         if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
             bundle.optimizer.load_state_dict(checkpoint["optimizer"])
         if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:
@@ -6879,7 +6892,7 @@ class SenseiverAdapter(BaseBaselineAdapter):
         )
 
     def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
-        bundle.model.load_state_dict(checkpoint["model"])
+        bundle.model.load_state_dict(_checkpoint_model_state(checkpoint, "Senseiver"))
         if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
             bundle.optimizer.load_state_dict(checkpoint["optimizer"])
         if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:
@@ -6968,7 +6981,7 @@ class MLPRBFAdapter(BaseBaselineAdapter):
         )
 
     def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
-        bundle.model.load_state_dict(checkpoint["model"])
+        bundle.model.load_state_dict(_checkpoint_model_state(checkpoint, "MLP-RBF"))
         if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
             bundle.optimizer.load_state_dict(checkpoint["optimizer"])
         if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:
@@ -7087,7 +7100,7 @@ class GeoFNOAdapter(BaseBaselineAdapter):
         )
 
     def load_checkpoint(self, bundle: BaselineBundle, checkpoint: dict) -> None:
-        bundle.model.load_state_dict(checkpoint["model"])
+        bundle.model.load_state_dict(_checkpoint_model_state(checkpoint, "Geo-FNO"))
         if bundle.optimizer is not None and checkpoint.get("optimizer") is not None:
             bundle.optimizer.load_state_dict(checkpoint["optimizer"])
         if bundle.scheduler is not None and checkpoint.get("scheduler") is not None:

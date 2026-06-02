@@ -5,12 +5,12 @@
 #                         Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
 
 #----------------------------------------------------------
-# fno baseline retrained in 0526
-# Using temperature + velocity + pressure + CO sensors 
+# Perceiver baseline retrained in 0601
+# Using temperature only as conditioning field, with 192-384 sensors, and 256 sensors for visualization.
 #----------------------------------------------------------
 
-Demo_Num: 2
-device_ids: [1]
+Demo_Num: 4
+device_ids: [0]
 
 data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
@@ -27,7 +27,7 @@ num_workers : 4
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "fno" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+backbone: "perceiver" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -37,6 +37,10 @@ cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
+
+USE_FOURIER_PE: true   # If true, point_encoder uses Fourier positional coordinate features instead of raw coords.
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf
@@ -98,12 +102,12 @@ save_every : 500         # Saving reconstruction visualizations after save_every
 n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # Setting up the conditioning process
-cond_fields :   [1, 2, 3, 4]      # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
-n_obs_min_list: [192, 192, 192, 192]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
-n_obs_max_list: [384, 384, 384, 384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
+cond_fields :   [2]      # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+n_obs_min_list: [128]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
+n_obs_max_list: [384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
 
 vis_cond_fields:            # help="Visualization conditioned fields. Defaults to cond_fields if None
-vis_n_obs_list: [256, 256, 256, 256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
+vis_n_obs_list: [256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
 
 # ===== Rectified Flow generation controls =====
 ode_solver : "euler"
