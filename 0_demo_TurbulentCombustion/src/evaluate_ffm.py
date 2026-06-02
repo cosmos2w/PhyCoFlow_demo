@@ -1,4 +1,15 @@
 """
+Standalone evaluator for base PointCloudFFM and RAM-finetuned checkpoints.
+
+Quick usage:
+    python src/evaluate_ffm.py --Demo-Num 4 --split test --checkpoint best
+    python src/evaluate_ffm.py --run-dir Save_TrainedModel/ram_tc_pointcloud_DemoN20_<timestamp>
+
+Loading structure:
+    - Base checkpoints rebuild the model from the recovered run config.
+    - RAM checkpoints rebuild the architecture from checkpoint["source_config"],
+      then load checkpoint["model"], which is the eval EMA model.
+
 Sparse-observation consistency usage:
 
 - default_hard is the default and preserves current pointwise hard replacement behavior.
@@ -48,10 +59,14 @@ def parse_args():
         "Standalone evaluator for trained FFM models.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--Demo-Num", dest="Demo_Num", type=int, required=True, 
-                   help="Demo ID to recover.")
+    p.add_argument("--Demo-Num", dest="Demo_Num", type=int, default=None,
+                   help="Demo ID to recover when --run-dir is not provided.")
     p.add_argument("--demo-root", type=str, default=".", 
                    help="Project/demo root directory.")
+    p.add_argument("--run-dir", type=str, default=None,
+                   help="Explicit run directory. Works for base and RAM-finetuned checkpoints.")
+    p.add_argument("--config-path", type=str, default=None,
+                   help="Optional explicit YAML/JSON config path for the run.")
     p.add_argument("--split", type=str, default="test", 
                    choices=["train", "val", "test"])
     p.add_argument("--snapshot-index", type=int, default=0, 
@@ -142,6 +157,28 @@ def _extract_timestamp(path: Path) -> Optional[str]:
     if m is None:
         m = re.search(r"demo_N(\d+)_(\d{8}_\d{6})", path.name)
     return m.group(2) if m else None
+
+
+def _extract_demo_num(path: Path) -> Optional[int]:
+    m = re.search(r"DemoN(\d+)", path.name)
+    if m is None:
+        m = re.search(r"demo_N(\d+)", path.name)
+    return int(m.group(1)) if m else None
+
+
+def _resolve_demo_path(demo_root: Path, path_like: str) -> Path:
+    path = Path(path_like)
+    return path if path.is_absolute() else demo_root / path
+
+
+def _load_config_file(path: Path) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"Config path does not exist: {path}")
+    if path.suffix.lower() == ".json":
+        with open(path, "r") as f:
+            return json.load(f) or {}
+    with open(path, "r") as f:
+        return yaml.safe_load(f) or {}
 
 
 def _find_latest_yaml(cfg_dir: Path, demo_num: int) -> Path:
@@ -691,27 +728,55 @@ def main():
     demo_root = Path(args.demo_root).resolve()
     cfg_dir = demo_root / "Save_config" / "pointcloud_ffm"
 
-    try:
-        yaml_path = _find_latest_yaml(cfg_dir, args.Demo_Num)
-    except FileNotFoundError as e:
-        print(f"[Warning: !] {e}")
-        raise SystemExit(1)
+    # Resolve run/config first.  The old Demo_Num path is preserved, while
+    # --run-dir allows evaluating RAM outputs and hand-picked base runs.
+    if args.run_dir is not None:
+        model_root = _resolve_demo_path(demo_root, args.run_dir)
+        if not model_root.exists():
+            print(f"[Warning: !] Run directory not found: {model_root}")
+            raise SystemExit(1)
 
-    with open(yaml_path, "r") as f:
-        cfg = yaml.safe_load(f) or {}
-    cfg = _normalize_eval_config(cfg)
+        if args.config_path is not None:
+            yaml_path = _resolve_demo_path(demo_root, args.config_path)
+        elif (model_root / "run_config.yaml").exists():
+            yaml_path = model_root / "run_config.yaml"
+        elif (model_root / "args.json").exists():
+            yaml_path = model_root / "args.json"
+        else:
+            yaml_path = model_root / "run_config.yaml"
 
-    train_timestamp = _extract_timestamp(yaml_path)
-    if train_timestamp is None:
-        print(f"[Warning: !] Could not parse timestamp from config filename: {yaml_path.name}")
-        raise SystemExit(1)
+        cfg = _load_config_file(yaml_path) if yaml_path.exists() else {}
+        train_timestamp = _extract_timestamp(model_root) or _extract_timestamp(yaml_path) or "manual"
+        demo_num = args.Demo_Num if args.Demo_Num is not None else (_extract_demo_num(model_root) or 0)
+    else:
+        if args.Demo_Num is None:
+            print("[Warning: !] Either --Demo-Num or --run-dir is required.")
+            raise SystemExit(1)
 
-    save_dir_cfg = Path(cfg.get("save_dir", "Save_TrainedModel/ffm_tc_pointcloud"))
-    model_root = demo_root / save_dir_cfg.parent / f"{save_dir_cfg.name}_DemoN{args.Demo_Num}_{train_timestamp}"
+        try:
+            if args.config_path is not None:
+                yaml_path = _resolve_demo_path(demo_root, args.config_path)
+            else:
+                yaml_path = _find_latest_yaml(cfg_dir, args.Demo_Num)
+        except FileNotFoundError as e:
+            print(f"[Warning: !] {e}")
+            raise SystemExit(1)
 
-    if not model_root.exists():
-        print(f"[Warning: !] Matching model directory not found: {model_root}")
-        raise SystemExit(1)
+        cfg = _load_config_file(yaml_path)
+        cfg = _normalize_eval_config(cfg)
+        train_timestamp = _extract_timestamp(yaml_path)
+        if train_timestamp is None:
+            print(f"[Warning: !] Could not parse timestamp from config filename: {yaml_path.name}")
+            raise SystemExit(1)
+
+        save_dir_cfg = Path(cfg.get("save_dir", "Save_TrainedModel/ffm_tc_pointcloud"))
+        save_root = save_dir_cfg.parent if save_dir_cfg.is_absolute() else demo_root / save_dir_cfg.parent
+        model_root = save_root / f"{save_dir_cfg.name}_DemoN{args.Demo_Num}_{train_timestamp}"
+        demo_num = int(args.Demo_Num)
+
+        if not model_root.exists():
+            print(f"[Warning: !] Matching model directory not found: {model_root}")
+            raise SystemExit(1)
 
     ckpt_path = model_root / f"{args.checkpoint}.pt"
     if not ckpt_path.exists():
@@ -720,8 +785,32 @@ def main():
 
     device = torch.device(args.device if args.device is not None else ("cuda:0" if torch.cuda.is_available() else "cpu"))
 
+    try:
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    except pickle.UnpicklingError:
+        print("[Warning: !] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+    run_cfg = _normalize_eval_config(cfg)
+    if isinstance(ckpt, dict) and ckpt.get("finetune_method") == "RAM" and ckpt.get("source_config") is not None:
+        # RAM configs contain only fine-tuning controls, so architecture must
+        # come from the checkpoint's source_config.
+        source_cfg = _normalize_eval_config(dict(ckpt["source_config"]))
+        finetune_cfg = dict(ckpt.get("finetune_config") or run_cfg)
+        eval_cfg = dict(source_cfg)
+        eval_cfg.update({key: value for key, value in finetune_cfg.items() if value is not None})
+        cfg = _normalize_eval_config(eval_cfg)
+        build_cfg = source_cfg
+        print("[*] RAM checkpoint detected; rebuilding architecture from source_config.")
+    else:
+        cfg = run_cfg
+        build_cfg = run_cfg
+
+    data_path = cfg.get("data", build_cfg.get("data", "Dataset/Merged_CH4COTU1P.h5"))
+    data_path = str(_resolve_demo_path(demo_root, data_path))
+
     dataset = TurbulentCombustionH5Dataset(
-        cfg.get("data", "Dataset/Merged_CH4COTU1P.h5"),
+        data_path,
         split=args.split,
         train_ratio=cfg.get("train_ratio", 0.9),
         seed=cfg.get("seed", 42),
@@ -729,8 +818,8 @@ def main():
         stats_path=str(model_root / "dataset_stats.pt"),
     )
 
-    if cfg.get("backbone") == "fno":
-        grid_info = validate_regular_grid_compatibility(dataset, cfg.get("Num_x", None), cfg.get("Num_y", None))
+    if build_cfg.get("backbone") == "fno":
+        grid_info = validate_regular_grid_compatibility(dataset, build_cfg.get("Num_x", None), build_cfg.get("Num_y", None))
         print(
             "[*] FNO grid detected: "
             f"{grid_info['unique_x']} unique x values x {grid_info['unique_y']} unique y values "
@@ -745,17 +834,11 @@ def main():
     try:
         # Build and restore on CPU first to avoid temporarily holding both the
         # checkpoint tensors and the live model weights on the target device.
-        model = _build_model(cfg, dataset)
+        model = _build_model(build_cfg, dataset)
     except Exception as e:
         print(f"[Warning: !] Model construction failed: {e}")
         raise SystemExit(1)
 
-    try:
-        ckpt = torch.load(ckpt_path, map_location="cpu")
-    except pickle.UnpicklingError:
-        print("[Warning: !] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    
     state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
 
     # Some checkpoints may carry "_metadata" as a literal key after serialization.
@@ -768,7 +851,7 @@ def main():
         model.load_state_dict(state_dict, strict=True)
     except Exception as e:
         print(f"[Warning: !] Checkpoint is incompatible with the reconstructed model: {e}")
-        if cfg.get("backbone") == "fno":
+        if build_cfg.get("backbone") == "fno":
             print(
                 "[Warning: !] FNO conditioning now uses normalized, support-weighted, "
                 "and soft-support channels (4 * n_fields + 1 inputs). Older FNO "
@@ -802,7 +885,7 @@ def main():
     from datetime import datetime
     eval_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    out_dir = demo_root / "Save_reconstruction_files" / "ForOfflineEvaluation" / f"eval_N{args.Demo_Num}_{eval_timestamp}_from_{train_timestamp}"
+    out_dir = demo_root / "Save_reconstruction_files" / "ForOfflineEvaluation" / f"eval_N{demo_num}_{eval_timestamp}_from_{train_timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     final_clamp = not args.no_obs_consistency_final_clamp
@@ -975,7 +1058,7 @@ def main():
                     np.savez_compressed(npz_path, **analysis_payload)
 
     summary = {
-        "demo_num": int(args.Demo_Num),
+        "demo_num": int(demo_num),
         "yaml_path": str(yaml_path),
         "model_root": str(model_root),
         "checkpoint": str(ckpt_path),

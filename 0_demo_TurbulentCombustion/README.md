@@ -200,6 +200,48 @@ python src/evaluate_ffm.py \
   --save-analysis-npz
 ```
 
+## RAM Fine-Tuning
+
+RAM, or Reinforce Adjoint Matching, is a post-training fine-tune path for an
+existing PointCloudFFM checkpoint. It keeps the rectified-flow convention used
+by the base model:
+
+```text
+x_t = (1 - t) * z + t * x
+target velocity = x - z
+```
+
+Run RAM fine-tuning from `0_demo_TurbulentCombustion/`:
+
+```bash
+python src/training_finetune.py \
+  --config Save_config/config_pointcloud_ffm_ram.yaml \
+  --Demo-Num 20
+```
+
+Evaluate a RAM-finetuned checkpoint with the same evaluator:
+
+```bash
+python src/evaluate_ffm.py \
+  --run-dir Save_TrainedModel/ram_tc_pointcloud_DemoN20_<timestamp> \
+  --split test \
+  --snapshot-index 0 \
+  --checkpoint best \
+  --n-steps-generation 4 \
+  --obs-consistency-mode endpoint_smooth \
+  --extra-metrics ssim grad spectrum \
+  --save-analysis-npz
+```
+
+RAM outputs are stored under:
+
+```text
+Save_TrainedModel/ram_tc_pointcloud_DemoN<id>_<timestamp>/
+```
+
+The `model` entry in `best.pt` and `last.pt` is the evaluation EMA model, so
+`src/evaluate_ffm.py` can load RAM checkpoints without a separate evaluator.
+
 ## 2. Unified Generative Baselines
 
 In addition to the main point-cloud FFM workflow, this directory also contains a separate unified pipeline for several generative baselines:

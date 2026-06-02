@@ -1,12 +1,18 @@
 """
 Utilities for evaluating data-driven physical coherence terms.
 
+Quick usage:
+    result = compute_coherence("global_dist", x_gen, x_ref, cfg=GlobalDistConfig())
+    cost, metrics = compute_ram_coherence_cost(x_gen_b, x_ref_b, RAMCoherenceConfig())
+
 Conventions
 -----------
 - One snapshot is represented as X in R^{N_pt x C} where C is the number of
   physical fields/channels and N_pt is the number of spatial points.
 - All distances are computed in the *normalized field space* used by the model
   unless the caller explicitly chooses to denormalize first.
+- The RAM wrapper below exposes coherence as a per-sample cost vector so
+  training scripts can add future reward terms without changing RAM loss code.
 """
 
 from __future__ import annotations
@@ -547,6 +553,120 @@ def coherence_result_to_scalars(result: Dict[str, Any]) -> Dict[str, float]:
         "pairwise_mean": _scalar("pairwise_mean"),
         "mode_score": _scalar("mode_score"),
     }
+
+
+# -----------------------------------------------------------------------------
+# RAM reward wrapper
+# -----------------------------------------------------------------------------
+
+@dataclass
+class RAMCoherenceConfig:
+    mode: str = "global_dist"
+    use_denorm: bool = False
+
+    lambda_global: float = 1.0
+
+    # GlobalDistConfig parameters.
+    lambda_marg: float = 1.0
+    lambda_joint: float = 1.0
+    num_directions: int = 64
+    n_iter_theta: int = 5
+    lr_theta: float = 0.1
+    ortho_reg: float = 1e-2
+    n_proj_pairwise: int = 32
+    include_pairwise: bool = True
+    joint_method: str = "topk_swd"
+    joint_top_frac: float = 0.10
+    joint_qmc: bool = True
+    include_axes: bool = True
+    lambda_pairwise: float = 0.25
+    include_pairwise_in_score: bool = True
+    seed: Optional[int] = None
+
+
+def _maybe_denormalize_batch(
+    x: torch.Tensor,
+    mean: Optional[torch.Tensor],
+    std: Optional[torch.Tensor],
+) -> torch.Tensor:
+    if mean is None or std is None:
+        raise ValueError("mean and std are required when RAMCoherenceConfig.use_denorm=True.")
+    mean = mean.to(device=x.device, dtype=x.dtype).view(1, 1, -1)
+    std = std.to(device=x.device, dtype=x.dtype).view(1, 1, -1)
+    return x * std + mean
+
+
+def compute_ram_coherence_cost(
+    x_gen: torch.Tensor,   # [B, N, C]
+    x_ref: torch.Tensor,   # [B, N, C]
+    cfg: RAMCoherenceConfig,
+    mean: Optional[torch.Tensor] = None,
+    std: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, Dict[str, float]]:
+    """
+    Convert registered coherence metrics into RAM rewards.
+
+    Returns a cost vector with shape [B], where lower is better.  RAM then uses
+    reward = -cost.  The wrapper is intentionally narrow: adding another
+    physical coherence term should only extend this function, not the RAM loop.
+    """
+    if x_gen.ndim != 3 or x_ref.ndim != 3:
+        raise ValueError(
+            f"compute_ram_coherence_cost expects [B, N, C] tensors, got "
+            f"{tuple(x_gen.shape)} and {tuple(x_ref.shape)}"
+        )
+    if x_gen.shape != x_ref.shape:
+        raise ValueError(f"Shape mismatch: {tuple(x_gen.shape)} vs {tuple(x_ref.shape)}")
+
+    cfg = cfg or RAMCoherenceConfig()
+    mode = str(cfg.mode)
+    if mode != "global_dist":
+        raise ValueError("RAMCoherenceConfig currently supports mode='global_dist' only.")
+
+    if cfg.use_denorm:
+        x_gen = _maybe_denormalize_batch(x_gen, mean, std)
+        x_ref = _maybe_denormalize_batch(x_ref, mean, std)
+
+    global_cfg = GlobalDistConfig(
+        lambda_marg=cfg.lambda_marg,
+        lambda_joint=cfg.lambda_joint,
+        num_directions=cfg.num_directions,
+        n_iter_theta=cfg.n_iter_theta,
+        lr_theta=cfg.lr_theta,
+        ortho_reg=cfg.ortho_reg,
+        n_proj_pairwise=cfg.n_proj_pairwise,
+        include_pairwise=cfg.include_pairwise,
+        seed=cfg.seed,
+        joint_method=cfg.joint_method,
+        joint_top_frac=cfg.joint_top_frac,
+        joint_qmc=cfg.joint_qmc,
+        include_axes=cfg.include_axes,
+        lambda_pairwise=cfg.lambda_pairwise,
+        include_pairwise_in_score=cfg.include_pairwise_in_score,
+    )
+
+    costs = []
+    metric_sums: Dict[str, float] = {}
+    for batch_idx in range(x_gen.shape[0]):
+        # Compute one snapshot score at a time because the global distributional
+        # metric works on [N, C] empirical samples.
+        result = compute_coherence(
+            "global_dist",
+            x_gen=x_gen[batch_idx],
+            x_ref=x_ref[batch_idx],
+            cfg=global_cfg,
+        )
+        item_cost = result["global_dist_score"] * float(cfg.lambda_global)
+        costs.append(item_cost)
+
+        scalars = coherence_result_to_scalars(result)
+        scalars["ram_cost"] = float(item_cost.detach().cpu())
+        for key, value in scalars.items():
+            metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
+
+    denom = max(int(x_gen.shape[0]), 1)
+    metrics = {key: value / denom for key, value in metric_sums.items()}
+    return torch.stack(costs, dim=0), metrics
 
 
 # -----------------------------------------------------------------------------

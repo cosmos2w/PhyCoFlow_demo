@@ -35,3 +35,4 @@ figures/generated/
 !config_pointcloud_ffm.yaml
 !config_baseline_Gen.yaml
 !config_baseline_Det.yaml
+!config_pointcloud_ffm_ram.yaml

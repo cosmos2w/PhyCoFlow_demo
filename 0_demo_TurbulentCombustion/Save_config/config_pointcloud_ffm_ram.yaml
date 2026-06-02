@@ -1,0 +1,84 @@
+# ------------------------------------------------------------
+# RAM fine-tuning config for PointCloudFFM in TurbulentCombustion
+# Model architecture is loaded from source_run_dir/run_config.yaml.
+# ------------------------------------------------------------
+
+Demo_Num: 20
+seed: 42
+device_ids: [0]
+
+# Source pretrained run.
+# If source_run_dir is null, training_finetune.py finds the latest source_Demo_Num run.
+source_run_dir: null
+source_Demo_Num: 15
+source_checkpoint: "best"
+
+data: "Dataset/Merged_CH4COTU1P.h5"
+train_ratio: 0.9
+time_stride: 1
+num_workers: 4
+
+save_dir: "Save_TrainedModel/ram_tc_pointcloud"
+
+# Sparse observations. If null, inherit from source config.
+cond_fields: null
+n_obs_min_list: null
+n_obs_max_list: null
+
+# Endpoint sampling from old EMA policy.
+ram_endpoint_steps: 4
+ode_solver: "euler"
+ram_obs_consistency_mode: "endpoint_smooth"
+obs_consistency_strength: 1.0
+obs_consistency_sigma: 0.05
+obs_consistency_schedule_power: 2.0
+obs_consistency_final_clamp: true
+
+# RAM batch structure.
+ram_epochs: 200
+batch_size: 2
+num_samples_per_condition: 4
+num_loss_targets_per_endpoint: 4
+
+# PhyCoFlow convention: t=0 source/noise, t=1 clean.
+# mirrored_weighted samples p(t)=2(1-t), emphasizing noisy/source-side states.
+timestep_sampling: "mirrored_weighted"
+t_eps: 1.0e-3
+
+# Reward/coherence.
+reward_mode: "global_dist"
+reward_multiplier: 1.0
+reward_scaling: "running_epoch_std"
+reward_eps: 1.0e-4
+coherence_use_denorm: false
+
+# Global distributional coherence.
+global_lambda_marg: 1.0
+global_lambda_joint: 1.0
+global_num_directions: 64
+global_joint_top_frac: 0.10
+global_include_pairwise: true
+global_lambda_pairwise: 0.25
+global_include_pairwise_in_score: true
+
+# Optimizer.
+lr: 2.0e-5
+weight_decay: 1.0e-4
+beta1: 0.9
+beta2: 0.99
+grad_clip: 1.0
+
+# EMA policies.
+old_ema_decay: 0.9
+eval_ema_decay: 0.99
+
+# Fine-tuning modes:
+#   head_glres = safe adaptation for GL_rbf/topk_rbf_glres
+#   all        = full model fine-tuning
+finetune_mode: "head_glres"
+
+# Logging / validation.
+eval_every: 5
+save_every: 20
+n_steps_generation_eval: 4
+eval_num_batches: 2
