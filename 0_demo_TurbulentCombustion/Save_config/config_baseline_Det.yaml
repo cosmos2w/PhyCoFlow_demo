@@ -13,11 +13,11 @@
 
 # =============================================================================
 
-# NOTE: demo 0 is for geofno conditioned on T and U_1
+# NOTE: demo 0 is for senseiver conditioned on T and U_1 with 192-384 sensors per field, and 256 sensors for visualization. This is the most comparable setting to the original pointcloud FFM Perceiver baseline, which also used T and U_1 conditioning with 256 sensors per field. Demo 1 is for senseiver conditioned on T only, with the same sensor counts as demo 0. Demo 2 and demo 3 are for the same conditioning setups as demos 0 and 1, but with the original pointcloud FFM Perceiver backbone replaced by the MLP-RBF backbone, to isolate the effect of the backbone architecture change. Demo 4 is for the Geo-FNO baseline with T-only conditioning.
 
 # =============================================================================
 
-baseline_model: "geofno"  # `mlp_rbf`, `senseiver`, or `geofno`.
+baseline_model: "mlp_rbf"  # `mlp_rbf`, `senseiver`, or `geofno`.
 training_stage: 1
 
 shared:
@@ -65,7 +65,7 @@ shared:
     #   vis_cond_fields: [1, 2, 3, 4]
     #   vis_n_obs_list: [256, 256, 256, 256]
 
-    cond_fields: [2, 3]
+    cond_fields: [2, 3]  # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
     n_obs_min_list: [192, 192]
     n_obs_max_list: [384, 384]
     vis_cond_fields: [2, 3]
@@ -100,14 +100,14 @@ mlp_rbf_params:
     cond_dim: 128
     field_embed_dim: 128
     rbf_sigma: 0.05
-    use_fourier_pe: false
+    use_fourier_pe: true
     fourier_pe_num_bands: 32
     fourier_pe_max_freq: 64.0
 
 senseiver_params:
   training:
     epochs: 10000
-    batch_size: 64
+    batch_size: 128
     learning_rate: 1.0e-4
     weight_decay: 1.0e-6
     eval_every: 5

@@ -214,10 +214,32 @@ target velocity = x - z
 Run RAM fine-tuning from `0_demo_TurbulentCombustion/`:
 
 ```bash
-python src/training_finetune.py \
+python src/train_finetune.py \
   --config Save_config/config_pointcloud_ffm_ram.yaml \
   --Demo-Num 20
 ```
+
+RAM has additional memory controls beyond the base trainer. Endpoint sampling
+and coherence rewards are still computed on full fields, but the velocity
+matching loss can use a query subset:
+
+- `ram_n_query_points`: number of query points used for the RAM velocity loss,
+  analogous to base `n_query_points`.
+- `train_ratio_downsample`: fresh random fraction of the training split used in
+  each RAM epoch; validation and test sets are unchanged.
+- `ram_query_sampling`: query selection mode, usually `obs_mix` to match base
+  PointCloudFFM training.
+- `ram_endpoint_microbatch_size`: splits old-policy full-field endpoint
+  rollouts along the repeated condition batch.
+- `ram_loss_microbatch_size`: splits RAM velocity matching and accumulates
+  gradients across chunks.
+- `global_include_pairwise`: pairwise coherence is more expensive; keep it
+  `false` for first formal RAM runs and enable it later if needed.
+
+For a medium-memory GL_rbf run on RTX 6000 Ada, the default config uses
+`ram_endpoint_microbatch_size: 32` and `ram_loss_microbatch_size: 64`. If memory
+is still very low and training is launch-bound, increase these values; if CUDA
+OOM appears, reduce them first before changing the RAM batch structure.
 
 Evaluate a RAM-finetuned checkpoint with the same evaluator:
 
