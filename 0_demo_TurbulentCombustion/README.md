@@ -219,12 +219,30 @@ python src/train_finetune.py \
   --Demo-Num 20
 ```
 
+RAM has two implementation modes:
+
+- Full-copy RAM keeps separate `ref_model`, `policy_model`, `old_model`, and
+  optional `eval_model` roles. This preserves the original reference behavior
+  and supports `finetune_mode: head_glres` or `finetune_mode: all`.
+- LoRA RAM keeps one pretrained GL_rbf model and attaches three adapters:
+  `default` for the trainable policy, `old` for endpoint sampling and old
+  velocity targets, and `evaluation` for validation/checkpoint export. Use
+  `finetune_mode: lora_head_glres` as the recommended default for
+  memory-efficient GL_rbf/topk_rbf_glres fine-tuning.
+
+The RAM algorithm is unchanged in both modes: endpoints are sampled, scalar
+coherence rewards produce group-relative advantages, endpoints are analytically
+re-noised, and the policy is trained against a detached velocity MSE target.
+No reward gradients, SDE rollouts, or adjoint sweeps are used.
+
 RAM has additional memory controls beyond the base trainer. Endpoint sampling
-and coherence rewards are still computed on full fields, but the velocity
-matching loss can use a query subset:
+still produces full fields, but reward/coherence and velocity matching can use
+separate point subsets:
 
 - `ram_n_query_points`: number of query points used for the RAM velocity loss,
   analogous to base `n_query_points`.
+- `ram_reward_n_points`: optional uniform point subset used only for scalar
+  reward/coherence. `null` keeps full-grid reward evaluation.
 - `train_ratio_downsample`: fresh random fraction of the training split used in
   each RAM epoch; validation and test sets are unchanged.
 - `ram_query_sampling`: query selection mode, usually `obs_mix` to match base
@@ -236,10 +254,11 @@ matching loss can use a query subset:
 - `global_include_pairwise`: pairwise coherence is more expensive; keep it
   `false` for first formal RAM runs and enable it later if needed.
 
-For a medium-memory GL_rbf run on RTX 6000 Ada, the default config uses
-`ram_endpoint_microbatch_size: 32` and `ram_loss_microbatch_size: 64`. If memory
-is still very low and training is launch-bound, increase these values; if CUDA
-OOM appears, reduce them first before changing the RAM batch structure.
+The default RAM config uses `lora_head_glres`, `batch_size: 8`,
+`num_samples_per_condition: 8`, `num_loss_targets_per_endpoint: 2`,
+`ram_n_query_points: 1024`, and `ram_reward_n_points: 4096`. If memory is still
+very low, reduce `ram_endpoint_microbatch_size`, `ram_loss_microbatch_size`, or
+the reward/query point counts first before changing the RAM batch structure.
 
 Evaluate a RAM-finetuned checkpoint with the same evaluator:
 
@@ -267,8 +286,34 @@ By default RAM metric histories are saved once in CSV form:
 `validation_history.png` plots the separate validation rollout score. Set
 `save_history_json: true` if JSON copies of the history tables are also needed.
 
-The `model` entry in `best.pt` and `last.pt` is the evaluation EMA model, so
-`src/evaluate_ffm.py` can load RAM checkpoints without a separate evaluator.
+For full-copy RAM, the `model` entry in `best.pt` and `last.pt` is the
+evaluation EMA model. For LoRA RAM, `model` is a normal merged state dict with
+the `evaluation` adapter folded into the original architecture, while
+`lora_state` stores the adapter payload separately. In both cases,
+`src/evaluate_ffm.py` loads RAM checkpoints without special adapter runtime
+logic.
+
+Train LoRA RAM:
+
+```bash
+python src/train_finetune.py \
+  --config Save_config/config_pointcloud_ffm_ram.yaml \
+  --Demo-Num 30
+```
+
+Evaluate:
+
+```bash
+python src/evaluate_ffm.py \
+  --run-dir Save_TrainedModel/ram_tc_pointcloud_DemoN30_<timestamp> \
+  --split test \
+  --snapshot-index 0 \
+  --checkpoint best \
+  --n-steps-generation 4 \
+  --obs-consistency-mode endpoint_smooth \
+  --extra-metrics ssim grad spectrum \
+  --save-analysis-npz
+```
 
 ## 2. Unified Generative Baselines
 

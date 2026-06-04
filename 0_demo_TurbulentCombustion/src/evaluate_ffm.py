@@ -792,7 +792,8 @@ def main():
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     run_cfg = _normalize_eval_config(cfg)
-    if isinstance(ckpt, dict) and ckpt.get("finetune_method") == "RAM" and ckpt.get("source_config") is not None:
+    finetune_method = str(ckpt.get("finetune_method", "")) if isinstance(ckpt, dict) else ""
+    if isinstance(ckpt, dict) and finetune_method.startswith("RAM") and ckpt.get("source_config") is not None:
         # RAM configs contain only fine-tuning controls, so architecture must
         # come from the checkpoint's source_config.
         source_cfg = _normalize_eval_config(dict(ckpt["source_config"]))

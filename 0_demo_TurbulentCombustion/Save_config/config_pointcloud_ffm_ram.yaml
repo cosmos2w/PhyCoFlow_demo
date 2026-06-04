@@ -2,14 +2,22 @@
 # RAM fine-tuning config for PointCloudFFM in TurbulentCombustion
 # Model architecture is loaded from source_run_dir/run_config.yaml.
 
-# Test run: only 10% random cases will be used for finetune
-# Increase reward_multiplier to 0.5 for stronger RAM signal
+# RAM is endpoint sampling + scalar reward + analytic re-noising + detached
+# velocity MSE target. It keeps the base PhyCoFlow convention:
+#   x_t = (1 - t) * z + t * x
+#   target velocity = x - z
+#
+# Batch structure:
+# - B * G endpoints are sampled per train batch, where B=batch_size and
+#   G=num_samples_per_condition.
+# - B * G * K noised velocity targets are used per train batch, where
+#   K=num_loss_targets_per_endpoint.
 
 # ------------------------------------------------------------
 
-Demo_Num: 2
+Demo_Num: 3
 seed: 42
-device_ids: [1]
+device_ids: [2]
 
 # Source pretrained run.
 # If source_run_dir is null, train_finetune.py finds the latest source_Demo_Num run.
@@ -33,8 +41,25 @@ cond_fields: null
 n_obs_min_list: null
 n_obs_max_list: null
 
+# Fine-tuning modes:
+#   head_glres             = full-copy safe adaptation for GL_rbf/topk_rbf_glres
+#   all                    = full-copy full model fine-tuning
+#   lora_head_glres        = memory-efficient GL_rbf RAM mode
+#   lora_all_linear_glrbf  = LoRA on all Linear layers under model.model
+finetune_mode: "lora_head_glres"
+
+# LoRA parameters used only when finetune_mode starts with "lora_".
+lora_rank: 8
+lora_alpha: 16
+lora_target_scope: "head_glres"
+
+# Eval EMA memory control for non-LoRA full-copy mode.
+# LoRA mode uses an evaluation adapter and does not create a separate eval model.
+use_eval_ema: true
+eval_ema_device: "cpu"
+
 # Endpoint sampling from old EMA policy.
-ram_endpoint_steps: 2
+ram_endpoint_steps: 4
 ode_solver: "euler"
 ram_obs_consistency_mode: "none" # choices=["none", "default_hard", "endpoint", "endpoint_smooth"]
 obs_consistency_strength: 1.0
@@ -51,19 +76,26 @@ batch_size: 32
 num_samples_per_condition: 8
 # num_loss_targets_per_endpoint controls how many training targets we
 # create per generated endpoint by re-noising 
-num_loss_targets_per_endpoint: 4
+num_loss_targets_per_endpoint: 2
 
 # RAM memory controls.
-# Endpoint rewards remain full-grid, while velocity matching uses a query subset
+# Endpoint sampling produces full-grid x_end. Reward/coherence can optionally
+# use a uniform point subset below, while velocity matching uses a query subset
 # like base PointCloudFFM training.
-ram_n_query_points: 2048
+ram_n_query_points: 1024
 ram_query_sampling: "obs_mix"
 ram_query_sample_near_ratio: 0.25
 ram_query_sample_far_ratio: 0.25
 ram_query_sample_sigma_ratio: 0.05
 # Increase these two if GPU memory allows. The endpoint microbatch is typically the main bottleneck, as it processes full-grid samples and feeds them into the reward model.
-ram_endpoint_microbatch_size: 72  # This controls the full-field endpoint generation stage.
-ram_loss_microbatch_size: 144 # This controls how many of those full-field rollouts to process in one model call group
+ram_endpoint_microbatch_size: 64  # This controls the full-field endpoint generation stage.
+ram_loss_microbatch_size: 128 # This controls how many noised velocity targets to process in one model call group
+
+# Reward point subsampling. null means full-grid reward; uniform uses the same
+# random point subset for x_end and x_ref before scalar coherence is computed.
+# This downsampling may only be applicable to GlobalDistCoherence !!!
+ram_reward_n_points: 4096
+ram_reward_sampling: "uniform"
 
 # PhyCoFlow convention: t=0 source/noise, t=1 clean.
 # mirrored_weighted samples p(t)=2(1-t), emphasizing noisy/source-side states.
@@ -76,7 +108,7 @@ t_eps: 1.0e-3
 #   marginal_only  = debug mode with marginal terms only, no joint/pairwise
 #   field_l2       = debug mode using direct field relative L2 as cost
 reward_mode: "global_dist"
-reward_multiplier: 3.0
+reward_multiplier: 1.0
 # reward_scaling choices:
 #   running_epoch_std = pooled std reset every epoch, historical default
 #   ema_std           = persistent std EMA across epochs
@@ -92,7 +124,7 @@ coherence_use_denorm: false
 # Global distributional coherence.
 global_lambda_marg: 1.0
 global_lambda_joint: 1.0
-global_num_directions: 48
+global_num_directions: 32
 global_joint_top_frac: 0.10
 # Pairwise SWD is useful but expensive across many full-grid endpoints. Keep it
 # off testing RAM runs & enable only after the core RAM signal is stable.
@@ -110,11 +142,6 @@ grad_clip: 1.0
 # EMA policies.
 old_ema_decay: 0.9
 eval_ema_decay: 0.9
-
-# Fine-tuning modes:
-#   head_glres = safe adaptation for GL_rbf/topk_rbf_glres
-#   all        = full model fine-tuning
-finetune_mode: "all"
 
 # Logging / validation.
 save_history_json: false   # Keep history/metric logs as CSV by default; args.json is still saved.

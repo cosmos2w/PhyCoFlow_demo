@@ -142,11 +142,11 @@ n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_ste
 # Here, n_obs_min_list and n_obs_max_list are default for High-Resolution data, 
 # and will down scale automatically for others automatically in training
 cond_fields: [0]
-n_obs_min_list: [512]
+n_obs_min_list: [256]
 n_obs_max_list: [512]
 
 vis_cond_fields:
-vis_n_obs_list: [512]
+vis_n_obs_list: [256]
 # ----------------------------------------------------------
 
 # ===== Rectified Flow generation controls =====

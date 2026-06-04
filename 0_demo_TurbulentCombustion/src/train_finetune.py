@@ -8,11 +8,12 @@ Quick usage from ``0_demo_TurbulentCombustion/``:
 
 General structure:
     1) Load a pretrained PointCloudFFM source run.
-    2) Create four model roles:
+    2) Create RAM roles. Full-copy mode uses separate models:
        ref_model    - frozen pretrained base velocity
        policy_model - trainable RAM policy
        old_model    - lagged EMA policy used for endpoint sampling/targets
        eval_model   - smoother EMA policy saved in checkpoints
+       LoRA mode keeps one model with default/old/evaluation adapters.
     3) Sample multiple endpoints per sparse-condition group with old_model.
     4) Convert coherence costs into group-relative advantages.
     5) Re-noise endpoints analytically under the PhyCoFlow convention
@@ -48,6 +49,15 @@ from helpers import (
     build_sparse_condition,
     validate_regular_grid_compatibility,
     visualize_reconstruction,
+)
+from lora_finetune import (
+    collect_lora_state,
+    ema_lora_adapter,
+    export_merged_lora_state_dict,
+    inject_lora_adapters,
+    lora_trainable_params,
+    sync_lora_adapter,
+    use_adapter,
 )
 from model_finetune import (
     clone_model,
@@ -120,6 +130,13 @@ DEFAULTS = {
     "old_ema_decay": 0.9,
     "eval_ema_decay": 0.99,
     "finetune_mode": "head_glres",
+    "lora_rank": 8,
+    "lora_alpha": 16,
+    "lora_target_scope": "head_glres",
+    "ram_reward_n_points": None,
+    "ram_reward_sampling": "uniform",
+    "use_eval_ema": True,
+    "eval_ema_device": "gpu",
     "val_loss_rel_l2_weight": 1.0,
     "val_loss_coherence_weight": 0.1,
     "eval_every": 5,
@@ -277,9 +294,13 @@ def validate_source_model_support(source_cfg: dict, cfg: dict) -> None:
 
     finetune_mode = str(cfg.get("finetune_mode", "head_glres")).strip().lower()
     gather_mode = source_cfg.get("gather_mode")
-    if finetune_mode == "head_glres" and gather_mode != "topk_rbf_glres":
+    supported_modes = {"head_glres", "all", "lora_head_glres", "lora_all_linear_glrbf"}
+    if finetune_mode not in supported_modes:
+        raise ValueError(f"finetune_mode must be one of {sorted(supported_modes)}, got {finetune_mode!r}.")
+
+    if finetune_mode in ("head_glres", "lora_head_glres") and gather_mode != "topk_rbf_glres":
         raise ValueError(
-            "finetune_mode='head_glres' requires a GL_rbf source with "
+            f"finetune_mode={finetune_mode!r} requires a GL_rbf source with "
             f"gather_mode='topk_rbf_glres', got gather_mode={gather_mode!r}."
         )
 
@@ -440,6 +461,7 @@ class RAMHistoryLogger:
             "target_velocity_norm",
             "endpoint_steps",
             "ram_n_query_points",
+            "reward_point_count",
             "ram_endpoint_microbatch_size",
             "ram_loss_microbatch_size",
             "train_ratio_downsample",
@@ -860,9 +882,15 @@ def run_rollout_evaluation(
     truth_phys_t = truth * std + mean
     rel_l2_phys = _rel_l2_per_field(recon_phys_t[0], truth_phys_t[0])
 
-    cost, _ = compute_ram_coherence_cost(
+    recon_reward, truth_reward, reward_point_count = subsample_reward_points(
         x_gen=recon,
         x_ref=truth,
+        n_points=cfg.get("ram_reward_n_points", None),
+        mode=str(cfg.get("ram_reward_sampling", "uniform")),
+    )
+    cost, _ = compute_ram_coherence_cost(
+        x_gen=recon_reward,
+        x_ref=truth_reward,
         cfg=ram_coh_cfg,
         mean=dataset.mean.to(device),
         std=dataset.std.to(device),
@@ -880,6 +908,7 @@ def run_rollout_evaluation(
         "mean_rel_l2_norm": float(rel_l2_norm.mean().cpu()),
         "coherence_cost": cost_value,
         "coherence_reward": -cost_value,
+        "reward_point_count": float(reward_point_count),
     }
     for c, name in enumerate(field_names):
         row[f"rel_l2_phys/{name}"] = float(rel_l2_phys[c].cpu())
@@ -930,6 +959,28 @@ def _microbatch_slices(n_items: int, microbatch_size: Optional[int]) -> list[sli
     return [slice(start, min(start + step, n_items)) for start in range(0, n_items, step)]
 
 
+def subsample_reward_points(
+    x_gen: torch.Tensor,
+    x_ref: torch.Tensor,
+    n_points: Optional[int],
+    mode: str = "uniform",
+    generator: Optional[torch.Generator] = None,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """
+    Subsample endpoint points for scalar reward/coherence evaluation only.
+
+    The same point indices are applied to generated and reference fields.
+    """
+    n_total = int(x_gen.shape[1])
+    if n_points is None or int(n_points) <= 0 or int(n_points) >= n_total:
+        return x_gen, x_ref, n_total
+    if str(mode).lower() != "uniform":
+        raise ValueError("ram_reward_sampling currently supports only 'uniform'.")
+    n_select = int(n_points)
+    idx = torch.randperm(n_total, device=x_gen.device, generator=generator)[:n_select]
+    return x_gen[:, idx], x_ref[:, idx], n_select
+
+
 @torch.no_grad()
 def _sample_endpoints_microbatched(
     *,
@@ -977,13 +1028,24 @@ def _freeze_model(model: nn.Module) -> None:
         param.requires_grad_(False)
 
 
+@torch.no_grad()
+def update_ema_params_cross_device(source: nn.Module, target: nn.Module, decay: float) -> None:
+    """EMA update when the target eval model may live on CPU."""
+    decay = float(decay)
+    for src_param, tgt_param in zip(source.parameters(), target.parameters()):
+        tgt_param.data.mul_(decay).add_(src_param.detach().data.to(tgt_param.device), alpha=1.0 - decay)
+
+    for src_buffer, tgt_buffer in zip(source.buffers(), target.buffers()):
+        tgt_buffer.data.copy_(src_buffer.detach().data.to(tgt_buffer.device))
+
+
 def train_ram_epoch(
     *,
     epoch: int,
     policy_model: nn.Module,
     ref_model: nn.Module,
     old_model: nn.Module,
-    eval_model: nn.Module,
+    eval_model: Optional[nn.Module],
     trainable_params: Sequence[nn.Parameter],
     optimizer: torch.optim.Optimizer,
     loader: DataLoader,
@@ -1000,7 +1062,8 @@ def train_ram_epoch(
     policy_model.train()
     ref_model.eval()
     old_model.eval()
-    eval_model.eval()
+    if eval_model is not None:
+        eval_model.eval()
 
     G = int(cfg["num_samples_per_condition"])
     K = int(cfg["num_loss_targets_per_endpoint"])
@@ -1056,9 +1119,15 @@ def train_ram_epoch(
                 cfg=cfg,
             )
 
-            cost, coh_metrics = compute_ram_coherence_cost(
+            x_end_reward, x_ref_reward, reward_point_count = subsample_reward_points(
                 x_gen=x_end,
                 x_ref=x_ref_g,
+                n_points=cfg.get("ram_reward_n_points", None),
+                mode=str(cfg.get("ram_reward_sampling", "uniform")),
+            )
+            cost, coh_metrics = compute_ram_coherence_cost(
+                x_gen=x_end_reward,
+                x_ref=x_ref_reward,
                 cfg=ram_coh_cfg,
                 mean=train_set.mean.to(device),
                 std=train_set.std.to(device),
@@ -1186,7 +1255,8 @@ def train_ram_epoch(
         # Step-level EMA keeps the old/eval policies close enough for short RAM
         # runs while still providing lagged targets.
         update_ema_params(policy_model, old_model, float(cfg.get("old_ema_decay", 0.9)))
-        update_ema_params(policy_model, eval_model, float(cfg.get("eval_ema_decay", 0.99)))
+        if eval_model is not None:
+            update_ema_params_cross_device(policy_model, eval_model, float(cfg.get("eval_ema_decay", 0.99)))
 
         current_lr = float(optimizer.param_groups[0]["lr"])
         loss_value = loss_total / max(loss_weight_total, 1)
@@ -1218,6 +1288,267 @@ def train_ram_epoch(
             "target_velocity_norm": target_velocity_value,
             "endpoint_steps": float(cfg.get("ram_endpoint_steps", 4)),
             "ram_n_query_points": float(coords_q.shape[1]),
+            "reward_point_count": float(reward_point_count),
+            "ram_endpoint_microbatch_size": float(
+                cfg.get("ram_endpoint_microbatch_size") or coords_g.shape[0]
+            ),
+            "ram_loss_microbatch_size": float(ram_loss_microbatch_size or n_loss_items),
+            "lr": current_lr,
+            "grad_norm": float(grad_norm.detach().cpu() if torch.is_tensor(grad_norm) else grad_norm),
+            "train_batches": 1.0,
+        }
+        epoch_metrics.update(metrics)
+        pbar.set_postfix_str(
+            f"loss={metrics['ram_loss']:.3e} reward={metrics['reward_mean']:.3e} "
+            f"adv={metrics['adv_abs_mean']:.3e}"
+        )
+
+    avg = epoch_metrics.mean()
+    avg["train_batches"] = float(epoch_metrics.counts.get("ram_loss", 0))
+    avg["train_ratio_downsample"] = float(cfg.get("train_ratio_downsample", 1.0))
+    avg["train_epoch_cases"] = float(len(loader.dataset))
+    avg["reward_mode"] = str(cfg.get("reward_mode", "global_dist"))
+    return avg.get("ram_loss", float("nan")), avg
+
+
+def train_ram_lora_epoch(
+    *,
+    epoch: int,
+    lora_model: nn.Module,
+    trainable_params: Sequence[nn.Parameter],
+    optimizer: torch.optim.Optimizer,
+    loader: DataLoader,
+    device: torch.device,
+    cfg: dict,
+    ram_coh_cfg: RAMCoherenceConfig,
+    train_set: TurbulentCombustionH5Dataset,
+    reward_std_ema: Optional[EMARewardStd] = None,
+) -> tuple[float, Dict[str, float]]:
+    """
+    One RAM epoch using one base model plus default/old/evaluation LoRA adapters.
+    """
+    lora_model.train()
+
+    G = int(cfg["num_samples_per_condition"])
+    K = int(cfg["num_loss_targets_per_endpoint"])
+    reward_scaling = str(cfg.get("reward_scaling", "running_epoch_std"))
+    reward_eps = float(cfg.get("reward_eps", 1.0e-4))
+    adv_clip_abs = cfg.get("adv_clip_abs", None)
+    adv_clip_abs_value = None if adv_clip_abs is None else float(adv_clip_abs)
+    max_train_batches = cfg.get("max_train_batches", None)
+    max_train_batches = None if max_train_batches is None else int(max_train_batches)
+    ram_n_query_points = cfg.get("ram_n_query_points", 4096)
+    ram_n_query_points = None if ram_n_query_points is None else int(ram_n_query_points)
+    ram_loss_microbatch_size = cfg.get("ram_loss_microbatch_size", None)
+    ram_loss_microbatch_size = None if ram_loss_microbatch_size is None else int(ram_loss_microbatch_size)
+    running_reward_std = RunningRewardStd()
+    epoch_metrics = EpochMetrics()
+
+    pbar = tqdm(loader, desc=f"RAM LoRA epoch {epoch:04d}", leave=False)
+    for batch_idx, batch in enumerate(pbar):
+        if max_train_batches is not None and batch_idx >= max_train_batches:
+            break
+
+        coords_full = batch["coords"].to(device)
+        fields_full = batch["fields"].to(device)
+        bsz = coords_full.shape[0]
+
+        obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+            coords_full=coords_full,
+            fields_full=fields_full,
+            cond_fields=cfg["cond_fields"],
+            n_obs_min=cfg["n_obs_min_list"],
+            n_obs_max=cfg["n_obs_max_list"],
+        )
+
+        coords_g = _repeat_batch(coords_full, G)
+        x_ref_g = _repeat_batch(fields_full, G)
+        obs_coords_g = _repeat_batch(obs_coords, G)
+        obs_values_g = _repeat_batch(obs_values, G)
+        obs_mask_g = _repeat_batch(obs_mask, G)
+        obs_indices_g = _repeat_batch(obs_indices, G)
+        obs_field_ids_g = _repeat_batch(obs_field_ids, G)
+
+        lora_model.eval()
+        with torch.no_grad(), use_adapter(lora_model, "old"):
+            x_end = _sample_endpoints_microbatched(
+                model=lora_model,
+                coords=coords_g,
+                obs_coords=obs_coords_g,
+                obs_values=obs_values_g,
+                obs_mask=obs_mask_g,
+                obs_field_ids=obs_field_ids_g,
+                obs_indices=obs_indices_g,
+                cfg=cfg,
+            )
+
+            x_end_reward, x_ref_reward, reward_point_count = subsample_reward_points(
+                x_gen=x_end,
+                x_ref=x_ref_g,
+                n_points=cfg.get("ram_reward_n_points", None),
+                mode=str(cfg.get("ram_reward_sampling", "uniform")),
+            )
+            cost, coh_metrics = compute_ram_coherence_cost(
+                x_gen=x_end_reward,
+                x_ref=x_ref_reward,
+                cfg=ram_coh_cfg,
+                mean=train_set.mean.to(device),
+                std=train_set.std.to(device),
+            )
+            rewards = -cost
+            running_reward_std.update(rewards)
+
+            rewards_grouped = rewards.view(bsz, G)
+            adv = rewards_grouped - rewards_grouped.mean(dim=1, keepdim=True)
+            batch_adv_std = float(adv.reshape(-1).std(unbiased=False).detach().cpu())
+            reward_scale_std = float("nan")
+            if reward_scaling == "running_epoch_std":
+                scale = running_reward_std.std + reward_eps
+                adv = adv / scale
+                reward_scale_std = float(scale)
+            elif reward_scaling == "batch_std":
+                scale = batch_adv_std + reward_eps
+                adv = adv / scale
+                reward_scale_std = float(scale)
+            elif reward_scaling == "ema_std":
+                if reward_std_ema is None:
+                    raise ValueError("reward_scaling='ema_std' requires a persistent EMARewardStd tracker.")
+                scale = reward_std_ema.update(batch_adv_std) + reward_eps
+                adv = adv / scale
+                reward_scale_std = float(scale)
+            elif reward_scaling == "group":
+                adv = adv / (rewards_grouped.std(dim=1, keepdim=True, unbiased=False) + reward_eps)
+            elif reward_scaling in ("none", "false", "False"):
+                pass
+            else:
+                raise ValueError(
+                    "reward_scaling must be 'batch_std', 'running_epoch_std', "
+                    "'ema_std', 'group', or 'none'."
+                )
+            if adv_clip_abs_value is not None:
+                adv = adv.clamp(-adv_clip_abs_value, adv_clip_abs_value)
+            adv_flat = adv.reshape(-1)
+            scaled_adv_flat = float(cfg.get("reward_multiplier", 1.0)) * adv_flat.detach()
+
+        lora_model.train()
+        coords_q, x_end_q, _ = sample_query_subset(
+            coords=coords_g,
+            fields=x_end.detach(),
+            n_query=ram_n_query_points,
+            mode=str(cfg.get("ram_query_sampling", "obs_mix")),
+            obs_coords=obs_coords_g,
+            obs_mask=obs_mask_g,
+            near_ratio=float(cfg.get("ram_query_sample_near_ratio", 0.25)),
+            far_ratio=float(cfg.get("ram_query_sample_far_ratio", 0.25)),
+            sigma_ratio=float(cfg.get("ram_query_sample_sigma_ratio", 0.05)),
+        )
+
+        x_end_l = _repeat_batch(x_end_q, K)
+        coords_l = _repeat_batch(coords_q, K)
+        obs_coords_l = _repeat_batch(obs_coords_g, K)
+        obs_values_l = _repeat_batch(obs_values_g, K)
+        obs_mask_l = _repeat_batch(obs_mask_g, K)
+        obs_field_ids_l = _repeat_batch(obs_field_ids_g, K)
+        adv_l = _repeat_batch(adv_flat.detach(), K)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        loss_total = 0.0
+        output_delta_total = 0.0
+        target_delta_total = 0.0
+        bridge_residual_total = 0.0
+        target_velocity_total = 0.0
+        loss_weight_total = 0
+        n_loss_items = x_end_l.shape[0]
+        for sl in _microbatch_slices(n_loss_items, ram_loss_microbatch_size):
+            coords_mb = coords_l[sl]
+            x_end_mb = x_end_l[sl]
+            obs_coords_mb = obs_coords_l[sl]
+            obs_values_mb = obs_values_l[sl]
+            obs_mask_mb = obs_mask_l[sl]
+            obs_field_ids_mb = obs_field_ids_l[sl]
+            adv_mb = adv_l[sl]
+
+            z = lora_model.sample_source(coords_mb)
+            t = sample_ram_times(
+                n=x_end_mb.shape[0],
+                device=device,
+                dtype=x_end_mb.dtype,
+                eps=float(cfg.get("t_eps", 1.0e-3)),
+                mode=str(cfg.get("timestep_sampling", "mirrored_weighted")),
+            )
+            t_view = t.view(-1, 1, 1)
+            x_t = (1.0 - t_view) * z + t_view * x_end_mb
+            bridge_direction = x_end_mb - z
+
+            lora_model.train()
+            with use_adapter(lora_model, "default"):
+                v_policy = lora_model.model(
+                    t, x_t, coords_mb, obs_coords_mb, obs_values_mb, obs_mask_mb, obs_field_ids_mb
+                )
+            lora_model.eval()
+            with torch.no_grad(), use_adapter(lora_model, None):
+                v_ref = lora_model.model(
+                    t, x_t, coords_mb, obs_coords_mb, obs_values_mb, obs_mask_mb, obs_field_ids_mb
+                )
+            with torch.no_grad(), use_adapter(lora_model, "old"):
+                v_old = lora_model.model(
+                    t, x_t, coords_mb, obs_coords_mb, obs_values_mb, obs_mask_mb, obs_field_ids_mb
+                )
+            lora_model.train()
+
+            scaled_adv = float(cfg.get("reward_multiplier", 1.0)) * adv_mb.view(-1, 1, 1)
+            target_v = v_ref + scaled_adv * (bridge_direction - v_old)
+            loss_mb = ((v_policy - target_v.detach()) ** 2).mean()
+
+            weight = x_end_mb.shape[0]
+            weighted_loss = loss_mb * (float(weight) / float(n_loss_items))
+            weighted_loss.backward()
+
+            loss_total += float(loss_mb.detach().cpu()) * weight
+            output_delta_total += float(((v_policy.detach() - v_ref) ** 2).mean().cpu()) * weight
+            target_delta_total += float(((target_v.detach() - v_ref) ** 2).mean().cpu()) * weight
+            bridge_residual_total += float(((bridge_direction.detach() - v_old) ** 2).mean().cpu()) * weight
+            target_velocity_total += float((target_v.detach() ** 2).mean().cpu()) * weight
+            loss_weight_total += weight
+
+        grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, float(cfg.get("grad_clip", 1.0)))
+        optimizer.step()
+
+        ema_lora_adapter(lora_model, "default", "old", float(cfg.get("old_ema_decay", 0.9)))
+        ema_lora_adapter(lora_model, "default", "evaluation", float(cfg.get("eval_ema_decay", 0.99)))
+
+        current_lr = float(optimizer.param_groups[0]["lr"])
+        loss_value = loss_total / max(loss_weight_total, 1)
+        output_delta_value = output_delta_total / max(loss_weight_total, 1)
+        target_delta_value = target_delta_total / max(loss_weight_total, 1)
+        bridge_residual_value = bridge_residual_total / max(loss_weight_total, 1)
+        target_velocity_value = target_velocity_total / max(loss_weight_total, 1)
+        metrics = {
+            "ram_loss": loss_value,
+            "reward_mean": float(rewards.mean().detach().cpu()),
+            "reward_std": float(rewards.std(unbiased=False).detach().cpu()),
+            "adv_abs_mean": float(adv.abs().mean().detach().cpu()),
+            "adv_max_abs": float(adv.abs().max().detach().cpu()),
+            "adv_clip_abs": np.nan if adv_clip_abs_value is None else adv_clip_abs_value,
+            "scaled_adv_abs_mean": float(scaled_adv_flat.abs().mean().detach().cpu()),
+            "scaled_adv_abs_max": float(scaled_adv_flat.abs().max().detach().cpu()),
+            "reward_scale_std": reward_scale_std,
+            "coherence/ram_cost": float(coh_metrics.get("ram_cost", np.nan)),
+            "coherence/global_dist_score": float(coh_metrics.get("global_dist_score", np.nan)),
+            "coherence/marginal_score": float(coh_metrics.get("marginal_score", np.nan)),
+            "coherence/joint_score": float(coh_metrics.get("joint_score", np.nan)),
+            "coherence/pairwise_mean": float(coh_metrics.get("pairwise_mean", np.nan)),
+            "coherence/field_l2_rel": float(coh_metrics.get("field_l2_rel", np.nan)),
+            "coherence/field_l2_mse": float(coh_metrics.get("field_l2_mse", np.nan)),
+            "output_delta_norm": output_delta_value,
+            "policy_ref_delta_norm": output_delta_value,
+            "target_delta_norm": target_delta_value,
+            "bridge_residual_norm": bridge_residual_value,
+            "target_velocity_norm": target_velocity_value,
+            "endpoint_steps": float(cfg.get("ram_endpoint_steps", 4)),
+            "ram_n_query_points": float(coords_q.shape[1]),
+            "reward_point_count": float(reward_point_count),
             "ram_endpoint_microbatch_size": float(
                 cfg.get("ram_endpoint_microbatch_size") or coords_g.shape[0]
             ),
@@ -1289,9 +1620,15 @@ def validate_ram(
             torch.linalg.vector_norm(recon - fields_full, dim=(1, 2))
             / (torch.linalg.vector_norm(fields_full, dim=(1, 2)) + 1e-12)
         )
-        cost, coh_metrics = compute_ram_coherence_cost(
+        recon_reward, fields_reward, reward_point_count = subsample_reward_points(
             x_gen=recon,
             x_ref=fields_full,
+            n_points=cfg.get("ram_reward_n_points", None),
+            mode=str(cfg.get("ram_reward_sampling", "uniform")),
+        )
+        cost, coh_metrics = compute_ram_coherence_cost(
+            x_gen=recon_reward,
+            x_ref=fields_reward,
             cfg=ram_coh_cfg,
             mean=val_set.mean.to(device),
             std=val_set.std.to(device),
@@ -1300,6 +1637,7 @@ def validate_ram(
             "val_rel_l2": float(rel_l2.mean().cpu()),
             "val_coherence_cost": float(cost.mean().cpu()),
             "val_coherence/global_dist_score": float(coh_metrics.get("global_dist_score", np.nan)),
+            "reward_point_count": float(reward_point_count),
         })
 
     out = metrics.mean()
@@ -1343,6 +1681,50 @@ def save_checkpoint(
         "field_names": train_set.field_names,
         "method": "ram_pointcloud_ffm",
         "finetune_method": "RAM",
+        "source_run_dir": str(source_run_dir),
+        "source_checkpoint": cfg.get("source_checkpoint", "best"),
+        "source_config": source_cfg,
+        "finetune_config": cfg,
+        "backbone": source_cfg.get("backbone"),
+        "summary_type": source_cfg.get("summary_type"),
+        "ode_solver": source_cfg.get("ode_solver", "euler"),
+    }
+    torch.save(ckpt, path)
+
+
+def save_lora_checkpoint(
+    *,
+    path: Path,
+    lora_model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    train_loss: float,
+    val_loss: Optional[float],
+    train_set: TurbulentCombustionH5Dataset,
+    source_run_dir: Path,
+    source_cfg: dict,
+    cfg: dict,
+) -> None:
+    """Save RAM-LoRA with merged evaluation adapter weights under ``model``."""
+    merged_state = export_merged_lora_state_dict(
+        lora_model=lora_model,
+        source_cfg=source_cfg,
+        dataset=train_set,
+        adapter="evaluation",
+        device="cpu",
+    )
+    ckpt = {
+        "model": merged_state,
+        "lora_state": collect_lora_state(lora_model),
+        "optimizer": optimizer.state_dict(),
+        "epoch": int(epoch),
+        "train_loss": float(train_loss),
+        "val_loss": None if val_loss is None else float(val_loss),
+        "mean": train_set.mean,
+        "std": train_set.std,
+        "field_names": train_set.field_names,
+        "method": "ram_pointcloud_ffm",
+        "finetune_method": "RAM_LORA",
         "source_run_dir": str(source_run_dir),
         "source_checkpoint": cfg.get("source_checkpoint", "best"),
         "source_config": source_cfg,
@@ -1494,6 +1876,13 @@ def main():
             stats_path=str(run_dir / "dataset_stats.pt"),
         )
 
+    finetune_mode = str(cfg.get("finetune_mode", "head_glres")).strip().lower()
+    is_lora_mode = finetune_mode.startswith("lora_")
+    use_eval_ema = bool(cfg.get("use_eval_ema", True))
+    eval_ema_device_name = str(cfg.get("eval_ema_device", "gpu")).strip().lower()
+    if eval_ema_device_name not in ("gpu", "cpu"):
+        raise ValueError("eval_ema_device must be 'gpu' or 'cpu'.")
+
     ref_model, source_cfg_loaded, _ = load_pretrained_ffm(
         source_run_dir=source_run_dir,
         checkpoint=str(cfg.get("source_checkpoint", "best")),
@@ -1501,17 +1890,47 @@ def main():
         device=device,
     )
     source_cfg = source_cfg_loaded
-    policy_model = clone_model(ref_model, device)
-    old_model = clone_model(ref_model, device)
-    eval_model = clone_model(ref_model, device)
-    sync_params(ref_model, policy_model)
-    sync_params(ref_model, old_model)
-    sync_params(ref_model, eval_model)
 
-    _freeze_model(ref_model)
-    _freeze_model(old_model)
-    _freeze_model(eval_model)
-    trainable_params = set_trainable_scope(policy_model, str(cfg.get("finetune_mode", "head_glres")))
+    lora_model: Optional[nn.Module] = None
+    policy_model: Optional[nn.Module] = None
+    old_model: Optional[nn.Module] = None
+    eval_model: Optional[nn.Module] = None
+    eval_model_storage_device = device
+
+    if is_lora_mode:
+        lora_model = ref_model
+        _freeze_model(lora_model)
+        lora_scope = "head_glres" if finetune_mode == "lora_head_glres" else "all_linear_glrbf"
+        configured_scope = str(cfg.get("lora_target_scope", lora_scope)).strip().lower()
+        if configured_scope in ("head_glres", "all_linear_glrbf"):
+            lora_scope = configured_scope
+        wrapped_paths = inject_lora_adapters(
+            lora_model,
+            scope=lora_scope,
+            rank=int(cfg.get("lora_rank", 8)),
+            alpha=float(cfg.get("lora_alpha", 16)),
+        )
+        cfg["lora_wrapped_paths"] = wrapped_paths
+        sync_lora_adapter(lora_model, "default", "old")
+        sync_lora_adapter(lora_model, "default", "evaluation")
+        trainable_params = lora_trainable_params(lora_model)
+    else:
+        policy_model = clone_model(ref_model, device)
+        old_model = clone_model(ref_model, device)
+        sync_params(ref_model, policy_model)
+        sync_params(ref_model, old_model)
+        if use_eval_ema:
+            eval_model_storage_device = torch.device("cpu") if eval_ema_device_name == "cpu" else device
+            eval_model = clone_model(ref_model, eval_model_storage_device)
+            sync_params(ref_model, eval_model)
+        else:
+            eval_model = None
+
+        _freeze_model(ref_model)
+        _freeze_model(old_model)
+        if eval_model is not None:
+            _freeze_model(eval_model)
+        trainable_params = set_trainable_scope(policy_model, finetune_mode)
 
     optimizer = torch.optim.AdamW(
         trainable_params,
@@ -1531,17 +1950,36 @@ def main():
             save_json=save_history_json,
             model_role="eval",
         )
-        run_rollout_evaluation(
-            model=eval_model,
-            dataset=rollout_set,
-            epoch=0,
-            device=device,
-            run_dir=run_dir,
-            cfg=cfg,
-            ram_coh_cfg=ram_coh_cfg,
-            logger=rollout_logger,
-            model_role="eval",
-        )
+        if is_lora_mode:
+            with use_adapter(lora_model, "evaluation"):
+                run_rollout_evaluation(
+                    model=lora_model,
+                    dataset=rollout_set,
+                    epoch=0,
+                    device=device,
+                    run_dir=run_dir,
+                    cfg=cfg,
+                    ram_coh_cfg=ram_coh_cfg,
+                    logger=rollout_logger,
+                    model_role="eval",
+                )
+        else:
+            eval_runtime_model = eval_model if eval_model is not None else policy_model
+            if eval_model is not None and eval_ema_device_name == "cpu":
+                eval_runtime_model = eval_model.to(device)
+            run_rollout_evaluation(
+                model=eval_runtime_model,
+                dataset=rollout_set,
+                epoch=0,
+                device=device,
+                run_dir=run_dir,
+                cfg=cfg,
+                ram_coh_cfg=ram_coh_cfg,
+                logger=rollout_logger,
+                model_role="eval",
+            )
+            if eval_model is not None and eval_ema_device_name == "cpu":
+                eval_model.to(eval_model_storage_device)
         if bool(cfg.get("rollout_eval_policy_model", True)):
             rollout_policy_logger = RolloutHistoryLogger(
                 run_dir,
@@ -1549,50 +1987,95 @@ def main():
                 save_json=save_history_json,
                 model_role="policy",
             )
-            run_rollout_evaluation(
-                model=policy_model,
-                dataset=rollout_set,
-                epoch=0,
-                device=device,
-                run_dir=run_dir,
-                cfg=cfg,
-                ram_coh_cfg=ram_coh_cfg,
-                logger=rollout_policy_logger,
-                model_role="policy",
-            )
+            if is_lora_mode:
+                with use_adapter(lora_model, "default"):
+                    run_rollout_evaluation(
+                        model=lora_model,
+                        dataset=rollout_set,
+                        epoch=0,
+                        device=device,
+                        run_dir=run_dir,
+                        cfg=cfg,
+                        ram_coh_cfg=ram_coh_cfg,
+                        logger=rollout_policy_logger,
+                        model_role="policy",
+                    )
+            else:
+                run_rollout_evaluation(
+                    model=policy_model,
+                    dataset=rollout_set,
+                    epoch=0,
+                    device=device,
+                    run_dir=run_dir,
+                    cfg=cfg,
+                    ram_coh_cfg=ram_coh_cfg,
+                    logger=rollout_policy_logger,
+                    model_role="policy",
+                )
 
     best_val = float("inf")
     last_val_loss: Optional[float] = None
     reward_std_ema = EMARewardStd(decay=float(cfg.get("reward_std_ema_decay", 0.95)))
     for epoch in range(1, int(cfg.get("ram_epochs", 200)) + 1):
         train_loader = build_epoch_train_loader(train_set, cfg, epoch)
-        train_loss, train_metrics = train_ram_epoch(
-            epoch=epoch,
-            policy_model=policy_model,
-            ref_model=ref_model,
-            old_model=old_model,
-            eval_model=eval_model,
-            trainable_params=trainable_params,
-            optimizer=optimizer,
-            loader=train_loader,
-            device=device,
-            cfg=cfg,
-            ram_coh_cfg=ram_coh_cfg,
-            train_set=train_set,
-            reward_std_ema=reward_std_ema,
-        )
-
-        val_metrics: Dict[str, float] = {}
-        if epoch == 1 or epoch % int(cfg.get("eval_every", 5)) == 0:
-            val_metrics = validate_ram(
-                eval_model=eval_model,
-                loader=val_loader,
+        if is_lora_mode:
+            train_loss, train_metrics = train_ram_lora_epoch(
+                epoch=epoch,
+                lora_model=lora_model,
+                trainable_params=trainable_params,
+                optimizer=optimizer,
+                loader=train_loader,
                 device=device,
                 cfg=cfg,
                 ram_coh_cfg=ram_coh_cfg,
-                val_set=val_set,
-                max_batches=int(cfg.get("eval_num_batches", 2)),
+                train_set=train_set,
+                reward_std_ema=reward_std_ema,
             )
+        else:
+            train_loss, train_metrics = train_ram_epoch(
+                epoch=epoch,
+                policy_model=policy_model,
+                ref_model=ref_model,
+                old_model=old_model,
+                eval_model=eval_model,
+                trainable_params=trainable_params,
+                optimizer=optimizer,
+                loader=train_loader,
+                device=device,
+                cfg=cfg,
+                ram_coh_cfg=ram_coh_cfg,
+                train_set=train_set,
+                reward_std_ema=reward_std_ema,
+            )
+
+        val_metrics: Dict[str, float] = {}
+        if epoch == 1 or epoch % int(cfg.get("eval_every", 5)) == 0:
+            if is_lora_mode:
+                with use_adapter(lora_model, "evaluation"):
+                    val_metrics = validate_ram(
+                        eval_model=lora_model,
+                        loader=val_loader,
+                        device=device,
+                        cfg=cfg,
+                        ram_coh_cfg=ram_coh_cfg,
+                        val_set=val_set,
+                        max_batches=int(cfg.get("eval_num_batches", 2)),
+                    )
+            else:
+                eval_runtime_model = eval_model if eval_model is not None else policy_model
+                if eval_model is not None and eval_ema_device_name == "cpu":
+                    eval_runtime_model = eval_model.to(device)
+                val_metrics = validate_ram(
+                    eval_model=eval_runtime_model,
+                    loader=val_loader,
+                    device=device,
+                    cfg=cfg,
+                    ram_coh_cfg=ram_coh_cfg,
+                    val_set=val_set,
+                    max_batches=int(cfg.get("eval_num_batches", 2)),
+                )
+                if eval_model is not None and eval_ema_device_name == "cpu":
+                    eval_model.to(eval_model_storage_device)
             last_val_loss = val_metrics.get("val_loss", None)
             print(
                 f"[valid] epoch={epoch:04d} val_score={last_val_loss:.6e} "
@@ -1607,25 +2090,24 @@ def main():
         merged_metrics["val_loss"] = last_val_loss
         logger.log(epoch=epoch, train_loss=train_loss, val_loss=last_val_loss, metrics=merged_metrics)
 
-        save_checkpoint(
-            path=run_dir / "last.pt",
-            eval_model=eval_model,
-            policy_model=policy_model,
-            old_model=old_model,
-            optimizer=optimizer,
-            epoch=epoch,
-            train_loss=train_loss,
-            val_loss=last_val_loss,
-            train_set=train_set,
-            source_run_dir=source_run_dir,
-            source_cfg=source_cfg,
-            cfg=cfg,
-        )
-        if last_val_loss is not None and last_val_loss < best_val:
-            best_val = float(last_val_loss)
+        if is_lora_mode:
+            save_lora_checkpoint(
+                path=run_dir / "last.pt",
+                lora_model=lora_model,
+                optimizer=optimizer,
+                epoch=epoch,
+                train_loss=train_loss,
+                val_loss=last_val_loss,
+                train_set=train_set,
+                source_run_dir=source_run_dir,
+                source_cfg=source_cfg,
+                cfg=cfg,
+            )
+        else:
+            checkpoint_eval_model = eval_model if eval_model is not None else policy_model
             save_checkpoint(
-                path=run_dir / "best.pt",
-                eval_model=eval_model,
+                path=run_dir / "last.pt",
+                eval_model=checkpoint_eval_model,
                 policy_model=policy_model,
                 old_model=old_model,
                 optimizer=optimizer,
@@ -1637,46 +2119,126 @@ def main():
                 source_cfg=source_cfg,
                 cfg=cfg,
             )
+        if last_val_loss is not None and last_val_loss < best_val:
+            best_val = float(last_val_loss)
+            if is_lora_mode:
+                save_lora_checkpoint(
+                    path=run_dir / "best.pt",
+                    lora_model=lora_model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    train_loss=train_loss,
+                    val_loss=last_val_loss,
+                    train_set=train_set,
+                    source_run_dir=source_run_dir,
+                    source_cfg=source_cfg,
+                    cfg=cfg,
+                )
+            else:
+                checkpoint_eval_model = eval_model if eval_model is not None else policy_model
+                save_checkpoint(
+                    path=run_dir / "best.pt",
+                    eval_model=checkpoint_eval_model,
+                    policy_model=policy_model,
+                    old_model=old_model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    train_loss=train_loss,
+                    val_loss=last_val_loss,
+                    train_set=train_set,
+                    source_run_dir=source_run_dir,
+                    source_cfg=source_cfg,
+                    cfg=cfg,
+                )
             print(f"[*] Saved new RAM best.pt at epoch {epoch}")
 
         if epoch % int(cfg.get("save_every", 20)) == 0:
-            maybe_save_preview(
-                eval_model=eval_model,
-                val_set=val_set,
-                epoch=epoch,
-                device=device,
-                run_dir=run_dir,
-                cfg=cfg,
-            )
+            if is_lora_mode:
+                with use_adapter(lora_model, "evaluation"):
+                    maybe_save_preview(
+                        eval_model=lora_model,
+                        val_set=val_set,
+                        epoch=epoch,
+                        device=device,
+                        run_dir=run_dir,
+                        cfg=cfg,
+                    )
+            else:
+                preview_model = eval_model if eval_model is not None else policy_model
+                if eval_model is not None and eval_ema_device_name == "cpu":
+                    preview_model = eval_model.to(device)
+                maybe_save_preview(
+                    eval_model=preview_model,
+                    val_set=val_set,
+                    epoch=epoch,
+                    device=device,
+                    run_dir=run_dir,
+                    cfg=cfg,
+                )
+                if eval_model is not None and eval_ema_device_name == "cpu":
+                    eval_model.to(eval_model_storage_device)
         if (
             rollout_set is not None
             and rollout_logger is not None
             and int(cfg.get("rollout_eval_every", 20)) > 0
             and epoch % int(cfg.get("rollout_eval_every", 20)) == 0
         ):
-            run_rollout_evaluation(
-                model=eval_model,
-                dataset=rollout_set,
-                epoch=epoch,
-                device=device,
-                run_dir=run_dir,
-                cfg=cfg,
-                ram_coh_cfg=ram_coh_cfg,
-                logger=rollout_logger,
-                model_role="eval",
-            )
-            if rollout_policy_logger is not None:
+            if is_lora_mode:
+                with use_adapter(lora_model, "evaluation"):
+                    run_rollout_evaluation(
+                        model=lora_model,
+                        dataset=rollout_set,
+                        epoch=epoch,
+                        device=device,
+                        run_dir=run_dir,
+                        cfg=cfg,
+                        ram_coh_cfg=ram_coh_cfg,
+                        logger=rollout_logger,
+                        model_role="eval",
+                    )
+            else:
+                eval_runtime_model = eval_model if eval_model is not None else policy_model
+                if eval_model is not None and eval_ema_device_name == "cpu":
+                    eval_runtime_model = eval_model.to(device)
                 run_rollout_evaluation(
-                    model=policy_model,
+                    model=eval_runtime_model,
                     dataset=rollout_set,
                     epoch=epoch,
                     device=device,
                     run_dir=run_dir,
                     cfg=cfg,
                     ram_coh_cfg=ram_coh_cfg,
-                    logger=rollout_policy_logger,
-                    model_role="policy",
+                    logger=rollout_logger,
+                    model_role="eval",
                 )
+                if eval_model is not None and eval_ema_device_name == "cpu":
+                    eval_model.to(eval_model_storage_device)
+            if rollout_policy_logger is not None:
+                if is_lora_mode:
+                    with use_adapter(lora_model, "default"):
+                        run_rollout_evaluation(
+                            model=lora_model,
+                            dataset=rollout_set,
+                            epoch=epoch,
+                            device=device,
+                            run_dir=run_dir,
+                            cfg=cfg,
+                            ram_coh_cfg=ram_coh_cfg,
+                            logger=rollout_policy_logger,
+                            model_role="policy",
+                        )
+                else:
+                    run_rollout_evaluation(
+                        model=policy_model,
+                        dataset=rollout_set,
+                        epoch=epoch,
+                        device=device,
+                        run_dir=run_dir,
+                        cfg=cfg,
+                        ram_coh_cfg=ram_coh_cfg,
+                        logger=rollout_policy_logger,
+                        model_role="policy",
+                    )
 
         print(f"[train] epoch={epoch:04d} ram_loss={train_loss:.6e}")
 
