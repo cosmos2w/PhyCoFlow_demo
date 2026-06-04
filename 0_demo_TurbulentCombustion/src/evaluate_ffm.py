@@ -79,7 +79,7 @@ def parse_args():
     
     p.add_argument("--checkpoint", type=str, default="best", choices=["best", "last"],
                    help="Which checkpoint to load from the recovered run directory.")
-    p.add_argument("--n-steps-generation", type=int, default = 4,
+    p.add_argument("--n-steps-generation", type=int, default = 2,
                    help="Override generation steps. Defaults to YAML n_steps_generation if present.")
     p.add_argument(
         "--ode-solver",

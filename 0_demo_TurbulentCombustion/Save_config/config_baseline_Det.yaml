@@ -14,14 +14,14 @@
 # =============================================================================
 
 # NOTE: demo 0 is for senseiver conditioned on T and U_1 with 192-384 sensors per field, and 256 sensors for visualization. This is the most comparable setting to the original pointcloud FFM Perceiver baseline, which also used T and U_1 conditioning with 256 sensors per field. Demo 1 is for senseiver conditioned on T only, with the same sensor counts as demo 0. Demo 2 and demo 3 are for the same conditioning setups as demos 0 and 1, but with the original pointcloud FFM Perceiver backbone replaced by the MLP-RBF backbone, to isolate the effect of the backbone architecture change. Demo 4 is for the Geo-FNO baseline with T-only conditioning.
-
+# Testing case for Senseiver - latent_dime 128
 # =============================================================================
 
-baseline_model: "mlp_rbf"  # `mlp_rbf`, `senseiver`, or `geofno`.
+baseline_model: "senseiver"  # `mlp_rbf`, `senseiver`, or `geofno`.
 training_stage: 1
 
 shared:
-  demo_num: 0
+  demo_num: 10
   seed: 42
   device_ids: [2]
   reload: false
@@ -117,7 +117,7 @@ senseiver_params:
   architecture:
     coord_dim: 2
     num_latents: 128
-    latent_dim: 256
+    latent_dim: 128
     num_encoder_layers: 3
     num_self_attn_per_block: 3
     num_cross_attn_heads: 8

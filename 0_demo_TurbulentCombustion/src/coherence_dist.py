@@ -619,30 +619,55 @@ def compute_ram_coherence_cost(
         raise ValueError(f"Shape mismatch: {tuple(x_gen.shape)} vs {tuple(x_ref.shape)}")
 
     cfg = cfg or RAMCoherenceConfig()
-    mode = str(cfg.mode)
-    if mode != "global_dist":
-        raise ValueError("RAMCoherenceConfig currently supports mode='global_dist' only.")
-
     if cfg.use_denorm:
         x_gen = _maybe_denormalize_batch(x_gen, mean, std)
         x_ref = _maybe_denormalize_batch(x_ref, mean, std)
 
+    mode = str(cfg.mode)
+    if mode == "field_l2":
+        # Reward-debug mode: use direct field mismatch instead of distributional
+        # coherence.  This is intentionally simple and deterministic so RAM
+        # signal flow can be sanity-checked without Wasserstein projections.
+        diff = torch.linalg.vector_norm(x_gen - x_ref, dim=(1, 2))
+        denom = torch.linalg.vector_norm(x_ref, dim=(1, 2)).clamp_min(1e-12)
+        rel_l2 = diff / denom
+        mse = torch.mean((x_gen - x_ref) ** 2, dim=(1, 2))
+        cost = rel_l2 * float(cfg.lambda_global)
+        return cost, {
+            "ram_cost": float(cost.mean().detach().cpu()),
+            "field_l2_rel": float(rel_l2.mean().detach().cpu()),
+            "field_l2_mse": float(mse.mean().detach().cpu()),
+            "global_dist_score": float(cost.mean().detach().cpu()),
+        }
+
+    if mode not in ("global_dist", "marginal_only"):
+        raise ValueError(
+            "RAMCoherenceConfig.mode must be one of "
+            "'global_dist', 'marginal_only', or 'field_l2'."
+        )
+
+    # Reward-debug mode: reuse the global distribution machinery but turn off
+    # joint/channel interactions and pairwise projections.
+    lambda_joint = 0.0 if mode == "marginal_only" else cfg.lambda_joint
+    include_pairwise = False if mode == "marginal_only" else cfg.include_pairwise
+    include_pairwise_in_score = False if mode == "marginal_only" else cfg.include_pairwise_in_score
+
     global_cfg = GlobalDistConfig(
         lambda_marg=cfg.lambda_marg,
-        lambda_joint=cfg.lambda_joint,
+        lambda_joint=lambda_joint,
         num_directions=cfg.num_directions,
         n_iter_theta=cfg.n_iter_theta,
         lr_theta=cfg.lr_theta,
         ortho_reg=cfg.ortho_reg,
         n_proj_pairwise=cfg.n_proj_pairwise,
-        include_pairwise=cfg.include_pairwise,
+        include_pairwise=include_pairwise,
         seed=cfg.seed,
         joint_method=cfg.joint_method,
         joint_top_frac=cfg.joint_top_frac,
         joint_qmc=cfg.joint_qmc,
         include_axes=cfg.include_axes,
         lambda_pairwise=cfg.lambda_pairwise,
-        include_pairwise_in_score=cfg.include_pairwise_in_score,
+        include_pairwise_in_score=include_pairwise_in_score,
     )
 
     costs = []

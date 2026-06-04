@@ -101,8 +101,9 @@ DEFAULTS = {
     "reward_mode": "global_dist",
     "reward_multiplier": 1.0,
     "reward_scaling": "running_epoch_std",
+    "reward_std_ema_decay": 0.95,
     "reward_eps": 1.0e-4,
-    "adv_clip_abs": None,
+    "adv_clip_abs": 3.0,
     "coherence_use_denorm": False,
     "global_lambda_marg": 1.0,
     "global_lambda_joint": 1.0,
@@ -114,7 +115,7 @@ DEFAULTS = {
     "lr": 2.0e-5,
     "weight_decay": 1.0e-4,
     "beta1": 0.9,
-    "beta2": 0.99,
+    "beta2": 0.95,
     "grad_clip": 1.0,
     "old_ema_decay": 0.9,
     "eval_ema_decay": 0.99,
@@ -133,6 +134,9 @@ DEFAULTS = {
     "rollout_eval_obs_consistency_mode": "endpoint_smooth",
     "rollout_eval_num_sensors": None,
     "rollout_eval_save_fields": True,
+    "rollout_eval_fixed_condition": True,
+    "rollout_eval_condition_path": None,
+    "rollout_eval_policy_model": True,
     "save_history_json": False,
 }
 
@@ -345,6 +349,22 @@ class RunningRewardStd:
         return math.sqrt(max(self.m2 / self.count, 0.0))
 
 
+class EMARewardStd:
+    """Persistent reward-scale tracker shared across RAM epochs."""
+
+    def __init__(self, decay: float = 0.95):
+        self.decay = float(decay)
+        self.value: Optional[float] = None
+
+    def update(self, batch_std: float) -> float:
+        batch_std = float(max(batch_std, 0.0))
+        if self.value is None:
+            self.value = batch_std
+        else:
+            self.value = self.decay * self.value + (1.0 - self.decay) * batch_std
+        return float(self.value)
+
+
 class EpochMetrics:
     """Small averaging helper for scalar RAM metrics."""
 
@@ -402,11 +422,21 @@ class RAMHistoryLogger:
             "adv_abs_mean",
             "adv_max_abs",
             "adv_clip_abs",
+            "scaled_adv_abs_mean",
+            "scaled_adv_abs_max",
+            "reward_scale_std",
+            "reward_mode",
+            "coherence/ram_cost",
             "coherence/global_dist_score",
             "coherence/marginal_score",
             "coherence/joint_score",
             "coherence/pairwise_mean",
+            "coherence/field_l2_rel",
+            "coherence/field_l2_mse",
             "output_delta_norm",
+            "policy_ref_delta_norm",
+            "target_delta_norm",
+            "bridge_residual_norm",
             "target_velocity_norm",
             "endpoint_steps",
             "ram_n_query_points",
@@ -514,16 +544,25 @@ class RolloutHistoryLogger:
     Track a fixed clean rollout through training without changing Evaluation/.
     """
 
-    def __init__(self, run_dir: Path, field_names: Sequence[str], save_json: bool = False):
+    def __init__(
+        self,
+        run_dir: Path,
+        field_names: Sequence[str],
+        save_json: bool = False,
+        model_role: str = "eval",
+    ):
         self.run_dir = run_dir
         self.field_names = [str(name) for name in field_names]
         self.save_json = bool(save_json)
-        self.csv_path = run_dir / "rollout_metrics.csv"
-        self.json_path = run_dir / "rollout_metrics.json"
-        self.plot_path = run_dir / "rollout_metrics.png"
+        self.model_role = str(model_role)
+        suffix = "" if self.model_role == "eval" else f"_{self.model_role}"
+        self.csv_path = run_dir / f"rollout_metrics{suffix}.csv"
+        self.json_path = run_dir / f"rollout_metrics{suffix}.json"
+        self.plot_path = run_dir / f"rollout_metrics{suffix}.png"
         self.rows = []
         self.header = [
             "epoch",
+            "model_role",
             "split",
             "snapshot_index",
             "n_steps",
@@ -622,6 +661,87 @@ def _resolve_rollout_n_obs(cfg: dict) -> list[int]:
     return values
 
 
+def _rollout_condition_path(run_dir: Path, cfg: dict) -> Path:
+    """Resolve the fixed rollout condition cache path."""
+    configured = cfg.get("rollout_eval_condition_path", None)
+    if configured:
+        path = Path(str(configured))
+        return path if path.is_absolute() else run_dir / path
+    return run_dir / "Rollout" / "fixed_rollout_condition.pt"
+
+
+def _load_rollout_condition_file(path: Path) -> dict:
+    """
+    Load fixed rollout-condition caches with PyTorch's safe tensor-only mode.
+
+    The cache is produced by this script and contains only tensors plus simple
+    scalar/list metadata, so weights_only=True avoids pickle warnings without
+    losing any needed information.  The fallback keeps older torch versions
+    usable if they do not yet expose the keyword.
+    """
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
+def _load_or_build_rollout_condition(
+    *,
+    coords: torch.Tensor,
+    truth: torch.Tensor,
+    run_dir: Path,
+    cfg: dict,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int, list[int]]:
+    """
+    Reuse the exact same sparse rollout condition across epochs.
+
+    This removes sensor-sampling randomness from rollout monitoring so trends in
+    L2/coherence reflect model changes, not changing sparse observations.
+    """
+    n_obs = _resolve_rollout_n_obs(cfg)
+    cache_path = _rollout_condition_path(run_dir, cfg)
+    use_fixed = bool(cfg.get("rollout_eval_fixed_condition", True))
+
+    if use_fixed and cache_path.exists():
+        payload = _load_rollout_condition_file(cache_path)
+        obs_coords = payload["obs_coords"].to(device)
+        obs_values = payload["obs_values"].to(device)
+        obs_mask = payload["obs_mask"].to(device)
+        obs_indices = payload["obs_indices"].to(device)
+        obs_field_ids = payload["obs_field_ids"].to(device)
+        snapshot_index = int(payload.get("snapshot_index", int(cfg.get("rollout_eval_snapshot_index", 0))))
+        stored_n_obs = [int(v) for v in payload.get("n_obs", n_obs)]
+        return obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids, snapshot_index, stored_n_obs
+
+    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+        coords_full=coords,
+        fields_full=truth,
+        cond_fields=cfg["cond_fields"],
+        n_obs_min=n_obs,
+        n_obs_max=n_obs,
+    )
+
+    if use_fixed:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "obs_coords": obs_coords.detach().cpu(),
+                "obs_values": obs_values.detach().cpu(),
+                "obs_mask": obs_mask.detach().cpu(),
+                "obs_indices": obs_indices.detach().cpu(),
+                "obs_field_ids": obs_field_ids.detach().cpu(),
+                "snapshot_index": int(cfg.get("rollout_eval_snapshot_index", 0)),
+                "split": str(cfg.get("rollout_eval_split", "test")),
+                "cond_fields": list(cfg["cond_fields"]),
+                "n_obs": list(n_obs),
+            },
+            cache_path,
+        )
+
+    return obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids, int(cfg.get("rollout_eval_snapshot_index", 0)), n_obs
+
+
 def _rel_l2_per_field(x_pred: torch.Tensor, x_ref: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     diff = torch.linalg.vector_norm(x_pred - x_ref, dim=0)
     denom = torch.linalg.vector_norm(x_ref, dim=0).clamp_min(eps)
@@ -649,7 +769,7 @@ def _save_rollout_field_figure(
     )
     fig.suptitle(
         "RAM rollout "
-        f"epoch {int(metrics['epoch'])} | split={metrics['split']} "
+        f"epoch {int(metrics['epoch'])} | role={metrics.get('model_role', 'eval')} | split={metrics['split']} "
         f"snapshot={int(metrics['snapshot_index'])} | NFE={int(metrics['n_steps'])} | "
         f"mean L2={metrics['mean_rel_l2_phys']:.3e} | "
         f"cost={metrics['coherence_cost']:.3e}",
@@ -692,26 +812,29 @@ def run_rollout_evaluation(
     cfg: dict,
     ram_coh_cfg: RAMCoherenceConfig,
     logger: RolloutHistoryLogger,
+    model_role: str = "eval",
 ) -> Dict[str, float]:
     """
     Roll out one fixed clean test sample and log fidelity/coherence over epochs.
     """
     model.eval()
     snapshot_index = int(cfg.get("rollout_eval_snapshot_index", 0))
+    condition_path = _rollout_condition_path(run_dir, cfg)
+    if bool(cfg.get("rollout_eval_fixed_condition", True)) and condition_path.exists():
+        condition_meta = _load_rollout_condition_file(condition_path)
+        snapshot_index = int(condition_meta.get("snapshot_index", snapshot_index))
     n_steps = int(cfg.get("rollout_eval_n_steps", 2))
     sample = dataset[snapshot_index]
 
     coords = sample["coords"].unsqueeze(0).to(device)
     truth = sample["fields"].unsqueeze(0).to(device)
     coords_raw = sample["coords_raw"].cpu().numpy()
-    n_obs = _resolve_rollout_n_obs(cfg)
-
-    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
-        coords_full=coords,
-        fields_full=truth,
-        cond_fields=cfg["cond_fields"],
-        n_obs_min=n_obs,
-        n_obs_max=n_obs,
+    obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids, snapshot_index, n_obs = _load_or_build_rollout_condition(
+        coords=coords,
+        truth=truth,
+        run_dir=run_dir,
+        cfg=cfg,
+        device=device,
     )
 
     recon = model.sample(
@@ -749,6 +872,7 @@ def run_rollout_evaluation(
 
     row: Dict[str, float] = {
         "epoch": int(epoch),
+        "model_role": str(model_role),
         "split": str(cfg.get("rollout_eval_split", "test")),
         "snapshot_index": snapshot_index,
         "n_steps": n_steps,
@@ -761,7 +885,10 @@ def run_rollout_evaluation(
         row[f"rel_l2_phys/{name}"] = float(rel_l2_phys[c].cpu())
         row[f"rel_l2_norm/{name}"] = float(rel_l2_norm[c].cpu())
 
-    rollout_dir = run_dir / "Rollout" / f"epoch_{int(epoch):04d}"
+    if str(model_role) == "eval":
+        rollout_dir = run_dir / "Rollout" / f"epoch_{int(epoch):04d}"
+    else:
+        rollout_dir = run_dir / "Rollout" / str(model_role) / f"epoch_{int(epoch):04d}"
     rollout_dir.mkdir(parents=True, exist_ok=True)
     if bool(cfg.get("save_history_json", False)):
         with open(rollout_dir / "rollout_metrics.json", "w", encoding="utf-8") as handle:
@@ -781,7 +908,7 @@ def run_rollout_evaluation(
     logger.log(row)
     print(
         f"[rollout] epoch={epoch:04d} mean_l2={row['mean_rel_l2_phys']:.6e} "
-        f"coh_cost={row['coherence_cost']:.6e}"
+        f"coh_cost={row['coherence_cost']:.6e} role={model_role}"
     )
     return row
 
@@ -864,6 +991,7 @@ def train_ram_epoch(
     cfg: dict,
     ram_coh_cfg: RAMCoherenceConfig,
     train_set: TurbulentCombustionH5Dataset,
+    reward_std_ema: Optional[EMARewardStd] = None,
 ) -> tuple[float, Dict[str, float]]:
     """
     One RAM epoch: sample endpoints, score them, build advantages, then fit the
@@ -940,18 +1068,36 @@ def train_ram_epoch(
 
             rewards_grouped = rewards.view(bsz, G)
             adv = rewards_grouped - rewards_grouped.mean(dim=1, keepdim=True)
+            batch_adv_std = float(adv.reshape(-1).std(unbiased=False).detach().cpu())
+            reward_scale_std = float("nan")
             if reward_scaling == "running_epoch_std":
                 scale = running_reward_std.std + reward_eps
                 adv = adv / scale
+                reward_scale_std = float(scale)
+            elif reward_scaling == "batch_std":
+                scale = batch_adv_std + reward_eps
+                adv = adv / scale
+                reward_scale_std = float(scale)
+            elif reward_scaling == "ema_std":
+                if reward_std_ema is None:
+                    raise ValueError("reward_scaling='ema_std' requires a persistent EMARewardStd tracker.")
+                scale = reward_std_ema.update(batch_adv_std) + reward_eps
+                adv = adv / scale
+                reward_scale_std = float(scale)
             elif reward_scaling == "group":
                 adv = adv / (rewards_grouped.std(dim=1, keepdim=True, unbiased=False) + reward_eps)
+                reward_scale_std = float("nan")
             elif reward_scaling in ("none", "false", "False"):
                 pass
             else:
-                raise ValueError("reward_scaling must be 'running_epoch_std', 'group', or 'none'.")
+                raise ValueError(
+                    "reward_scaling must be 'batch_std', 'running_epoch_std', "
+                    "'ema_std', 'group', or 'none'."
+                )
             if adv_clip_abs_value is not None:
                 adv = adv.clamp(-adv_clip_abs_value, adv_clip_abs_value)
             adv_flat = adv.reshape(-1)
+            scaled_adv_flat = float(cfg.get("reward_multiplier", 1.0)) * adv_flat.detach()
 
         # RAM scores full-grid endpoints above, then performs velocity matching
         # on a query subset, mirroring base FFM's n_query_points memory control.
@@ -982,6 +1128,8 @@ def train_ram_epoch(
 
         loss_total = 0.0
         output_delta_total = 0.0
+        target_delta_total = 0.0
+        bridge_residual_total = 0.0
         target_velocity_total = 0.0
         loss_weight_total = 0
         n_loss_items = x_end_l.shape[0]
@@ -1027,6 +1175,8 @@ def train_ram_epoch(
 
             loss_total += float(loss_mb.detach().cpu()) * weight
             output_delta_total += float(((v_policy.detach() - v_ref) ** 2).mean().cpu()) * weight
+            target_delta_total += float(((target_v.detach() - v_ref) ** 2).mean().cpu()) * weight
+            bridge_residual_total += float(((bridge_direction.detach() - v_old) ** 2).mean().cpu()) * weight
             target_velocity_total += float((target_v.detach() ** 2).mean().cpu()) * weight
             loss_weight_total += weight
 
@@ -1041,6 +1191,8 @@ def train_ram_epoch(
         current_lr = float(optimizer.param_groups[0]["lr"])
         loss_value = loss_total / max(loss_weight_total, 1)
         output_delta_value = output_delta_total / max(loss_weight_total, 1)
+        target_delta_value = target_delta_total / max(loss_weight_total, 1)
+        bridge_residual_value = bridge_residual_total / max(loss_weight_total, 1)
         target_velocity_value = target_velocity_total / max(loss_weight_total, 1)
         metrics = {
             "ram_loss": loss_value,
@@ -1049,11 +1201,20 @@ def train_ram_epoch(
             "adv_abs_mean": float(adv.abs().mean().detach().cpu()),
             "adv_max_abs": float(adv.abs().max().detach().cpu()),
             "adv_clip_abs": np.nan if adv_clip_abs_value is None else adv_clip_abs_value,
+            "scaled_adv_abs_mean": float(scaled_adv_flat.abs().mean().detach().cpu()),
+            "scaled_adv_abs_max": float(scaled_adv_flat.abs().max().detach().cpu()),
+            "reward_scale_std": reward_scale_std,
+            "coherence/ram_cost": float(coh_metrics.get("ram_cost", np.nan)),
             "coherence/global_dist_score": float(coh_metrics.get("global_dist_score", np.nan)),
             "coherence/marginal_score": float(coh_metrics.get("marginal_score", np.nan)),
             "coherence/joint_score": float(coh_metrics.get("joint_score", np.nan)),
             "coherence/pairwise_mean": float(coh_metrics.get("pairwise_mean", np.nan)),
+            "coherence/field_l2_rel": float(coh_metrics.get("field_l2_rel", np.nan)),
+            "coherence/field_l2_mse": float(coh_metrics.get("field_l2_mse", np.nan)),
             "output_delta_norm": output_delta_value,
+            "policy_ref_delta_norm": output_delta_value,
+            "target_delta_norm": target_delta_value,
+            "bridge_residual_norm": bridge_residual_value,
             "target_velocity_norm": target_velocity_value,
             "endpoint_steps": float(cfg.get("ram_endpoint_steps", 4)),
             "ram_n_query_points": float(coords_q.shape[1]),
@@ -1075,6 +1236,7 @@ def train_ram_epoch(
     avg["train_batches"] = float(epoch_metrics.counts.get("ram_loss", 0))
     avg["train_ratio_downsample"] = float(cfg.get("train_ratio_downsample", 1.0))
     avg["train_epoch_cases"] = float(len(loader.dataset))
+    avg["reward_mode"] = str(cfg.get("reward_mode", "global_dist"))
     return avg.get("ram_loss", float("nan")), avg
 
 
@@ -1361,11 +1523,13 @@ def main():
     save_history_json = bool(cfg.get("save_history_json", False))
     logger = RAMHistoryLogger(run_dir, save_json=save_history_json)
     rollout_logger = None
+    rollout_policy_logger = None
     if rollout_set is not None:
         rollout_logger = RolloutHistoryLogger(
             run_dir,
             getattr(rollout_set, "field_names", []),
             save_json=save_history_json,
+            model_role="eval",
         )
         run_rollout_evaluation(
             model=eval_model,
@@ -1376,10 +1540,30 @@ def main():
             cfg=cfg,
             ram_coh_cfg=ram_coh_cfg,
             logger=rollout_logger,
+            model_role="eval",
         )
+        if bool(cfg.get("rollout_eval_policy_model", True)):
+            rollout_policy_logger = RolloutHistoryLogger(
+                run_dir,
+                getattr(rollout_set, "field_names", []),
+                save_json=save_history_json,
+                model_role="policy",
+            )
+            run_rollout_evaluation(
+                model=policy_model,
+                dataset=rollout_set,
+                epoch=0,
+                device=device,
+                run_dir=run_dir,
+                cfg=cfg,
+                ram_coh_cfg=ram_coh_cfg,
+                logger=rollout_policy_logger,
+                model_role="policy",
+            )
 
     best_val = float("inf")
     last_val_loss: Optional[float] = None
+    reward_std_ema = EMARewardStd(decay=float(cfg.get("reward_std_ema_decay", 0.95)))
     for epoch in range(1, int(cfg.get("ram_epochs", 200)) + 1):
         train_loader = build_epoch_train_loader(train_set, cfg, epoch)
         train_loss, train_metrics = train_ram_epoch(
@@ -1395,6 +1579,7 @@ def main():
             cfg=cfg,
             ram_coh_cfg=ram_coh_cfg,
             train_set=train_set,
+            reward_std_ema=reward_std_ema,
         )
 
         val_metrics: Dict[str, float] = {}
@@ -1478,7 +1663,20 @@ def main():
                 cfg=cfg,
                 ram_coh_cfg=ram_coh_cfg,
                 logger=rollout_logger,
+                model_role="eval",
             )
+            if rollout_policy_logger is not None:
+                run_rollout_evaluation(
+                    model=policy_model,
+                    dataset=rollout_set,
+                    epoch=epoch,
+                    device=device,
+                    run_dir=run_dir,
+                    cfg=cfg,
+                    ram_coh_cfg=ram_coh_cfg,
+                    logger=rollout_policy_logger,
+                    model_role="policy",
+                )
 
         print(f"[train] epoch={epoch:04d} ram_loss={train_loss:.6e}")
 
