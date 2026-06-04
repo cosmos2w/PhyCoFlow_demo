@@ -273,7 +273,19 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
         model = FNOFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
 
-    if backbone_name == "GL_rbf":
+    if backbone_name in ["GL_rbf", "GL_rbf_ENH"]:
+        enhanced = backbone_name == "GL_rbf_ENH"
+        sensor_coord_encoding = cfg.get("sensor_coord_encoding", "fourier" if enhanced else "raw")
+        latent_sensor_reinject = cfg.get("latent_sensor_reinject", enhanced)
+        query_latent_readout = cfg.get("query_latent_readout", enhanced)
+        enhanced_head_norm = cfg.get("enhanced_head_norm", enhanced)
+        query_readout_scale_init = cfg.get("query_readout_scale_init", 1e-2 if enhanced else 0.0)
+        glres_scale_init = cfg.get("glres_scale_init", 1e-2 if enhanced else 0.0)
+        query_readout_type = cfg.get(
+            "query_readout_type",
+            "coord" if enhanced or query_latent_readout else "point",
+        )
+
         backbone = ConditionalPointHybridLocalGlobalRBF(
             n_fields=dataset.num_fields,
             coord_dim=3,
@@ -301,6 +313,15 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
             fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
             fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
+            enhanced_backbone=enhanced,
+            sensor_coord_encoding=sensor_coord_encoding,
+            latent_sensor_reinject=latent_sensor_reinject,
+            latent_reinject_every=cfg.get("latent_reinject_every", 1),
+            query_latent_readout=query_latent_readout,
+            query_readout_type=query_readout_type,
+            query_readout_scale_init=query_readout_scale_init,
+            enhanced_head_norm=enhanced_head_norm,
+            glres_scale_init=glres_scale_init,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model

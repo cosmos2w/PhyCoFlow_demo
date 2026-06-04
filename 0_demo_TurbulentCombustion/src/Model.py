@@ -680,11 +680,30 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         use_fourier_pe: bool = False,
         fourier_pe_num_bands: int = 32,
         fourier_pe_max_freq: float = 64.0,
+        enhanced_backbone: bool = False,
+        sensor_coord_encoding: str = "raw",
+        latent_sensor_reinject: bool = False,
+        latent_reinject_every: int = 1,
+        query_latent_readout: bool = False,
+        query_readout_type: str = "point",
+        query_readout_scale_init: float = 0.0,
+        enhanced_head_norm: bool = False,
+        glres_scale_init: float = 0.0,
     ) -> None:
         super().__init__()
 
         if summary_type not in ["cls", "mean"]:
             raise ValueError(f"summary_type must be 'cls' or 'mean', got {summary_type}")
+        if sensor_coord_encoding not in ["raw", "fourier"]:
+            raise ValueError(
+                f"sensor_coord_encoding must be one of ['raw', 'fourier'], got {sensor_coord_encoding}"
+            )
+        if query_readout_type not in ["point", "coord"]:
+            raise ValueError(
+                f"query_readout_type must be one of ['point', 'coord'], got {query_readout_type}"
+            )
+        if latent_reinject_every < 1:
+            raise ValueError(f"latent_reinject_every must be >= 1, got {latent_reinject_every}")
 
         self.n_fields = n_fields
         self.coord_dim = coord_dim
@@ -697,6 +716,13 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             coord_dim, num_bands=fourier_pe_num_bands, max_freq=fourier_pe_max_freq
         ) if use_fourier_pe else None
         self.coord_feat_dim = self.pos_enc.out_dim if self.pos_enc is not None else coord_dim
+        self.enhanced_backbone = bool(enhanced_backbone)
+        self.sensor_coord_encoding = sensor_coord_encoding
+        self.latent_sensor_reinject = bool(latent_sensor_reinject)
+        self.latent_reinject_every = int(latent_reinject_every)
+        self.query_latent_readout_enabled = bool(query_latent_readout)
+        self.query_readout_type = query_readout_type
+        self.enhanced_head_norm = bool(enhanced_head_norm)
 
         gather_modes = ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal", "topk_rbf_glres"]
         if gather_mode not in gather_modes:
@@ -760,8 +786,13 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         self.field_embed = nn.Embedding(n_fields, field_embed_dim)
 
         # Initial sparse sensor token from [obs_coords, obs_value, field_embed]
+        sensor_coord_dim = (
+            self.coord_feat_dim
+            if sensor_coord_encoding == "fourier" and self.pos_enc is not None
+            else coord_dim
+        )
         self.sensor_in_proj = make_mlp(
-            in_dim=coord_dim + 1 + field_embed_dim,
+            in_dim=sensor_coord_dim + 1 + field_embed_dim,
             hidden_dim=latent_dim,
             out_dim=latent_dim,
             depth=3,
@@ -802,9 +833,16 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             self.sensor_local_dropout = nn.Dropout(sensor_local_dropout)
             self.sensor_local_norm = nn.LayerNorm(cond_dim)
 
-        if self.gather_mode == "topk_rbf_glres":
-            # Cheap query-to-latent readout: attends over L latents, not K sensors per query.
-            self.query_readout_in = nn.Linear(hidden_dim, latent_dim, bias=False)
+        # Optional query-to-latent readout can be used by enhanced GL_rbf for any gather mode.
+        # The legacy topk_rbf_glres path reuses these same modules to preserve old behavior.
+        self.use_query_latent_readout = self.query_latent_readout_enabled or self.gather_mode == "topk_rbf_glres"
+        if self.use_query_latent_readout:
+            if self.query_readout_type == "coord":
+                self.query_decoder_token = nn.Parameter(torch.randn(1, hidden_dim) * 0.02)
+                self.query_readout_in = nn.Linear(self.coord_feat_dim + hidden_dim, latent_dim, bias=False)
+            else:
+                self.query_decoder_token = None
+                self.query_readout_in = nn.Linear(hidden_dim, latent_dim, bias=False)
             self.query_latent_readout = CrossAttentionBlock(
                 dim=latent_dim,
                 num_heads=max(1, min(num_heads, 4)),
@@ -813,8 +851,9 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 mlp_dropout=mlp_dropout,
             )
             self.query_readout_out = nn.Linear(latent_dim, hidden_dim, bias=False)
-            self.query_readout_scale = nn.Parameter(torch.tensor(0.0))
+            self.query_readout_scale = nn.Parameter(torch.tensor(float(query_readout_scale_init)))
 
+        if self.gather_mode == "topk_rbf_glres":
             # Coarse scaffold is summary-driven and pointwise, so it avoids [B, N, K, C] tensors.
             self.coarse_film = nn.Linear(hidden_dim, 2 * hidden_dim)
             self.coarse_head = nn.Sequential(
@@ -824,7 +863,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 nn.Dropout(mlp_dropout),
                 nn.Linear(hidden_dim, n_fields),
             )
-            self.coarse_scale = nn.Parameter(torch.tensor(0.0))
+            self.coarse_scale = nn.Parameter(torch.tensor(float(glres_scale_init)))
 
             # Sensor importance is computed once per refined sensor token, then gathered as scalars.
             self.sensor_importance = nn.Sequential(
@@ -833,7 +872,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 nn.GELU(),
                 nn.Linear(cond_dim, 1),
             )
-            self.sensor_importance_scale = nn.Parameter(torch.tensor(0.0))
+            self.sensor_importance_scale = nn.Parameter(torch.tensor(float(glres_scale_init)))
 
         # -------------------------
         # Latent global processor
@@ -892,6 +931,8 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             nn.Dropout(mlp_dropout),
             nn.Linear(hidden_dim, n_fields),
         )
+        head_in_dim = hidden_dim + hidden_dim + cond_dim
+        self.head_in_norm = nn.LayerNorm(head_in_dim) if enhanced_head_norm else nn.Identity()
 
     def _build_sensor_tokens(
         self,
@@ -910,7 +951,14 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         field_feat = self.field_embed(safe_field_ids)                 # [B, M, E]
         field_feat = field_feat * obs_mask.unsqueeze(-1)             # zero padded rows
 
-        sensor_in = torch.cat([obs_coords, obs_values, field_feat], dim=-1)
+        # Enhanced mode uses the same Fourier coordinate representation for sensors and queries.
+        # This mirrors Senseiver-style spatial tokenization while preserving GL_rbf's local gather.
+        if self.sensor_coord_encoding == "fourier" and self.pos_enc is not None:
+            sensor_coord_feat = self.pos_enc(obs_coords)
+        else:
+            sensor_coord_feat = obs_coords
+
+        sensor_in = torch.cat([sensor_coord_feat, obs_values, field_feat], dim=-1)
         sensor_tokens = self.sensor_in_proj(sensor_in)               # [B, M, D]
         sensor_tokens = sensor_tokens * obs_mask.unsqueeze(-1)
         return sensor_tokens
@@ -938,8 +986,20 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             kv_padding_mask=sensor_padding_mask,
         )
 
-        # Process in latent space
-        for block in self.latent_blocks:
+        # Process in latent space, optionally re-reading sparse sensors between blocks.
+        for i, block in enumerate(self.latent_blocks):
+            if (
+                self.latent_sensor_reinject
+                and i > 0
+                and i % self.latent_reinject_every == 0
+            ):
+                # Senseiver-style re-injection: latents re-read the sparse measurements.
+                # Cost scales with L*M, not N*M, so this preserves query-side efficiency.
+                latents = self.input_cross_attn(
+                    q=latents,
+                    kv=sensor_tokens,
+                    kv_padding_mask=sensor_padding_mask,
+                )
             latents = block(latents)
 
         return latents
@@ -958,9 +1018,25 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
         return self.summary_proj(summary)    # [B, H]
 
+    def _build_query_readout_tokens(
+        self,
+        point_feat: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Build query tokens for latent readout from point features or coordinate decoder tokens.
+        """
+        if self.query_readout_type == "coord":
+            bsz, n_query, _ = coords.shape
+            coord_feat = self.pos_enc(coords) if self.pos_enc is not None else coords
+            dq = self.query_decoder_token.view(1, 1, -1).expand(bsz, n_query, -1)
+            return self.query_readout_in(torch.cat([coord_feat, dq], dim=-1))
+        return self.query_readout_in(point_feat)
+
     def _readout_query_global_chunked(
         self,
         point_feat: torch.Tensor,
+        coords: torch.Tensor,
         latents: torch.Tensor,
     ) -> torch.Tensor:
         """
@@ -973,14 +1049,14 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             chunk_size = 4096
 
         if chunk_size is None or n_query <= chunk_size:
-            q = self.query_readout_in(point_feat)
+            q = self._build_query_readout_tokens(point_feat, coords)
             readout = self.query_latent_readout(q=q, kv=latents, kv_padding_mask=None)
             return self.query_readout_out(readout)
 
         outputs = []
         for start in range(0, n_query, chunk_size):
             end = min(start + chunk_size, n_query)
-            q = self.query_readout_in(point_feat[:, start:end])
+            q = self._build_query_readout_tokens(point_feat[:, start:end], coords[:, start:end])
             readout = self.query_latent_readout(q=q, kv=latents, kv_padding_mask=None)
             outputs.append(self.query_readout_out(readout))
         return torch.cat(outputs, dim=1)
@@ -1373,8 +1449,14 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # -------------------------
         latents = self._encode_latents(sensor_tokens=sensor_tokens, obs_mask=obs_mask)  # [B, L, D]
 
-        if self.gather_mode == "topk_rbf_glres":
-            global_feat = self._extract_global_summary(latents)                 # [B, H]
+        # The global summary remains the cheap broadcast path; enhanced mode can add
+        # a per-query latent readout before the final local-global fusion head.
+        global_feat = self._extract_global_summary(latents)                 # [B, H]
+        if self.use_query_latent_readout:
+            query_global = self._readout_query_global_chunked(point_feat, coords, latents)  # [B, N, H]
+            global_for_head = global_feat.unsqueeze(1) + self.query_readout_scale * query_global
+        else:
+            global_for_head = global_feat.unsqueeze(1).expand(bsz, n_pts, -1)
 
         # -------------------------
         # Double-dip refinement:
@@ -1408,11 +1490,10 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 sensor_importance_bias=sensor_importance_bias,
             )  # [B, N, cond_dim]
 
-            query_global = self._readout_query_global_chunked(point_feat, latents)  # [B, N, H]
-            global_for_head = global_feat.unsqueeze(1) + self.query_readout_scale * query_global
             coarse_pred = self.coarse_scale * self._predict_global_coarse(point_feat, global_feat)
 
-            residual = self.head(torch.cat([point_feat, global_for_head, local_cond], dim=-1))
+            head_in = torch.cat([point_feat, global_for_head, local_cond], dim=-1)
+            residual = self.head(self.head_in_norm(head_in))
             return coarse_pred + residual
 
         # Optional sensor-side local graph refinement.
@@ -1434,15 +1515,10 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         )  # [B, N, cond_dim]
 
         # -------------------------
-        # Separate global summary
-        # -------------------------
-        global_feat = self._extract_global_summary(latents)                 # [B, H]
-        global_feat = global_feat.unsqueeze(1).expand(bsz, n_pts, -1)      # [B, N, H]
-
-        # -------------------------
         # Final velocity prediction
         # -------------------------
-        out = self.head(torch.cat([point_feat, global_feat, local_cond], dim=-1))
+        head_in = torch.cat([point_feat, global_for_head, local_cond], dim=-1)
+        out = self.head(self.head_in_norm(head_in))
         return out
 
 

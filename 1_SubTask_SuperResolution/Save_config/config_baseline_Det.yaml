@@ -15,7 +15,7 @@ training_stage: 1
 shared:
   demo_num: 0
   seed: 42
-  device_ids: [1]
+  device_ids: [2]
   reload: false
 
   paths:

@@ -68,7 +68,7 @@ def parse_args():
     # Backbone selection
     # ------------------------------
     p.add_argument(
-        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf"], 
+        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"], 
         help="Backbone type. point-cloud MLP+RBF, point-cloud Perceiver, or grid-based FNO baseline.")
 
     p.add_argument("--seed", type=int, default=42)
@@ -149,6 +149,30 @@ def parse_args():
         "--sensor-local-dropout", type=float, default=0.0,
         help="Dropout used inside the sensor-side local refinement block for gather_mode='topk_rbf_ptlocal'.",
     )
+    p.add_argument("--sensor-coord-encoding", type=str, default=None,
+                   choices=["raw", "fourier"],
+                   help="Sensor coordinate encoding for GL_rbf/GL_rbf_ENH. "
+                        "Use 'fourier' to give sensors the same coordinate features as queries.")
+    p.add_argument("--latent-sensor-reinject", default=None,
+                   action=argparse.BooleanOptionalAction,
+                   help="If enabled, latents periodically re-attend to sparse sensor tokens.")
+    p.add_argument("--latent-reinject-every", type=int, default=1,
+                   help="Re-inject sensor information every N latent blocks when latent_sensor_reinject is enabled.")
+    p.add_argument("--query-latent-readout", default=None,
+                   action=argparse.BooleanOptionalAction,
+                   help="If enabled, each query reads global context from latent memory before the final head.")
+    p.add_argument("--query-readout-type", type=str, default=None,
+                   choices=["point", "coord"],
+                   help="'coord' uses Senseiver-style coordinate decoder tokens; "
+                        "'point' uses the current flow-state point features.")
+    p.add_argument("--query-readout-scale-init", type=float, default=None,
+                   help="Initial scale for query-to-latent readout. "
+                        "Use small positive values such as 1e-2 for GL_rbf_ENH.")
+    p.add_argument("--enhanced-head-norm", default=None,
+                   action=argparse.BooleanOptionalAction,
+                   help="If enabled, apply LayerNorm to the fused [query, global, local] head input.")
+    p.add_argument("--glres-scale-init", type=float, default=None,
+                   help="Initial scale for topk_rbf_glres residual terms: sensor importance and coarse scaffold.")
 
     # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
@@ -724,7 +748,52 @@ def main():
             share_query_proj=args.share_query_proj,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
-    elif args.backbone == "GL_rbf":
+    elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:
+        enhanced = args.backbone == "GL_rbf_ENH"
+
+        # Enhanced defaults are resolved here so legacy GL_rbf configs/checkpoints
+        # keep their original point-readout and zero-scale behavior.
+        sensor_coord_encoding = args.sensor_coord_encoding
+        if sensor_coord_encoding is None:
+            sensor_coord_encoding = "fourier" if enhanced else "raw"
+
+        latent_sensor_reinject = args.latent_sensor_reinject
+        if latent_sensor_reinject is None:
+            latent_sensor_reinject = enhanced
+
+        query_latent_readout = args.query_latent_readout
+        if query_latent_readout is None:
+            query_latent_readout = enhanced
+
+        enhanced_head_norm = args.enhanced_head_norm
+        if enhanced_head_norm is None:
+            enhanced_head_norm = enhanced
+
+        query_readout_type = args.query_readout_type
+        if query_readout_type is None:
+            query_readout_type = "coord" if enhanced else "point"
+
+        query_readout_scale_init = args.query_readout_scale_init
+        if query_readout_scale_init is None:
+            query_readout_scale_init = 1.0e-2 if enhanced else 0.0
+
+        glres_scale_init = args.glres_scale_init
+        if glres_scale_init is None:
+            glres_scale_init = 1.0e-2 if enhanced else 0.0
+
+        print(
+            "[*] GL_rbf settings: "
+            f"enhanced={enhanced}, "
+            f"sensor_coord_encoding={sensor_coord_encoding}, "
+            f"latent_sensor_reinject={latent_sensor_reinject}, "
+            f"latent_reinject_every={args.latent_reinject_every}, "
+            f"query_latent_readout={query_latent_readout}, "
+            f"query_readout_type={query_readout_type}, "
+            f"query_readout_scale_init={query_readout_scale_init}, "
+            f"enhanced_head_norm={enhanced_head_norm}, "
+            f"glres_scale_init={glres_scale_init}"
+        )
+
         backbone = ConditionalPointHybridLocalGlobalRBF(
             n_fields=train_set.num_fields,
             coord_dim=3,
@@ -752,6 +821,15 @@ def main():
             use_fourier_pe=args.USE_FOURIER_PE,
             fourier_pe_num_bands=args.fourier_pe_num_bands,
             fourier_pe_max_freq=args.fourier_pe_max_freq,
+            enhanced_backbone=enhanced,
+            sensor_coord_encoding=sensor_coord_encoding,
+            latent_sensor_reinject=latent_sensor_reinject,
+            latent_reinject_every=args.latent_reinject_every,
+            query_latent_readout=query_latent_readout,
+            query_readout_type=query_readout_type,
+            query_readout_scale_init=query_readout_scale_init,
+            enhanced_head_norm=enhanced_head_norm,
+            glres_scale_init=glres_scale_init,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":
