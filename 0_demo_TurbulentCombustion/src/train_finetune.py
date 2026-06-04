@@ -133,6 +133,7 @@ DEFAULTS = {
     "rollout_eval_obs_consistency_mode": "endpoint_smooth",
     "rollout_eval_num_sensors": None,
     "rollout_eval_save_fields": True,
+    "save_history_json": False,
 }
 
 
@@ -373,14 +374,22 @@ class EpochMetrics:
 
 class RAMHistoryLogger:
     """
-    Write standard loss history plus detailed RAM metrics to CSV/JSON/PNG.
+    Write standard history plus detailed RAM metrics to CSV/PNG.
+
+    The compact loss_history file intentionally keeps the conventional
+    train_loss/val_loss columns for compatibility with other trainers.  In RAM,
+    however, these are not the same physical quantity: train_loss is the RAM
+    velocity-matching MSE, while val_loss is a rollout reconstruction/coherence
+    score used for model selection.
     """
 
-    def __init__(self, run_dir: Path):
+    def __init__(self, run_dir: Path, save_json: bool = False):
         self.run_dir = run_dir
+        self.save_json = bool(save_json)
         self.loss_csv = run_dir / "loss_history.csv"
         self.loss_json = run_dir / "loss_history.json"
         self.loss_plot = run_dir / "loss_history.png"
+        self.validation_plot = run_dir / "validation_history.png"
         self.metrics_csv = run_dir / "ram_metrics.csv"
         self.metrics_json = run_dir / "ram_metrics.json"
         self.loss_rows = []
@@ -432,41 +441,71 @@ class RAMHistoryLogger:
                 loss_row["train_loss"],
                 "" if loss_row["val_loss"] is None else loss_row["val_loss"],
             ])
-        with open(self.loss_json, "w", encoding="utf-8") as handle:
-            json.dump(self.loss_rows, handle, indent=2)
+        if self.save_json:
+            with open(self.loss_json, "w", encoding="utf-8") as handle:
+                json.dump(self.loss_rows, handle, indent=2)
 
         metric_row = {"epoch": int(epoch), **metrics}
         self.metric_rows.append(metric_row)
         with open(self.metrics_csv, "a", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow([metric_row.get(key, "") for key in self.metric_header])
-        with open(self.metrics_json, "w", encoding="utf-8") as handle:
-            json.dump(self.metric_rows, handle, indent=2)
+        if self.save_json:
+            with open(self.metrics_json, "w", encoding="utf-8") as handle:
+                json.dump(self.metric_rows, handle, indent=2)
 
-        self._plot_loss()
+        self._plot_train_objective()
+        self._plot_validation_score()
 
-    def _plot_loss(self) -> None:
+    def _plot_train_objective(self) -> None:
+        """Plot only the RAM objective so it is not compared to rollout scores."""
         train_points = [(row["epoch"], row["train_loss"]) for row in self.loss_rows if row["train_loss"] > 0]
+        if not train_points:
+            return
+
+        fig, ax = plt.subplots(figsize=(9, 5.2))
+        ax.plot(
+            [p[0] for p in train_points],
+            [p[1] for p in train_points],
+            marker="o",
+            label="RAM velocity MSE",
+        )
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Velocity MSE")
+        ax.set_title("RAM Training Objective")
+        ax.grid(True, which="both", linestyle="--", alpha=0.45)
+        ax.set_yscale("log")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(self.loss_plot, dpi=150)
+        plt.close(fig)
+
+    def _plot_validation_score(self) -> None:
+        """Plot validation rollout score separately because it has different units."""
         val_points = [
             (row["epoch"], row["val_loss"])
             for row in self.loss_rows
             if row["val_loss"] is not None and row["val_loss"] > 0
         ]
+        if not val_points:
+            return
 
-        fig, ax = plt.subplots(figsize=(10, 6))
-        if train_points:
-            ax.plot([p[0] for p in train_points], [p[1] for p in train_points], marker="o", label="RAM train")
-        if val_points:
-            ax.plot([p[0] for p in val_points], [p[1] for p in val_points], marker="s", label="Validation")
+        fig, ax = plt.subplots(figsize=(9, 5.2))
+        ax.plot(
+            [p[0] for p in val_points],
+            [p[1] for p in val_points],
+            marker="s",
+            color="#B23A48",
+            label="Validation rollout score",
+        )
         ax.set_xlabel("Epoch")
-        ax.set_ylabel("Loss")
-        ax.set_title("RAM Fine-Tuning Progress")
+        ax.set_ylabel("Weighted rollout score")
+        ax.set_title("RAM Validation Rollout Score")
         ax.grid(True, which="both", linestyle="--", alpha=0.45)
-        if train_points or val_points:
-            ax.set_yscale("log")
-            ax.legend()
+        ax.set_yscale("log")
+        ax.legend()
         fig.tight_layout()
-        fig.savefig(self.loss_plot, dpi=150)
+        fig.savefig(self.validation_plot, dpi=150)
         plt.close(fig)
 
 
@@ -475,9 +514,10 @@ class RolloutHistoryLogger:
     Track a fixed clean rollout through training without changing Evaluation/.
     """
 
-    def __init__(self, run_dir: Path, field_names: Sequence[str]):
+    def __init__(self, run_dir: Path, field_names: Sequence[str], save_json: bool = False):
         self.run_dir = run_dir
         self.field_names = [str(name) for name in field_names]
+        self.save_json = bool(save_json)
         self.csv_path = run_dir / "rollout_metrics.csv"
         self.json_path = run_dir / "rollout_metrics.json"
         self.plot_path = run_dir / "rollout_metrics.png"
@@ -502,8 +542,9 @@ class RolloutHistoryLogger:
         with open(self.csv_path, "a", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow([row.get(key, "") for key in self.header])
-        with open(self.json_path, "w", encoding="utf-8") as handle:
-            json.dump(self.rows, handle, indent=2)
+        if self.save_json:
+            with open(self.json_path, "w", encoding="utf-8") as handle:
+                json.dump(self.rows, handle, indent=2)
         self._plot()
 
     def _plot(self) -> None:
@@ -722,8 +763,9 @@ def run_rollout_evaluation(
 
     rollout_dir = run_dir / "Rollout" / f"epoch_{int(epoch):04d}"
     rollout_dir.mkdir(parents=True, exist_ok=True)
-    with open(rollout_dir / "rollout_metrics.json", "w", encoding="utf-8") as handle:
-        json.dump(row, handle, indent=2)
+    if bool(cfg.get("save_history_json", False)):
+        with open(rollout_dir / "rollout_metrics.json", "w", encoding="utf-8") as handle:
+            json.dump(row, handle, indent=2)
 
     if bool(cfg.get("rollout_eval_save_fields", True)):
         _save_rollout_field_figure(
@@ -1316,10 +1358,15 @@ def main():
         weight_decay=float(cfg.get("weight_decay", 1.0e-4)),
     )
     ram_coh_cfg = build_ram_coherence_config(cfg)
-    logger = RAMHistoryLogger(run_dir)
+    save_history_json = bool(cfg.get("save_history_json", False))
+    logger = RAMHistoryLogger(run_dir, save_json=save_history_json)
     rollout_logger = None
     if rollout_set is not None:
-        rollout_logger = RolloutHistoryLogger(run_dir, getattr(rollout_set, "field_names", []))
+        rollout_logger = RolloutHistoryLogger(
+            run_dir,
+            getattr(rollout_set, "field_names", []),
+            save_json=save_history_json,
+        )
         run_rollout_evaluation(
             model=eval_model,
             dataset=rollout_set,
@@ -1363,9 +1410,11 @@ def main():
             )
             last_val_loss = val_metrics.get("val_loss", None)
             print(
-                f"[valid] epoch={epoch:04d} val_loss={last_val_loss:.6e} "
+                f"[valid] epoch={epoch:04d} val_score={last_val_loss:.6e} "
                 f"rel_l2={val_metrics.get('val_rel_l2', float('nan')):.6e} "
-                f"coh={val_metrics.get('val_coherence_cost', float('nan')):.6e}"
+                f"coh={val_metrics.get('val_coherence_cost', float('nan')):.6e} "
+                f"(score={float(cfg.get('val_loss_rel_l2_weight', 1.0)):.3g}*rel_l2+"
+                f"{float(cfg.get('val_loss_coherence_weight', 0.1)):.3g}*coh)"
             )
 
         merged_metrics = dict(train_metrics)
@@ -1436,7 +1485,7 @@ def main():
     if not (run_dir / "best.pt").exists():
         shutil.copy(run_dir / "last.pt", run_dir / "best.pt")
     print("[*] RAM fine-tuning complete.")
-    print(f"[*] Best validation loss: {best_val:.6e}")
+    print(f"[*] Best validation rollout score: {best_val:.6e}")
 
 
 if __name__ == "__main__":

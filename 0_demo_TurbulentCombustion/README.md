@@ -261,6 +261,12 @@ RAM outputs are stored under:
 Save_TrainedModel/ram_tc_pointcloud_DemoN<id>_<timestamp>/
 ```
 
+By default RAM metric histories are saved once in CSV form:
+`loss_history.csv`, `ram_metrics.csv`, and `rollout_metrics.csv`.
+`loss_history.png` plots only the RAM velocity-matching objective, while
+`validation_history.png` plots the separate validation rollout score. Set
+`save_history_json: true` if JSON copies of the history tables are also needed.
+
 The `model` entry in `best.pt` and `last.pt` is the evaluation EMA model, so
 `src/evaluate_ffm.py` can load RAM checkpoints without a separate evaluator.
 
