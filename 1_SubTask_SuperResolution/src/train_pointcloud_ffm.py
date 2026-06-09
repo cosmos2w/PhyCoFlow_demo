@@ -12,6 +12,7 @@ With this patch:
 '''
 
 import argparse
+import csv
 import yaml
 import shutil
 import json
@@ -25,17 +26,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from datetime import datetime
 
 from helpers import (
-    MetricsLogger,
     TurbulentCombustionH5Dataset,
     PDEBenchMultiResDataset,
     ResolutionGroupedBatchSampler,
     validate_regular_grid_compatibility,
-    create_recon_dir,
     visualize_reconstruction,
     build_sparse_condition,
 )
@@ -49,6 +49,76 @@ from Model import (
     FNO,
     FNOFFM,
     )
+
+
+class TrainingHistoryLogger:
+    def __init__(self, run_dir: Path) -> None:
+        self.csv_path = run_dir / "loss_history.csv"
+        self.json_path = run_dir / "loss_history.json"
+        self.plot_path = run_dir / "loss_history.png"
+        self.rows = []
+        with open(self.csv_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["epoch", "train_loss", "val_loss"])
+
+    def log_and_plot(self, epoch: int, train_loss: float, val_loss: Optional[float] = None) -> None:
+        row = {
+            "epoch": int(epoch),
+            "train_loss": float(train_loss),
+            "val_loss": None if val_loss is None else float(val_loss),
+        }
+        self.rows.append(row)
+
+        with open(self.csv_path, "a", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow([
+                row["epoch"],
+                row["train_loss"],
+                "" if row["val_loss"] is None else row["val_loss"],
+            ])
+        with open(self.json_path, "w", encoding="utf-8") as handle:
+            json.dump(self.rows, handle, indent=2)
+
+        train_points = [
+            (item["epoch"], item["train_loss"])
+            for item in self.rows
+            if item["train_loss"] is not None and item["train_loss"] > 0.0
+        ]
+        val_points = [
+            (item["epoch"], item["val_loss"])
+            for item in self.rows
+            if item["val_loss"] is not None and item["val_loss"] > 0.0
+        ]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        if train_points:
+            ax.plot(
+                [item[0] for item in train_points],
+                [item[1] for item in train_points],
+                label="Train Loss",
+                marker="o",
+                color="blue",
+                markersize=4,
+            )
+        if val_points:
+            ax.plot(
+                [item[0] for item in val_points],
+                [item[1] for item in val_points],
+                label="Validation Loss",
+                marker="s",
+                color="orange",
+                markersize=5,
+            )
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title("Conditional Point-Cloud FFM Training Progress")
+        if train_points or val_points:
+            ax.set_yscale("log")
+            ax.legend()
+        ax.grid(True, which="both", ls="--", alpha=0.5)
+        fig.tight_layout()
+        fig.savefig(self.plot_path, dpi=150)
+        plt.close(fig)
 
 def parse_args():
 
@@ -109,7 +179,7 @@ def parse_args():
     # Backbone selection
     # ------------------------------
     p.add_argument(
-        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf"], 
+        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"], 
         help="Backbone type. point-cloud MLP+RBF, point-cloud Perceiver, or grid-based FNO baseline.")
 
     p.add_argument("--seed", type=int, default=42)
@@ -183,6 +253,30 @@ def parse_args():
         "--neighbor-backend", type=str, default="torch", choices=["auto", "torch", "keops"],
         help="Neighbor / kernel backend for the hybrid gather. "
             "'auto' uses KeOps if available, otherwise falls back to pure PyTorch.",)
+    p.add_argument("--sensor-coord-encoding", type=str, default=None,
+                   choices=["raw", "fourier"],
+                   help="Sensor coordinate encoding for GL_rbf/GL_rbf_ENH. "
+                        "Use 'fourier' to give sensors the same coordinate features as queries.")
+    p.add_argument("--latent-sensor-reinject", default=None,
+                   action=argparse.BooleanOptionalAction,
+                   help="If enabled, latents periodically re-attend to sparse sensor tokens.")
+    p.add_argument("--latent-reinject-every", type=int, default=1,
+                   help="Re-inject sensor information every N latent blocks when latent_sensor_reinject is enabled.")
+    p.add_argument("--query-latent-readout", default=None,
+                   action=argparse.BooleanOptionalAction,
+                   help="If enabled, each query reads global context from latent memory before the final head.")
+    p.add_argument("--query-readout-type", type=str, default=None,
+                   choices=["point", "coord"],
+                   help="'coord' uses Senseiver-style coordinate decoder tokens; "
+                        "'point' uses the current flow-state point features.")
+    p.add_argument("--query-readout-scale-init", type=float, default=None,
+                   help="Initial scale for query-to-latent readout. "
+                        "Use small positive values such as 1e-2 for GL_rbf_ENH.")
+    p.add_argument("--enhanced-head-norm", default=None,
+                   action=argparse.BooleanOptionalAction,
+                   help="If enabled, apply LayerNorm to the fused [query, global, local] head input.")
+    p.add_argument("--glres-scale-init", type=float, default=None,
+                   help="Initial scale for topk_rbf_glres residual terms: sensor importance and coarse scaffold.")
 
     # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
@@ -752,24 +846,25 @@ def main():
     with open(save_dir / "args.json", "w") as f:
         import json
         json.dump(vars(args), f, indent=2)
+    if os.path.exists(config_path):
+        shutil.copy(config_path, save_dir / "run_config.yaml")
     
-    # Setup CSV and Recon Dirs
-    csv_base_dir = os.path.join(demo_dir, f"Save_loss_csv")
-    recon_base_dir = os.path.join(demo_dir, f"Save_reconstruction_files")
+    # Keep all run artifacts under the model directory, matching 0_demo and
+    # the unified baseline trainers. Legacy Save_loss_csv/ and
+    # Save_reconstruction_files/ roots are not used for new FFM runs.
+    recon_dir = save_dir / "Evaluation"
 
     if args.RELOAD and reload_ckpt is not None:
-        loss_dir = Path(csv_base_dir) / f"Loss_DemoN{args.Demo_Num}_{run_timestamp}"
-        recon_dir_existing = Path(recon_base_dir) / "ffm_tc_pointcloud" / f"demo_N{args.Demo_Num}_{run_timestamp}"
-
-        backup_existing_artifact(loss_dir)
-        backup_existing_artifact(recon_dir_existing)
+        for loss_artifact in ("loss_history.csv", "loss_history.json", "loss_history.png"):
+            backup_existing_artifact(save_dir / loss_artifact)
+        backup_existing_artifact(recon_dir)
     
     # Initialize helpers
-    logger = MetricsLogger(base_dir=csv_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
-    recon_dir = create_recon_dir(base_dir=recon_base_dir, Demo_Num=args.Demo_Num, timestamp=run_timestamp)
+    logger = TrainingHistoryLogger(save_dir)
+    recon_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"[*] Model checkpoints will save to: {save_dir}")
-    print(f"[*] Logging losses to: {logger.save_dir}")
+    print(f"[*] Logging losses to: {save_dir}")
     print(f"[*] Saving recon plots to: {recon_dir}\n")
 
     device_ids = args.device_ids
@@ -864,6 +959,8 @@ def main():
         coord_dim=3, n_features=args.rff_features, lengthscale=args.rff_lengthscale
     )
 
+    resolved_gl_ckpt_config = {}
+
     if args.backbone == "mlp_rbf":
         backbone = ConditionalPointMLPRBF(
             n_fields=train_set.num_fields,
@@ -893,7 +990,64 @@ def main():
             share_query_proj=args.share_query_proj,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
-    elif args.backbone == "GL_rbf":
+    elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:
+        enhanced = args.backbone == "GL_rbf_ENH"
+
+        # Enhanced defaults are resolved here so legacy GL_rbf configs/checkpoints
+        # keep their original point-readout and zero-scale behavior.
+        sensor_coord_encoding = args.sensor_coord_encoding
+        if sensor_coord_encoding is None:
+            sensor_coord_encoding = "fourier" if enhanced else "raw"
+
+        latent_sensor_reinject = args.latent_sensor_reinject
+        if latent_sensor_reinject is None:
+            latent_sensor_reinject = enhanced
+
+        query_latent_readout = args.query_latent_readout
+        if query_latent_readout is None:
+            query_latent_readout = enhanced
+
+        enhanced_head_norm = args.enhanced_head_norm
+        if enhanced_head_norm is None:
+            enhanced_head_norm = enhanced
+
+        query_readout_type = args.query_readout_type
+        if query_readout_type is None:
+            query_readout_type = "coord" if enhanced else "point"
+
+        query_readout_scale_init = args.query_readout_scale_init
+        if query_readout_scale_init is None:
+            query_readout_scale_init = 1.0e-2 if enhanced else 0.0
+
+        glres_scale_init = args.glres_scale_init
+        if glres_scale_init is None:
+            glres_scale_init = 1.0e-2 if enhanced else 0.0
+
+        resolved_gl_ckpt_config = {
+            "enhanced_backbone": enhanced,
+            "sensor_coord_encoding": sensor_coord_encoding,
+            "latent_sensor_reinject": bool(latent_sensor_reinject),
+            "latent_reinject_every": int(args.latent_reinject_every),
+            "query_latent_readout": bool(query_latent_readout),
+            "query_readout_type": query_readout_type,
+            "query_readout_scale_init": float(query_readout_scale_init),
+            "enhanced_head_norm": bool(enhanced_head_norm),
+            "glres_scale_init": float(glres_scale_init),
+        }
+
+        print(
+            "[*] GL_rbf settings: "
+            f"enhanced={enhanced}, "
+            f"sensor_coord_encoding={sensor_coord_encoding}, "
+            f"latent_sensor_reinject={latent_sensor_reinject}, "
+            f"latent_reinject_every={args.latent_reinject_every}, "
+            f"query_latent_readout={query_latent_readout}, "
+            f"query_readout_type={query_readout_type}, "
+            f"query_readout_scale_init={query_readout_scale_init}, "
+            f"enhanced_head_norm={enhanced_head_norm}, "
+            f"glres_scale_init={glres_scale_init}"
+        )
+
         backbone = ConditionalPointHybridLocalGlobalRBF(
             n_fields=train_set.num_fields,
             coord_dim=3,
@@ -918,6 +1072,15 @@ def main():
             use_fourier_pe=args.USE_FOURIER_PE,
             fourier_pe_num_bands=args.fourier_pe_num_bands,
             fourier_pe_max_freq=args.fourier_pe_max_freq,
+            enhanced_backbone=enhanced,
+            sensor_coord_encoding=sensor_coord_encoding,
+            latent_sensor_reinject=latent_sensor_reinject,
+            latent_reinject_every=args.latent_reinject_every,
+            query_latent_readout=query_latent_readout,
+            query_readout_type=query_readout_type,
+            query_readout_scale_init=query_readout_scale_init,
+            enhanced_head_norm=enhanced_head_norm,
+            glres_scale_init=glres_scale_init,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":
@@ -963,7 +1126,7 @@ def main():
     else:
         raise ValueError(
             f'Error!!! Your backbone is not supported: {args.backbone}.'
-            'Please select in ["mlp_rbf", "perceiver", "fno"]'
+            'Please select in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]'
             )
     print(f'\nSelected Backbone: {args.backbone}\n')
 
@@ -1040,6 +1203,7 @@ def main():
                 "Num_x": args.Num_x,
                 "Num_y": args.Num_y,
             }
+            ckpt.update(resolved_gl_ckpt_config)
             torch.save(ckpt, save_dir / "last.pt")
 
             if val_loss < best_val:
@@ -1054,8 +1218,8 @@ def main():
         if epoch % args.save_every == 0:
             # Benchmark the same validation snapshot at several NFEs.
 
-            recon_dir_epoch = os.path.join(recon_dir, f"Epoch_{epoch}")
-            os.makedirs(recon_dir_epoch, exist_ok=True)
+            recon_dir_epoch = recon_dir / f"epoch_{epoch:04d}"
+            recon_dir_epoch.mkdir(parents=True, exist_ok=True)
             
             step_list = args.benchmark_n_steps if args.benchmark_n_steps else [args.n_steps_generation]
             for nfe in step_list:
@@ -1080,7 +1244,7 @@ def main():
                     dataset=val_set,
                     epoch=epoch,
                     device=device,
-                    save_dir=recon_dir_epoch,
+                    save_dir=str(recon_dir_epoch),
 
                     cond_fields=args.vis_cond_fields,
                     n_obs=args.vis_n_obs_list,

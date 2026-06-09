@@ -34,12 +34,12 @@
 #   multires_train_case_fraction: 0.3333333333
 
 #----------------------------------------------------------
-# NOT Using Fourier positional encoding for RD 1:1:1
-# Use Perceiver
+# Using enhanced GL_rbf for CFD 1:1:0
+# Retrained with GL_rbf_ENH by topk_rbf_glres mode - 0608
 #----------------------------------------------------------
 
-Demo_Num: 24
-device_ids: [2]
+Demo_Num: 12
+device_ids: [1]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
@@ -48,7 +48,7 @@ reload_checkpoint: "best"           # ["best", "last"]
 
 seed : 42
 epochs : 10000
-batch_size : 512
+batch_size : 384
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -62,19 +62,25 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 # PDEBench multi-resolution settings
 # ----------------------------------------------------------
-pdebench_dataset_name: "RD"         # ["RD", "CFD"]
+pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
-selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
-multires_ratio: "1:1:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
+selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-Vx
+multires_ratio: "1:1:0"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
 multires_train_case_fraction: 1     # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
-Case_Truncate_Ratio: 0.5            # RD: 0.5 / CFD: 0.0
+Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.25
 
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
-backbone: "perceiver" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf"]
+# "GL_rbf" keeps the original local-global model.
+# "GL_rbf_ENH" keeps the same local top-K/RBF gather but strengthens representation learning:
+#   1) Fourier coordinate tokenization for both sensors and queries,
+#   2) repeated sensor-to-latent re-injection,
+#   3) lightweight query-to-latent global readout,
+#   4) LayerNorm before the fusion head.
+backbone: "GL_rbf_ENH" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -84,12 +90,12 @@ cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
-USE_FOURIER_PE: false  # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
-fourier_pe_num_bands: 32
+USE_FOURIER_PE: true   # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
+fourier_pe_num_bands: 24
 fourier_pe_max_freq: 64.0
 
 # ----------------------------------------------------------
-# Hyperparameters for Perceiver backbone or GL_rbf
+# Hyperparameters for Perceiver backbone or GL_rbf / GL_rbf_ENH
 # ----------------------------------------------------------
 latent_dim: 128
 num_latents: 128
@@ -101,12 +107,32 @@ mlp_dropout: 0.0
 decode_chunk_size: 4096
 share_query_proj: false
 
-summary_type: "cls" # Only for GL_rbf, mean or cls
-gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate"]
+summary_type: "mean" # Only for GL_rbf / GL_rbf_ENH, mean or cls
+
+# Existing SuperResolution gather modes remain selectable.
+# Recommended first tests:
+#   "topk_rbf"       = clean enhanced model
+#   "topk_rbf_glres" = strongest enhanced model with residual scaffold/importance
+gather_mode: "topk_rbf_glres"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
 gather_topk: 32
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
 neighbor_backend: "keops" # choices: ["auto", "torch", "keops"], keops is more efficient
+
+# ----------------------------------------------------------
+# Enhanced GL_rbf backbone
+# ----------------------------------------------------------
+sensor_coord_encoding: "fourier"     # "raw" preserves old GL_rbf sensor tokens; "fourier" matches query coordinate PE.
+
+latent_sensor_reinject: true         # Latents periodically re-read sparse sensor tokens.
+latent_reinject_every: 1             # Re-inject every N latent blocks when enabled.
+
+query_latent_readout: true           # Let each query attend to latent memory before final fusion.
+query_readout_type: "coord"          # "coord" uses coordinate decoder tokens; "point" uses point features.
+query_readout_scale_init: 1.0e-2     # Small positive gate for query-to-latent readout.
+
+enhanced_head_norm: true             # Apply LayerNorm before the [query, global, local] fusion head.
+glres_scale_init: 1.0e-2             # Initial scale for topk_rbf_glres scaffold and sensor-importance terms.
 
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline
@@ -142,11 +168,11 @@ n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_ste
 # Here, n_obs_min_list and n_obs_max_list are default for High-Resolution data, 
 # and will down scale automatically for others automatically in training
 cond_fields: [0]
-n_obs_min_list: [256]
+n_obs_min_list: [512]
 n_obs_max_list: [512]
 
 vis_cond_fields:
-vis_n_obs_list: [256]
+vis_n_obs_list: [512]
 # ----------------------------------------------------------
 
 # ===== Rectified Flow generation controls =====
