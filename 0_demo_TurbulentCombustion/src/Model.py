@@ -652,6 +652,20 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
       - Memory Layout: Inputs to KeOps routines are strictly enforced as `.contiguous()` to 
         prevent silent C++ reallocation bottlenecks.
     """
+
+    _printed_gather_notices: set[tuple[str, int]] = set()
+
+    @classmethod
+    def _print_gather_notice_once(cls, gather_mode: str, gather_topk: int) -> None:
+        key = (str(gather_mode), int(gather_topk))
+        if key in cls._printed_gather_notices:
+            return
+        cls._printed_gather_notices.add(key)
+        if key[0] == "rbf":
+            print(f"\nThe gather mode is {gather_mode} as default choice.\n")
+        else:
+            print(f"\nNOTICE: The gather mode is {gather_mode} with top-k {gather_topk} !!!\n")
+
     def __init__(
         self,
         n_fields: int,
@@ -739,8 +753,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         self.learnable_rbf_sigma = learnable_rbf_sigma
         self.neighbor_backend = neighbor_backend
 
-        if self.gather_mode == "rbf": print(f"\nThe gather mode is {gather_mode} as default choice.\n")
-        else: print(f"\nNOTICE: The gather mode is {gather_mode} with top-k {gather_topk} !!!\n")
+        self._print_gather_notice_once(gather_mode, gather_topk)
 
         # Only build the heavy query-side gate when the gate mode is actually selected.
         if self.gather_mode == "topk_rbf_gate":

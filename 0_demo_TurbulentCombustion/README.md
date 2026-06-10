@@ -241,7 +241,11 @@ RAM has two implementation modes:
   `default` for the trainable policy, `old` for endpoint sampling and old
   velocity targets, and `evaluation` for validation/checkpoint export. Use
   `finetune_mode: lora_head_glres` as the recommended default for
-  memory-efficient GL_rbf/topk_rbf_glres fine-tuning.
+  memory-efficient GL_rbf/topk_rbf_glres fine-tuning. Use
+  `finetune_mode: lora_all_linear_glrbf` to adapt all linear layers under the
+  GL_rbf model. The LoRA target scope is derived from `finetune_mode`;
+  `lora_target_scope` is optional and must be `null`, `auto`, or match the
+  selected mode.
 
 The RAM algorithm is unchanged in both modes: endpoints are sampled, scalar
 coherence rewards produce group-relative advantages, endpoints are analytically
@@ -256,6 +260,12 @@ separate point subsets:
   analogous to base `n_query_points`.
 - `ram_reward_n_points`: optional uniform point subset used only for scalar
   reward/coherence. `null` keeps full-grid reward evaluation.
+- `fixed_reward_points_for_eval` / `fixed_reward_points_for_rollout`: reuse a
+  deterministic reward/coherence point subset for comparable validation and
+  rollout curves. Rollout caches the indices under `Rollout/` unless
+  `rollout_reward_point_path` is set.
+- `align_ram_and_rollout_obs_consistency`: when `true`, RAM endpoint sampling
+  uses the same sparse-observation consistency mode as rollout monitoring.
 - `train_ratio_downsample`: fresh random fraction of the training split used in
   each RAM epoch; validation and test sets are unchanged.
 - `ram_query_sampling`: query selection mode, usually `obs_mix` to match base
@@ -267,7 +277,7 @@ separate point subsets:
 - `global_include_pairwise`: pairwise coherence is more expensive; keep it
   `false` for first formal RAM runs and enable it later if needed.
 
-The default RAM config uses `lora_head_glres`, `batch_size: 8`,
+The default RAM config uses `lora_all_linear_glrbf`, `batch_size: 32`,
 `num_samples_per_condition: 8`, `num_loss_targets_per_endpoint: 2`,
 `ram_n_query_points: 1024`, and `ram_reward_n_points: 4096`. If memory is still
 very low, reduce `ram_endpoint_microbatch_size`, `ram_loss_microbatch_size`, or

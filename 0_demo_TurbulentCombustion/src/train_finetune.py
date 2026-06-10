@@ -132,23 +132,28 @@ DEFAULTS = {
     "finetune_mode": "head_glres",
     "lora_rank": 8,
     "lora_alpha": 16,
-    "lora_target_scope": "head_glres",
+    "lora_target_scope": None,
     "ram_reward_n_points": None,
     "ram_reward_sampling": "uniform",
+    "reward_subsample_seed": 1234,
+    "fixed_reward_points_for_eval": True,
+    "fixed_reward_points_for_rollout": True,
+    "rollout_reward_point_path": None,
     "use_eval_ema": True,
     "eval_ema_device": "gpu",
-    "val_loss_rel_l2_weight": 1.0,
-    "val_loss_coherence_weight": 0.1,
+    "val_loss_rel_l2_weight": 0.1,
+    "val_loss_coherence_weight": 1.0,
     "eval_every": 5,
     "save_every": 20,
-    "n_steps_generation_eval": 4,
+    "n_steps_generation_eval": 2,
     "eval_num_batches": 2,
     "rollout_eval_enabled": True,
     "rollout_eval_every": 20,
     "rollout_eval_split": "test",
-    "rollout_eval_snapshot_index": 0,
+    "rollout_eval_snapshot_index": [0, 10, 100],
     "rollout_eval_n_steps": 2,
     "rollout_eval_obs_consistency_mode": "endpoint_smooth",
+    "align_ram_and_rollout_obs_consistency": True,
     "rollout_eval_num_sensors": None,
     "rollout_eval_save_fields": True,
     "rollout_eval_fixed_condition": True,
@@ -233,6 +238,11 @@ def load_ram_config(config_path: Path) -> dict:
         cfg.update(payload)
     else:
         raise FileNotFoundError(f"RAM config not found: {config_path}")
+    if bool(cfg.get("align_ram_and_rollout_obs_consistency", True)):
+        cfg["ram_obs_consistency_mode"] = cfg.get(
+            "rollout_eval_obs_consistency_mode",
+            cfg.get("ram_obs_consistency_mode", "endpoint_smooth"),
+        )
     return cfg
 
 
@@ -298,11 +308,54 @@ def validate_source_model_support(source_cfg: dict, cfg: dict) -> None:
     if finetune_mode not in supported_modes:
         raise ValueError(f"finetune_mode must be one of {sorted(supported_modes)}, got {finetune_mode!r}.")
 
+    if finetune_mode.startswith("lora_"):
+        _resolve_lora_scope(cfg, finetune_mode)
+
     if finetune_mode in ("head_glres", "lora_head_glres") and gather_mode != "topk_rbf_glres":
         raise ValueError(
             f"finetune_mode={finetune_mode!r} requires a GL_rbf source with "
             f"gather_mode='topk_rbf_glres', got gather_mode={gather_mode!r}."
         )
+
+
+def _resolve_lora_scope(cfg: dict, finetune_mode: str) -> str:
+    """
+    Derive the LoRA injection scope from ``finetune_mode``.
+
+    ``lora_target_scope`` is kept only as a backward-compatible sanity check.
+    A mismatch is almost certainly a configuration error because it changes
+    which layers are trainable while the mode name says something different.
+    """
+    implied_by_mode = {
+        "lora_head_glres": "head_glres",
+        "lora_all_linear_glrbf": "all_linear_glrbf",
+    }
+    if finetune_mode not in implied_by_mode:
+        raise ValueError(f"finetune_mode={finetune_mode!r} is not a LoRA mode.")
+
+    implied_scope = implied_by_mode[finetune_mode]
+    raw_scope = cfg.get("lora_target_scope", None)
+    if raw_scope is None:
+        return implied_scope
+
+    configured_scope = str(raw_scope).strip().lower()
+    if configured_scope in ("", "auto"):
+        return implied_scope
+
+    valid_scopes = set(implied_by_mode.values())
+    if configured_scope not in valid_scopes:
+        raise ValueError(
+            f"lora_target_scope must be one of {sorted(valid_scopes)} or null/auto, "
+            f"got {configured_scope!r}."
+        )
+    if configured_scope != implied_scope:
+        raise ValueError(
+            f"Conflicting LoRA config: finetune_mode={finetune_mode!r} implies "
+            f"lora_target_scope={implied_scope!r}, but lora_target_scope is "
+            f"{configured_scope!r}. Set lora_target_scope to null/auto, or choose "
+            "the matching finetune_mode."
+        )
+    return implied_scope
 
 
 def build_ram_coherence_config(cfg: dict) -> RAMCoherenceConfig:
@@ -592,6 +645,7 @@ class RolloutHistoryLogger:
             "mean_rel_l2_norm",
             "coherence_cost",
             "coherence_reward",
+            "reward_point_count",
             *[f"rel_l2_phys/{name}" for name in self.field_names],
             *[f"rel_l2_norm/{name}" for name in self.field_names],
         ]
@@ -683,13 +737,51 @@ def _resolve_rollout_n_obs(cfg: dict) -> list[int]:
     return values
 
 
-def _rollout_condition_path(run_dir: Path, cfg: dict) -> Path:
+def _resolve_rollout_snapshot_indices(cfg: dict) -> list[int]:
+    value = cfg.get("rollout_eval_snapshot_index", 0)
+    if isinstance(value, (int, np.integer)):
+        indices = [int(value)]
+    elif isinstance(value, (list, tuple)):
+        indices = [int(v) for v in value]
+    else:
+        raise ValueError(
+            "rollout_eval_snapshot_index must be an integer or a list of integers, "
+            f"got {value!r}."
+        )
+    if not indices:
+        raise ValueError("rollout_eval_snapshot_index must not be an empty list.")
+    return indices
+
+
+def _rollout_condition_path(
+    run_dir: Path,
+    cfg: dict,
+    snapshot_index: Optional[int] = None,
+    multi_snapshot: bool = False,
+) -> Path:
     """Resolve the fixed rollout condition cache path."""
     configured = cfg.get("rollout_eval_condition_path", None)
     if configured:
+        if multi_snapshot:
+            raise ValueError(
+                "rollout_eval_condition_path cannot be used with multiple "
+                "rollout_eval_snapshot_index values because it would reuse one "
+                "fixed sparse condition cache across different snapshots."
+            )
         path = Path(str(configured))
         return path if path.is_absolute() else run_dir / path
+    if multi_snapshot and snapshot_index is not None:
+        return run_dir / "Rollout" / f"fixed_rollout_condition_snapshot_{int(snapshot_index):06d}.pt"
     return run_dir / "Rollout" / "fixed_rollout_condition.pt"
+
+
+def _rollout_reward_point_path(run_dir: Path, cfg: dict) -> Path:
+    """Resolve the fixed rollout reward-point cache path."""
+    configured = cfg.get("rollout_reward_point_path", None)
+    if configured:
+        path = Path(str(configured))
+        return path if path.is_absolute() else run_dir / path
+    return run_dir / "Rollout" / "fixed_reward_point_indices.pt"
 
 
 def _load_rollout_condition_file(path: Path) -> dict:
@@ -714,6 +806,8 @@ def _load_or_build_rollout_condition(
     run_dir: Path,
     cfg: dict,
     device: torch.device,
+    snapshot_index: int,
+    multi_snapshot: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int, list[int]]:
     """
     Reuse the exact same sparse rollout condition across epochs.
@@ -722,7 +816,13 @@ def _load_or_build_rollout_condition(
     L2/coherence reflect model changes, not changing sparse observations.
     """
     n_obs = _resolve_rollout_n_obs(cfg)
-    cache_path = _rollout_condition_path(run_dir, cfg)
+    snapshot_index = int(snapshot_index)
+    cache_path = _rollout_condition_path(
+        run_dir,
+        cfg,
+        snapshot_index=snapshot_index,
+        multi_snapshot=multi_snapshot,
+    )
     use_fixed = bool(cfg.get("rollout_eval_fixed_condition", True))
 
     if use_fixed and cache_path.exists():
@@ -732,7 +832,7 @@ def _load_or_build_rollout_condition(
         obs_mask = payload["obs_mask"].to(device)
         obs_indices = payload["obs_indices"].to(device)
         obs_field_ids = payload["obs_field_ids"].to(device)
-        snapshot_index = int(payload.get("snapshot_index", int(cfg.get("rollout_eval_snapshot_index", 0))))
+        snapshot_index = int(payload.get("snapshot_index", snapshot_index))
         stored_n_obs = [int(v) for v in payload.get("n_obs", n_obs)]
         return obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids, snapshot_index, stored_n_obs
 
@@ -753,7 +853,7 @@ def _load_or_build_rollout_condition(
                 "obs_mask": obs_mask.detach().cpu(),
                 "obs_indices": obs_indices.detach().cpu(),
                 "obs_field_ids": obs_field_ids.detach().cpu(),
-                "snapshot_index": int(cfg.get("rollout_eval_snapshot_index", 0)),
+                "snapshot_index": snapshot_index,
                 "split": str(cfg.get("rollout_eval_split", "test")),
                 "cond_fields": list(cfg["cond_fields"]),
                 "n_obs": list(n_obs),
@@ -761,7 +861,7 @@ def _load_or_build_rollout_condition(
             cache_path,
         )
 
-    return obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids, int(cfg.get("rollout_eval_snapshot_index", 0)), n_obs
+    return obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids, snapshot_index, n_obs
 
 
 def _rel_l2_per_field(x_pred: torch.Tensor, x_ref: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -835,13 +935,24 @@ def run_rollout_evaluation(
     ram_coh_cfg: RAMCoherenceConfig,
     logger: RolloutHistoryLogger,
     model_role: str = "eval",
+    snapshot_index: Optional[int] = None,
+    multi_snapshot: bool = False,
+    log_row: bool = True,
+    print_row: bool = True,
 ) -> Dict[str, float]:
     """
     Roll out one fixed clean test sample and log fidelity/coherence over epochs.
     """
     model.eval()
-    snapshot_index = int(cfg.get("rollout_eval_snapshot_index", 0))
-    condition_path = _rollout_condition_path(run_dir, cfg)
+    if snapshot_index is None:
+        snapshot_index = _resolve_rollout_snapshot_indices(cfg)[0]
+    snapshot_index = int(snapshot_index)
+    condition_path = _rollout_condition_path(
+        run_dir,
+        cfg,
+        snapshot_index=snapshot_index,
+        multi_snapshot=multi_snapshot,
+    )
     if bool(cfg.get("rollout_eval_fixed_condition", True)) and condition_path.exists():
         condition_meta = _load_rollout_condition_file(condition_path)
         snapshot_index = int(condition_meta.get("snapshot_index", snapshot_index))
@@ -857,6 +968,8 @@ def run_rollout_evaluation(
         run_dir=run_dir,
         cfg=cfg,
         device=device,
+        snapshot_index=snapshot_index,
+        multi_snapshot=multi_snapshot,
     )
 
     recon = model.sample(
@@ -887,6 +1000,13 @@ def run_rollout_evaluation(
         x_ref=truth,
         n_points=cfg.get("ram_reward_n_points", None),
         mode=str(cfg.get("ram_reward_sampling", "uniform")),
+        seed=int(cfg.get("reward_subsample_seed", 1234)),
+        cache_path=(
+            _rollout_reward_point_path(run_dir, cfg)
+            if bool(cfg.get("fixed_reward_points_for_rollout", True))
+            else None
+        ),
+        fixed=bool(cfg.get("fixed_reward_points_for_rollout", True)),
     )
     cost, _ = compute_ram_coherence_cost(
         x_gen=recon_reward,
@@ -918,6 +1038,8 @@ def run_rollout_evaluation(
         rollout_dir = run_dir / "Rollout" / f"epoch_{int(epoch):04d}"
     else:
         rollout_dir = run_dir / "Rollout" / str(model_role) / f"epoch_{int(epoch):04d}"
+    if multi_snapshot:
+        rollout_dir = rollout_dir / f"snapshot_{int(snapshot_index):06d}"
     rollout_dir.mkdir(parents=True, exist_ok=True)
     if bool(cfg.get("save_history_json", False)):
         with open(rollout_dir / "rollout_metrics.json", "w", encoding="utf-8") as handle:
@@ -934,12 +1056,106 @@ def run_rollout_evaluation(
             save_path=rollout_dir / "rollout_fields.png",
         )
 
-    logger.log(row)
-    print(
-        f"[rollout] epoch={epoch:04d} mean_l2={row['mean_rel_l2_phys']:.6e} "
-        f"coh_cost={row['coherence_cost']:.6e} role={model_role}"
-    )
+    if log_row:
+        logger.log(row)
+    if print_row:
+        print(
+            f"[rollout] epoch={epoch:04d} mean_l2={row['mean_rel_l2_phys']:.6e} "
+            f"coh_cost={row['coherence_cost']:.6e} role={model_role}"
+        )
     return row
+
+
+@torch.no_grad()
+def run_rollout_evaluations(
+    *,
+    model: nn.Module,
+    dataset: TurbulentCombustionH5Dataset,
+    epoch: int,
+    device: torch.device,
+    run_dir: Path,
+    cfg: dict,
+    ram_coh_cfg: RAMCoherenceConfig,
+    logger: RolloutHistoryLogger,
+    model_role: str = "eval",
+) -> Dict[str, float]:
+    snapshot_indices = _resolve_rollout_snapshot_indices(cfg)
+    invalid_indices = [idx for idx in snapshot_indices if idx < 0 or idx >= len(dataset)]
+    if invalid_indices:
+        raise ValueError(
+            f"rollout_eval_snapshot_index contains indices outside the "
+            f"rollout {cfg.get('rollout_eval_split', 'test')!r} split of size "
+            f"{len(dataset)}: {invalid_indices}"
+        )
+    if len(snapshot_indices) == 1:
+        return run_rollout_evaluation(
+            model=model,
+            dataset=dataset,
+            epoch=epoch,
+            device=device,
+            run_dir=run_dir,
+            cfg=cfg,
+            ram_coh_cfg=ram_coh_cfg,
+            logger=logger,
+            model_role=model_role,
+            snapshot_index=snapshot_indices[0],
+            multi_snapshot=False,
+        )
+
+    if cfg.get("rollout_eval_condition_path", None):
+        _rollout_condition_path(
+            run_dir,
+            cfg,
+            snapshot_index=snapshot_indices[0],
+            multi_snapshot=True,
+        )
+
+    rows = [
+        run_rollout_evaluation(
+            model=model,
+            dataset=dataset,
+            epoch=epoch,
+            device=device,
+            run_dir=run_dir,
+            cfg=cfg,
+            ram_coh_cfg=ram_coh_cfg,
+            logger=logger,
+            model_role=model_role,
+            snapshot_index=snapshot_index,
+            multi_snapshot=True,
+            log_row=False,
+            print_row=False,
+        )
+        for snapshot_index in snapshot_indices
+    ]
+
+    avg_row: Dict[str, float] = {
+        "epoch": int(epoch),
+        "model_role": str(model_role),
+        "split": str(cfg.get("rollout_eval_split", "test")),
+        "snapshot_index": ",".join(str(v) for v in snapshot_indices),
+        "n_steps": int(cfg.get("rollout_eval_n_steps", 2)),
+    }
+    metadata_keys = {"epoch", "model_role", "split", "snapshot_index", "n_steps"}
+    metric_keys = sorted(set().union(*(row.keys() for row in rows)) - metadata_keys)
+    for key in metric_keys:
+        values = []
+        for row in rows:
+            value = row.get(key, None)
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                values.append(float(value))
+        if values:
+            avg_row[key] = float(np.mean(values))
+
+    logger.log(avg_row)
+    compact_indices = ",".join(str(v) for v in snapshot_indices)
+    print(
+        f"[rollout] epoch={epoch:04d} snapshots=[{compact_indices}] "
+        f"mean_l2={avg_row.get('mean_rel_l2_phys', float('nan')):.6e} "
+        f"coh_cost={avg_row.get('coherence_cost', float('nan')):.6e} "
+        f"role={model_role}"
+    )
+    return avg_row
 
 
 def _repeat_batch(x: torch.Tensor, repeats: int) -> torch.Tensor:
@@ -959,12 +1175,68 @@ def _microbatch_slices(n_items: int, microbatch_size: Optional[int]) -> list[sli
     return [slice(start, min(start + step, n_items)) for start in range(0, n_items, step)]
 
 
+def _load_reward_point_indices(path: Path) -> torch.Tensor:
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
+def get_or_build_reward_point_indices(
+    n_total: int,
+    n_points: Optional[int],
+    device,
+    seed: int,
+    cache_path: Optional[Path] = None,
+    fixed: bool = False,
+) -> Optional[torch.Tensor]:
+    """
+    Build reward/coherence point indices, optionally persisted for fixed evals.
+    """
+    n_total = int(n_total)
+    if n_points is None:
+        return None
+    n_select = int(n_points)
+    if n_select <= 0 or n_select >= n_total:
+        return None
+
+    if fixed and cache_path is not None:
+        cache_path = Path(cache_path)
+        if cache_path.exists():
+            idx = _load_reward_point_indices(cache_path).to(dtype=torch.long)
+            if idx.ndim != 1 or int(idx.numel()) != n_select:
+                raise ValueError(
+                    f"Cached reward indices at {cache_path} have shape {tuple(idx.shape)}, "
+                    f"expected ({n_select},)."
+                )
+            if int(idx.min().item()) < 0 or int(idx.max().item()) >= n_total:
+                raise ValueError(
+                    f"Cached reward indices at {cache_path} are incompatible with n_total={n_total}."
+                )
+            return idx.to(device)
+
+    if fixed:
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(int(seed))
+        idx = torch.randperm(n_total, generator=generator, device="cpu")[:n_select].to(dtype=torch.long)
+        if cache_path is not None:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(idx, cache_path)
+        return idx.to(device)
+
+    return torch.randperm(n_total, device=device)[:n_select]
+
+
 def subsample_reward_points(
     x_gen: torch.Tensor,
     x_ref: torch.Tensor,
     n_points: Optional[int],
     mode: str = "uniform",
     generator: Optional[torch.Generator] = None,
+    indices: Optional[torch.Tensor] = None,
+    seed: int = 1234,
+    cache_path: Optional[Path] = None,
+    fixed: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     """
     Subsample endpoint points for scalar reward/coherence evaluation only.
@@ -972,12 +1244,28 @@ def subsample_reward_points(
     The same point indices are applied to generated and reference fields.
     """
     n_total = int(x_gen.shape[1])
-    if n_points is None or int(n_points) <= 0 or int(n_points) >= n_total:
+    if indices is None and (n_points is None or int(n_points) <= 0 or int(n_points) >= n_total):
         return x_gen, x_ref, n_total
     if str(mode).lower() != "uniform":
         raise ValueError("ram_reward_sampling currently supports only 'uniform'.")
-    n_select = int(n_points)
-    idx = torch.randperm(n_total, device=x_gen.device, generator=generator)[:n_select]
+    if indices is None:
+        if generator is not None and not fixed and cache_path is None:
+            n_select = int(n_points)
+            idx = torch.randperm(n_total, device=x_gen.device, generator=generator)[:n_select]
+        else:
+            idx = get_or_build_reward_point_indices(
+                n_total=n_total,
+                n_points=n_points,
+                device=x_gen.device,
+                seed=seed,
+                cache_path=cache_path,
+                fixed=fixed,
+            )
+    else:
+        idx = indices.to(device=x_gen.device, dtype=torch.long)
+    if idx is None:
+        return x_gen, x_ref, n_total
+    n_select = int(idx.numel())
     return x_gen[:, idx], x_ref[:, idx], n_select
 
 
@@ -1606,7 +1894,7 @@ def validate_ram(
             obs_values=obs_values,
             obs_mask=obs_mask,
             obs_field_ids=obs_field_ids,
-            n_steps=int(cfg.get("n_steps_generation_eval", 4)),
+            n_steps=int(cfg.get("n_steps_generation_eval", 2)),
             clamp_indices=obs_indices,
             ode_solver=str(cfg.get("ode_solver", "euler")),
             obs_consistency_mode=str(cfg.get("ram_obs_consistency_mode", "endpoint_smooth")),
@@ -1625,6 +1913,8 @@ def validate_ram(
             x_ref=fields_full,
             n_points=cfg.get("ram_reward_n_points", None),
             mode=str(cfg.get("ram_reward_sampling", "uniform")),
+            seed=int(cfg.get("reward_subsample_seed", 1234)),
+            fixed=bool(cfg.get("fixed_reward_points_for_eval", True)),
         )
         cost, coh_metrics = compute_ram_coherence_cost(
             x_gen=recon_reward,
@@ -1641,8 +1931,8 @@ def validate_ram(
         })
 
     out = metrics.mean()
-    rel_l2_weight = float(cfg.get("val_loss_rel_l2_weight", 1.0))
-    coherence_weight = float(cfg.get("val_loss_coherence_weight", 0.1))
+    rel_l2_weight = float(cfg.get("val_loss_rel_l2_weight", 0.1))
+    coherence_weight = float(cfg.get("val_loss_coherence_weight", 1.0))
     out["val_loss_rel_l2_weight"] = rel_l2_weight
     out["val_loss_coherence_weight"] = coherence_weight
     out["val_loss"] = float(
@@ -1757,10 +2047,10 @@ def maybe_save_preview(
             save_dir=str(preview_dir),
             cond_fields=cfg["cond_fields"],
             n_obs=cfg["n_obs_max_list"],
-            n_steps=int(cfg.get("n_steps_generation_eval", 4)),
+            n_steps=int(cfg.get("n_steps_generation_eval", 2)),
             ode_solver=str(cfg.get("ode_solver", "euler")),
             snapshot_index=0,
-            file_tag=f"ram_eval_nfe{int(cfg.get('n_steps_generation_eval', 4))}",
+            file_tag=f"ram_eval_nfe{int(cfg.get('n_steps_generation_eval', 2))}",
             save_metrics_json=True,
             obs_consistency_mode=str(cfg.get("ram_obs_consistency_mode", "endpoint_smooth")),
             obs_consistency_strength=float(cfg.get("obs_consistency_strength", 1.0)),
@@ -1900,10 +2190,7 @@ def main():
     if is_lora_mode:
         lora_model = ref_model
         _freeze_model(lora_model)
-        lora_scope = "head_glres" if finetune_mode == "lora_head_glres" else "all_linear_glrbf"
-        configured_scope = str(cfg.get("lora_target_scope", lora_scope)).strip().lower()
-        if configured_scope in ("head_glres", "all_linear_glrbf"):
-            lora_scope = configured_scope
+        lora_scope = _resolve_lora_scope(cfg, finetune_mode)
         wrapped_paths = inject_lora_adapters(
             lora_model,
             scope=lora_scope,
@@ -1952,7 +2239,7 @@ def main():
         )
         if is_lora_mode:
             with use_adapter(lora_model, "evaluation"):
-                run_rollout_evaluation(
+                run_rollout_evaluations(
                     model=lora_model,
                     dataset=rollout_set,
                     epoch=0,
@@ -1967,7 +2254,7 @@ def main():
             eval_runtime_model = eval_model if eval_model is not None else policy_model
             if eval_model is not None and eval_ema_device_name == "cpu":
                 eval_runtime_model = eval_model.to(device)
-            run_rollout_evaluation(
+            run_rollout_evaluations(
                 model=eval_runtime_model,
                 dataset=rollout_set,
                 epoch=0,
@@ -1989,7 +2276,7 @@ def main():
             )
             if is_lora_mode:
                 with use_adapter(lora_model, "default"):
-                    run_rollout_evaluation(
+                    run_rollout_evaluations(
                         model=lora_model,
                         dataset=rollout_set,
                         epoch=0,
@@ -2001,7 +2288,7 @@ def main():
                         model_role="policy",
                     )
             else:
-                run_rollout_evaluation(
+                run_rollout_evaluations(
                     model=policy_model,
                     dataset=rollout_set,
                     epoch=0,
@@ -2081,8 +2368,8 @@ def main():
                 f"[valid] epoch={epoch:04d} val_score={last_val_loss:.6e} "
                 f"rel_l2={val_metrics.get('val_rel_l2', float('nan')):.6e} "
                 f"coh={val_metrics.get('val_coherence_cost', float('nan')):.6e} "
-                f"(score={float(cfg.get('val_loss_rel_l2_weight', 1.0)):.3g}*rel_l2+"
-                f"{float(cfg.get('val_loss_coherence_weight', 0.1)):.3g}*coh)"
+                f"(score={float(cfg.get('val_loss_rel_l2_weight', 0.1)):.3g}*rel_l2+"
+                f"{float(cfg.get('val_loss_coherence_weight', 1.0)):.3g}*coh)"
             )
 
         merged_metrics = dict(train_metrics)
@@ -2185,7 +2472,7 @@ def main():
         ):
             if is_lora_mode:
                 with use_adapter(lora_model, "evaluation"):
-                    run_rollout_evaluation(
+                    run_rollout_evaluations(
                         model=lora_model,
                         dataset=rollout_set,
                         epoch=epoch,
@@ -2200,7 +2487,7 @@ def main():
                 eval_runtime_model = eval_model if eval_model is not None else policy_model
                 if eval_model is not None and eval_ema_device_name == "cpu":
                     eval_runtime_model = eval_model.to(device)
-                run_rollout_evaluation(
+                run_rollout_evaluations(
                     model=eval_runtime_model,
                     dataset=rollout_set,
                     epoch=epoch,
@@ -2216,7 +2503,7 @@ def main():
             if rollout_policy_logger is not None:
                 if is_lora_mode:
                     with use_adapter(lora_model, "default"):
-                        run_rollout_evaluation(
+                        run_rollout_evaluations(
                             model=lora_model,
                             dataset=rollout_set,
                             epoch=epoch,
@@ -2228,7 +2515,7 @@ def main():
                             model_role="policy",
                         )
                 else:
-                    run_rollout_evaluation(
+                    run_rollout_evaluations(
                         model=policy_model,
                         dataset=rollout_set,
                         epoch=epoch,
