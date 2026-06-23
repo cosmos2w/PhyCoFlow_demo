@@ -39,6 +39,7 @@ import matplotlib.tri as mtri
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
@@ -108,7 +109,19 @@ DEFAULTS = {
     "ram_loss_microbatch_size": 64,
     "timestep_sampling": "mirrored_weighted",
     "t_eps": 1.0e-3,
+    # reward_mode selects the raw lower-is-better cost; reward_transform maps
+    # it into RAM rewards. group_rank/top_bottom are scale-free pruning-style
+    # transforms for cases where raw cost differences are small.
     "reward_mode": "global_dist",
+    "reward_transform": "negative_cost",
+    "reward_barrier_tau": None,
+    "reward_barrier_temperature": 0.005,
+    "reward_barrier_tau_mode": "batch_quantile",
+    "reward_barrier_tau_quantile": 0.50,
+    "reward_barrier_tau_ema_decay": 0.95,
+    "reward_top_frac": 0.25,
+    "reward_bottom_frac": 0.25,
+    "reward_clip_abs": None,
     "reward_multiplier": 1.0,
     "reward_scaling": "running_epoch_std",
     "reward_std_ema_decay": 0.95,
@@ -254,6 +267,47 @@ def _as_int_list(value) -> list[int]:
     return [int(v) for v in value]
 
 
+def align_per_field_values(
+    values,
+    cond_fields,
+    name: str,
+    *,
+    source_fields=None,
+) -> list[int]:
+    """
+    Normalize per-field settings against the effective conditioning fields.
+
+    A single value broadcasts.  If values came from a source config with a
+    larger conditioning set, map them by field id so subset conditioning such
+    as source [2, 3] -> target [2] keeps the count for field 2.
+    """
+    fields = _as_int_list(cond_fields)
+    vals = _as_int_list(values)
+    if not fields:
+        raise ValueError("cond_fields must contain at least one field index.")
+    if not vals:
+        raise ValueError(f"{name} must contain at least one value.")
+    if len(vals) == 1:
+        return vals * len(fields)
+    if len(vals) == len(fields):
+        return vals
+
+    source = _as_int_list(source_fields)
+    if source and len(vals) == len(source):
+        value_by_field = {int(field): int(value) for field, value in zip(source, vals)}
+        if all(field in value_by_field for field in fields):
+            return [value_by_field[field] for field in fields]
+
+    if len(fields) == 1 and all(value == vals[0] for value in vals):
+        return [vals[0]]
+
+    source_msg = f" or source_fields length ({len(source)})" if source else ""
+    raise ValueError(
+        f"{name} must have length 1, match len(cond_fields) ({len(fields)}),"
+        f"{source_msg} and map onto cond_fields. Got {len(vals)} values."
+    )
+
+
 def inherit_conditioning_from_source(cfg: dict, source_cfg: dict) -> dict:
     """
     Fill sparse-condition RAM settings from the source pretraining config.
@@ -268,6 +322,12 @@ def inherit_conditioning_from_source(cfg: dict, source_cfg: dict) -> dict:
             out["cond_fields"] = source_cfg.get("cond_fields")
         else:
             out["cond_fields"] = [source_cfg.get("cond_field", 2)]
+    out["cond_fields"] = _as_int_list(out["cond_fields"])
+
+    if source_cfg.get("cond_fields") is not None:
+        source_cond_fields = _as_int_list(source_cfg.get("cond_fields"))
+    else:
+        source_cond_fields = [int(source_cfg.get("cond_field", 2))]
 
     if out.get("n_obs_min_list") is None:
         if source_cfg.get("n_obs_min_list") is not None:
@@ -281,9 +341,18 @@ def inherit_conditioning_from_source(cfg: dict, source_cfg: dict) -> dict:
         else:
             out["n_obs_max_list"] = [source_cfg.get("n_obs_max", 256)]
 
-    out["cond_fields"] = _as_int_list(out["cond_fields"])
-    out["n_obs_min_list"] = _as_int_list(out["n_obs_min_list"])
-    out["n_obs_max_list"] = _as_int_list(out["n_obs_max_list"])
+    out["n_obs_min_list"] = align_per_field_values(
+        out["n_obs_min_list"],
+        out["cond_fields"],
+        "n_obs_min_list",
+        source_fields=source_cond_fields,
+    )
+    out["n_obs_max_list"] = align_per_field_values(
+        out["n_obs_max_list"],
+        out["cond_fields"],
+        "n_obs_max_list",
+        source_fields=source_cond_fields,
+    )
     return out
 
 
@@ -439,6 +508,139 @@ class EMARewardStd:
         return float(self.value)
 
 
+class EMAValue:
+    """Persistent scalar EMA used for optional barrier thresholds."""
+
+    def __init__(self, decay: float = 0.95):
+        self.decay = float(decay)
+        self.value: Optional[float] = None
+
+    def update(self, value: float) -> float:
+        value = float(value)
+        if self.value is None:
+            self.value = value
+        else:
+            self.value = self.decay * self.value + (1.0 - self.decay) * value
+        return float(self.value)
+
+
+def _resolve_reward_barrier_tau(
+    cost_grouped: torch.Tensor,
+    cfg: dict,
+    barrier_tau_tracker: Optional[EMAValue] = None,
+) -> torch.Tensor:
+    raw_tau = cfg.get("reward_barrier_tau", None)
+    if raw_tau is not None:
+        return torch.as_tensor(float(raw_tau), device=cost_grouped.device, dtype=cost_grouped.dtype)
+
+    flat = cost_grouped.detach().reshape(-1)
+    mode = str(cfg.get("reward_barrier_tau_mode", "batch_quantile")).strip().lower()
+    if mode == "batch_mean":
+        tau = flat.mean()
+    elif mode == "batch_quantile":
+        q = float(cfg.get("reward_barrier_tau_quantile", 0.50))
+        q = min(max(q, 0.0), 1.0)
+        tau = torch.quantile(flat.float(), q).to(dtype=cost_grouped.dtype)
+    elif mode == "ema":
+        if barrier_tau_tracker is None:
+            raise ValueError("reward_barrier_tau_mode='ema' requires a persistent EMAValue tracker.")
+        q = float(cfg.get("reward_barrier_tau_quantile", 0.50))
+        q = min(max(q, 0.0), 1.0)
+        batch_tau = float(torch.quantile(flat.float(), q).detach().cpu())
+        tau = torch.as_tensor(
+            barrier_tau_tracker.update(batch_tau),
+            device=cost_grouped.device,
+            dtype=cost_grouped.dtype,
+        )
+    else:
+        raise ValueError(
+            "reward_barrier_tau_mode must be 'batch_mean', 'batch_quantile', or 'ema', "
+            f"got {mode!r}."
+        )
+    return tau
+
+
+def transform_cost_to_reward(
+    cost: torch.Tensor,
+    bsz: int,
+    G: int,
+    cfg: dict,
+    barrier_tau_tracker: Optional[EMAValue] = None,
+) -> tuple[torch.Tensor, Dict[str, float]]:
+    """
+    Map lower-is-better coherence costs to RAM rewards without reward gradients.
+
+    ``reward_mode`` selects the raw cost (global_dist, marginal_only, field_l2).
+    ``reward_transform`` controls how that raw cost becomes scalar RAM rewards.
+    Rank/top-bottom transforms are scale-free, which is useful when raw cost
+    differences are too small for a strong posterior-pruning signal.
+    """
+    transform = str(cfg.get("reward_transform", "negative_cost")).strip().lower()
+    cost_grouped = cost.detach().view(int(bsz), int(G))
+    metrics: Dict[str, float] = {
+        "reward_transform": transform,
+        "reward_raw_cost_mean": float(cost_grouped.mean().detach().cpu()),
+        "reward_raw_cost_std": float(cost_grouped.std(unbiased=False).detach().cpu()),
+        "reward_barrier_tau": float("nan"),
+        "reward_top_frac": float("nan"),
+        "reward_bottom_frac": float("nan"),
+    }
+
+    if transform == "negative_cost":
+        reward_grouped = -cost_grouped
+    elif transform in ("softplus_barrier", "hinge_barrier"):
+        tau = _resolve_reward_barrier_tau(cost_grouped, cfg, barrier_tau_tracker)
+        temp = float(cfg.get("reward_barrier_temperature", 0.005))
+        if temp <= 0.0:
+            raise ValueError("reward_barrier_temperature must be positive.")
+        normalized_excess = (cost_grouped - tau) / temp
+        if transform == "softplus_barrier":
+            reward_grouped = -F.softplus(normalized_excess)
+        else:
+            reward_grouped = -torch.relu(normalized_excess)
+        metrics["reward_barrier_tau"] = float(tau.detach().cpu())
+    elif transform == "group_rank":
+        if int(G) <= 1:
+            reward_grouped = torch.zeros_like(cost_grouped)
+        else:
+            order = torch.argsort(cost_grouped, dim=1, descending=False)
+            ranks = torch.empty_like(order)
+            rank_values = torch.arange(int(G), device=cost_grouped.device).view(1, -1).expand(int(bsz), -1)
+            ranks.scatter_(1, order, rank_values)
+            reward_grouped = 1.0 - 2.0 * ranks.to(dtype=cost_grouped.dtype) / float(max(int(G) - 1, 1))
+    elif transform == "top_bottom":
+        reward_grouped = torch.zeros_like(cost_grouped)
+        top_frac = float(cfg.get("reward_top_frac", 0.25))
+        bottom_frac = float(cfg.get("reward_bottom_frac", 0.25))
+        if not (0.0 <= top_frac <= 1.0 and 0.0 <= bottom_frac <= 1.0):
+            raise ValueError("reward_top_frac and reward_bottom_frac must be in [0, 1].")
+        metrics["reward_top_frac"] = top_frac
+        metrics["reward_bottom_frac"] = bottom_frac
+        if int(G) > 1:
+            k_top = max(1, int(math.ceil(top_frac * int(G))))
+            k_bottom = max(1, int(math.ceil(bottom_frac * int(G))))
+            order = torch.argsort(cost_grouped, dim=1, descending=False)
+            bottom_idx = order[:, -k_bottom:]
+            top_idx = order[:, :k_top]
+            reward_grouped.scatter_(1, bottom_idx, -1.0)
+            reward_grouped.scatter_(1, top_idx, 1.0)
+    else:
+        raise ValueError(
+            "reward_transform must be one of 'negative_cost', 'softplus_barrier', "
+            "'hinge_barrier', 'group_rank', or 'top_bottom', "
+            f"got {transform!r}."
+        )
+
+    rewards = reward_grouped.reshape(-1)
+    clip_abs = cfg.get("reward_clip_abs", None)
+    if clip_abs is not None:
+        rewards = rewards.clamp(-float(clip_abs), float(clip_abs))
+
+    metrics["reward_transformed_mean"] = float(rewards.mean().detach().cpu())
+    metrics["reward_transformed_std"] = float(rewards.std(unbiased=False).detach().cpu())
+    return rewards, metrics
+
+
 class EpochMetrics:
     """Small averaging helper for scalar RAM metrics."""
 
@@ -500,6 +702,14 @@ class RAMHistoryLogger:
             "scaled_adv_abs_max",
             "reward_scale_std",
             "reward_mode",
+            "reward_transform",
+            "reward_raw_cost_mean",
+            "reward_raw_cost_std",
+            "reward_transformed_mean",
+            "reward_transformed_std",
+            "reward_barrier_tau",
+            "reward_top_frac",
+            "reward_bottom_frac",
             "coherence/ram_cost",
             "coherence/global_dist_score",
             "coherence/marginal_score",
@@ -1342,6 +1552,7 @@ def train_ram_epoch(
     ram_coh_cfg: RAMCoherenceConfig,
     train_set: TurbulentCombustionH5Dataset,
     reward_std_ema: Optional[EMARewardStd] = None,
+    barrier_tau_tracker: Optional[EMAValue] = None,
 ) -> tuple[float, Dict[str, float]]:
     """
     One RAM epoch: sample endpoints, score them, build advantages, then fit the
@@ -1420,7 +1631,13 @@ def train_ram_epoch(
                 mean=train_set.mean.to(device),
                 std=train_set.std.to(device),
             )
-            rewards = -cost
+            rewards, reward_transform_metrics = transform_cost_to_reward(
+                cost=cost,
+                bsz=bsz,
+                G=G,
+                cfg=cfg,
+                barrier_tau_tracker=barrier_tau_tracker,
+            )
             running_reward_std.update(rewards)
 
             rewards_grouped = rewards.view(bsz, G)
@@ -1562,6 +1779,7 @@ def train_ram_epoch(
             "scaled_adv_abs_mean": float(scaled_adv_flat.abs().mean().detach().cpu()),
             "scaled_adv_abs_max": float(scaled_adv_flat.abs().max().detach().cpu()),
             "reward_scale_std": reward_scale_std,
+            **reward_transform_metrics,
             "coherence/ram_cost": float(coh_metrics.get("ram_cost", np.nan)),
             "coherence/global_dist_score": float(coh_metrics.get("global_dist_score", np.nan)),
             "coherence/marginal_score": float(coh_metrics.get("marginal_score", np.nan)),
@@ -1596,6 +1814,7 @@ def train_ram_epoch(
     avg["train_ratio_downsample"] = float(cfg.get("train_ratio_downsample", 1.0))
     avg["train_epoch_cases"] = float(len(loader.dataset))
     avg["reward_mode"] = str(cfg.get("reward_mode", "global_dist"))
+    avg["reward_transform"] = str(cfg.get("reward_transform", "negative_cost"))
     return avg.get("ram_loss", float("nan")), avg
 
 
@@ -1611,6 +1830,7 @@ def train_ram_lora_epoch(
     ram_coh_cfg: RAMCoherenceConfig,
     train_set: TurbulentCombustionH5Dataset,
     reward_std_ema: Optional[EMARewardStd] = None,
+    barrier_tau_tracker: Optional[EMAValue] = None,
 ) -> tuple[float, Dict[str, float]]:
     """
     One RAM epoch using one base model plus default/old/evaluation LoRA adapters.
@@ -1683,7 +1903,13 @@ def train_ram_lora_epoch(
                 mean=train_set.mean.to(device),
                 std=train_set.std.to(device),
             )
-            rewards = -cost
+            rewards, reward_transform_metrics = transform_cost_to_reward(
+                cost=cost,
+                bsz=bsz,
+                G=G,
+                cfg=cfg,
+                barrier_tau_tracker=barrier_tau_tracker,
+            )
             running_reward_std.update(rewards)
 
             rewards_grouped = rewards.view(bsz, G)
@@ -1822,6 +2048,7 @@ def train_ram_lora_epoch(
             "scaled_adv_abs_mean": float(scaled_adv_flat.abs().mean().detach().cpu()),
             "scaled_adv_abs_max": float(scaled_adv_flat.abs().max().detach().cpu()),
             "reward_scale_std": reward_scale_std,
+            **reward_transform_metrics,
             "coherence/ram_cost": float(coh_metrics.get("ram_cost", np.nan)),
             "coherence/global_dist_score": float(coh_metrics.get("global_dist_score", np.nan)),
             "coherence/marginal_score": float(coh_metrics.get("marginal_score", np.nan)),
@@ -1856,6 +2083,7 @@ def train_ram_lora_epoch(
     avg["train_ratio_downsample"] = float(cfg.get("train_ratio_downsample", 1.0))
     avg["train_epoch_cases"] = float(len(loader.dataset))
     avg["reward_mode"] = str(cfg.get("reward_mode", "global_dist"))
+    avg["reward_transform"] = str(cfg.get("reward_transform", "negative_cost"))
     return avg.get("ram_loss", float("nan")), avg
 
 
@@ -2303,6 +2531,7 @@ def main():
     best_val = float("inf")
     last_val_loss: Optional[float] = None
     reward_std_ema = EMARewardStd(decay=float(cfg.get("reward_std_ema_decay", 0.95)))
+    barrier_tau_tracker = EMAValue(decay=float(cfg.get("reward_barrier_tau_ema_decay", 0.95)))
     for epoch in range(1, int(cfg.get("ram_epochs", 200)) + 1):
         train_loader = build_epoch_train_loader(train_set, cfg, epoch)
         if is_lora_mode:
@@ -2317,6 +2546,7 @@ def main():
                 ram_coh_cfg=ram_coh_cfg,
                 train_set=train_set,
                 reward_std_ema=reward_std_ema,
+                barrier_tau_tracker=barrier_tau_tracker,
             )
         else:
             train_loss, train_metrics = train_ram_epoch(
@@ -2333,6 +2563,7 @@ def main():
                 ram_coh_cfg=ram_coh_cfg,
                 train_set=train_set,
                 reward_std_ema=reward_std_ema,
+                barrier_tau_tracker=barrier_tau_tracker,
             )
 
         val_metrics: Dict[str, float] = {}

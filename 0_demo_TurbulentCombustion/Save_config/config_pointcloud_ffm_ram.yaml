@@ -15,14 +15,20 @@
 
 # ------------------------------------------------------------
 
-Demo_Num: 4
+# global_include_pairwise_in_score -> True
+# Comparing with demo-5: enhanced finetuning signal & reward_transform: "top_bottom"
+# Using 17 (only conditioned on T)as source run
+
+# ------------------------------------------------------------
+
+Demo_Num: 6
 seed: 42
 device_ids: [2]
 
 # Source pretrained run.
 # If source_run_dir is null, train_finetune.py finds the latest source_Demo_Num run.
 source_run_dir: null
-source_Demo_Num: 15
+source_Demo_Num: 17
 source_checkpoint: "last"
 
 data: "Dataset/Merged_CH4COTU1P.h5"
@@ -54,8 +60,8 @@ finetune_mode: "lora_all_linear_glrbf"
 #   lora_all_linear_glrbf  -> all_linear_glrbf
 # Keep lora_target_scope null unless you want a backward-compatible sanity
 # check that must match the selected finetune_mode.
-lora_rank: 8
-lora_alpha: 16
+lora_rank: 16
+lora_alpha: 32
 lora_target_scope: null
 
 # Eval EMA memory control for non-LoRA full-copy mode.
@@ -115,12 +121,45 @@ timestep_sampling: "mirrored_weighted"
 t_eps: 1.0e-3
 
 # Reward/coherence.
-# reward_mode choices:
+# reward_mode selects the raw lower-is-better coherence cost:
 #   global_dist    = full global distributional coherence
 #   marginal_only  = debug mode with marginal terms only, no joint/pairwise
 #   field_l2       = debug mode using direct field relative L2 as cost
 reward_mode: "global_dist"
-reward_multiplier: 1.0
+
+# -------------------------------------------------------------------------
+# reward_transform maps the raw cost into scalar rewards for RAM.
+# group_rank/top_bottom are scale-free and useful when raw cost differences
+# are small but posterior-pruning behavior is desired.
+
+# Smooth tilt:
+# reward_transform: "negative_cost"
+
+# Scale-free pruning:
+# reward_transform: "group_rank"
+
+# Strong top/bottom pruning:
+reward_transform: "top_bottom"
+# reward_top_frac: 0.25
+# reward_bottom_frac: 0.25
+
+# Soft threshold pruning:
+# reward_transform: "softplus_barrier"
+# reward_barrier_tau: null
+# reward_barrier_tau_mode: "batch_quantile"
+# reward_barrier_tau_quantile: 0.50
+# reward_barrier_temperature: 0.005
+reward_barrier_tau: null
+reward_barrier_temperature: 0.005
+reward_barrier_tau_mode: "batch_quantile" # choices=["batch_mean", "batch_quantile", "ema"]
+reward_barrier_tau_quantile: 0.50
+reward_barrier_tau_ema_decay: 0.95
+reward_top_frac: 0.25
+reward_bottom_frac: 0.25
+reward_clip_abs: null
+reward_multiplier: 3.0
+# -------------------------------------------------------------------------
+
 # reward_scaling choices:
 #   running_epoch_std = pooled std reset every epoch, historical default
 #   ema_std           = persistent std EMA across epochs
@@ -128,7 +167,7 @@ reward_multiplier: 1.0
 #   group             = per-condition group std
 #   none              = unscaled group-relative advantage
 reward_scaling: "ema_std"
-reward_std_ema_decay: 0.95
+reward_std_ema_decay: 0.90
 reward_eps: 1.0e-4
 adv_clip_abs: 3.0
 coherence_use_denorm: false
@@ -142,21 +181,20 @@ global_joint_top_frac: 0.10
 # off testing RAM runs & enable only after the core RAM signal is stable.
 global_include_pairwise: true
 global_lambda_pairwise: 0.25
-global_include_pairwise_in_score: false
+global_include_pairwise_in_score: true
 
 # Optimizer.
-lr: 2.0e-5
+lr: 2.0e-4
 weight_decay: 1.0e-4
 beta1: 0.9
 beta2: 0.95
 grad_clip: 1.0
 
 # EMA policies.
-old_ema_decay: 0.9
-eval_ema_decay: 0.9
+old_ema_decay: 0.90
+eval_ema_decay: 0.95
 
 # Logging / validation.
-save_history_json: false   # Keep history/metric logs as CSV by default; args.json is still saved.
 val_loss_rel_l2_weight: 0.1
 val_loss_coherence_weight: 1.0
 eval_every: 5
@@ -166,9 +204,9 @@ eval_num_batches: 2
 
 # Optional fixed clean rollout monitor. Runs at epoch 0 before fine-tuning.
 rollout_eval_enabled: true
-rollout_eval_every: 20
+rollout_eval_every: 10
 rollout_eval_split: "test"
-rollout_eval_snapshot_index: [0, 10, 100]
+rollout_eval_snapshot_index: [0, 10, 50, 200]
 rollout_eval_n_steps: 2
 rollout_eval_obs_consistency_mode: "endpoint_smooth" # choices=["none", "default_hard", "endpoint", "endpoint_smooth"]
 rollout_eval_num_sensors: null

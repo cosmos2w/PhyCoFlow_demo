@@ -44,6 +44,8 @@ import yaml
 
 from helpers import TurbulentCombustionH5Dataset, reconstruct_snapshot
 from evaluate_ffm import (
+    _align_per_field_values,
+    _as_int_list,
     _build_model,
     _extract_timestamp,
     _find_latest_yaml,
@@ -1255,7 +1257,14 @@ def main() -> None:
         model.eval()
 
         cond_fields = args.cond_fields if args.cond_fields is not None else cfg["vis_cond_fields"]
-        n_obs_list = args.n_obs_list if args.n_obs_list is not None else cfg["vis_n_obs_list"]
+        cond_fields = _as_int_list(cond_fields)
+        n_obs_source = args.n_obs_list if args.n_obs_list is not None else cfg["vis_n_obs_list"]
+        n_obs_list = _align_per_field_values(
+            n_obs_source,
+            cond_fields,
+            "n_obs_list",
+            source_fields=cfg.get("vis_cond_fields", cfg.get("cond_fields")),
+        )
         n_steps_generation = (
             int(args.n_steps_generation)
             if args.n_steps_generation is not None
@@ -1290,7 +1299,14 @@ def main() -> None:
 
         shared_cond = cfg["shared"]["conditioning"]
         cond_fields = args.cond_fields if args.cond_fields is not None else shared_cond["vis_cond_fields"]
-        n_obs_list = args.n_obs_list if args.n_obs_list is not None else shared_cond["vis_n_obs_list"]
+        cond_fields = _as_int_list(cond_fields)
+        n_obs_source = args.n_obs_list if args.n_obs_list is not None else shared_cond["vis_n_obs_list"]
+        n_obs_list = _align_per_field_values(
+            n_obs_source,
+            cond_fields,
+            "n_obs_list",
+            source_fields=shared_cond.get("vis_cond_fields", shared_cond.get("cond_fields")),
+        )
         stage_cfg = runtime["model_baseline_module"].resolve_stage_config(cfg)
         sampling_cfg = stage_cfg.get("sampling", {})
         if args.n_steps_generation is not None:

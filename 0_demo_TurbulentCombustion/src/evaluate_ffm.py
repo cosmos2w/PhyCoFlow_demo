@@ -197,21 +197,75 @@ def _find_latest_yaml(cfg_dir: Path, demo_num: int) -> Path:
     return candidates[-1]
 
 
+def _as_int_list(value) -> List[int]:
+    if value is None:
+        return []
+    if isinstance(value, (int, np.integer)):
+        return [int(value)]
+    return [int(v) for v in value]
+
+
+def _align_per_field_values(values, cond_fields, name: str, *, source_fields=None) -> List[int]:
+    fields = _as_int_list(cond_fields)
+    vals = _as_int_list(values)
+    if not fields:
+        raise ValueError("cond_fields must contain at least one field index.")
+    if not vals:
+        raise ValueError(f"{name} must contain at least one value.")
+    if len(vals) == 1:
+        return vals * len(fields)
+    if len(vals) == len(fields):
+        return vals
+    source = _as_int_list(source_fields)
+    if source and len(vals) == len(source):
+        value_by_field = {field: value for field, value in zip(source, vals)}
+        if all(field in value_by_field for field in fields):
+            return [value_by_field[field] for field in fields]
+    if len(fields) == 1 and all(value == vals[0] for value in vals):
+        return [vals[0]]
+    raise ValueError(
+        f"{name} must have length 1 or match the effective cond_fields. "
+        f"Got {len(vals)} values for {len(fields)} fields."
+    )
+
+
 def _normalize_eval_config(cfg: dict) -> dict:
     cfg = dict(cfg)
 
     # Backward-compatible defaults
     if cfg.get("cond_fields") is None:
         cfg["cond_fields"] = [cfg.get("cond_field", 2)]
+    cfg["cond_fields"] = _as_int_list(cfg["cond_fields"])
     if cfg.get("n_obs_min_list") is None:
         cfg["n_obs_min_list"] = [cfg.get("n_obs_min", 64)]
     if cfg.get("n_obs_max_list") is None:
         cfg["n_obs_max_list"] = [cfg.get("n_obs_max", 256)]
+    cfg["n_obs_min_list"] = _align_per_field_values(
+        cfg["n_obs_min_list"],
+        cfg["cond_fields"],
+        "n_obs_min_list",
+        source_fields=cfg["cond_fields"],
+    )
+    cfg["n_obs_max_list"] = _align_per_field_values(
+        cfg["n_obs_max_list"],
+        cfg["cond_fields"],
+        "n_obs_max_list",
+        source_fields=cfg["cond_fields"],
+    )
 
     if cfg.get("vis_cond_fields") in (None, ""):
         cfg["vis_cond_fields"] = list(cfg["cond_fields"])
+    else:
+        cfg["vis_cond_fields"] = _as_int_list(cfg["vis_cond_fields"])
     if cfg.get("vis_n_obs_list") in (None, ""):
         cfg["vis_n_obs_list"] = list(cfg["n_obs_max_list"])
+    else:
+        cfg["vis_n_obs_list"] = _align_per_field_values(
+            cfg["vis_n_obs_list"],
+            cfg["vis_cond_fields"],
+            "vis_n_obs_list",
+            source_fields=cfg["cond_fields"],
+        )
 
     if cfg.get("backbone") is None:
         cfg["backbone"] = "mlp_rbf"
@@ -890,7 +944,14 @@ def main():
     model.eval()
 
     vis_cond_fields = args.vis_cond_fields if args.vis_cond_fields is not None else cfg["vis_cond_fields"]
-    vis_n_obs_list = args.vis_n_obs_list if args.vis_n_obs_list is not None else cfg["vis_n_obs_list"]
+    vis_cond_fields = _as_int_list(vis_cond_fields)
+    vis_n_obs_source = args.vis_n_obs_list if args.vis_n_obs_list is not None else cfg["vis_n_obs_list"]
+    vis_n_obs_list = _align_per_field_values(
+        vis_n_obs_source,
+        vis_cond_fields,
+        "vis_n_obs_list",
+        source_fields=cfg.get("vis_cond_fields", cfg.get("cond_fields")),
+    )
 
     print(f'\nvis_n_obs_list is {vis_n_obs_list}\n')
     

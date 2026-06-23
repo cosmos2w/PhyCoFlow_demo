@@ -327,13 +327,26 @@ def ensure_list(x: Optional[Sequence[int] | int]) -> List[int]:
     return [int(x)]
 
 
-def broadcast_per_field(values: Sequence[int] | int | None, fields: Sequence[int], name: str) -> List[int]:
+def broadcast_per_field(
+    values: Sequence[int] | int | None,
+    fields: Sequence[int],
+    name: str,
+    source_fields: Sequence[int] | int | None = None,
+) -> List[int]:
     vals = ensure_list(values)
+    fields = ensure_list(fields)
     if len(vals) == 0:
         raise ValueError(f"{name} cannot be empty once fields are specified.")
     if len(vals) == 1:
         vals = vals * len(fields)
     if len(vals) != len(fields):
+        source = ensure_list(source_fields)
+        if source and len(vals) == len(source):
+            value_by_field = {field: value for field, value in zip(source, vals)}
+            if all(field in value_by_field for field in fields):
+                return [value_by_field[field] for field in fields]
+        if len(fields) == 1 and all(value == vals[0] for value in vals):
+            return [vals[0]]
         raise ValueError(f"{name} must have length 1 or match len(cond_fields). Got {len(vals)} vs {len(fields)}")
     return vals
 
@@ -2698,6 +2711,33 @@ def main() -> None:
         cfg = load_run_config(run_dir)
         demo_dir = infer_demo_dir(run_dir)
 
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        except pickle.UnpicklingError:
+            print("[warning] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+        build_cfg = cfg
+        if isinstance(checkpoint, dict) and str(checkpoint.get("finetune_method", "")).startswith("RAM"):
+            source_cfg = checkpoint.get("source_config")
+            if source_cfg is None:
+                source_cfg_path = run_dir / "source_run_config.yaml"
+                if source_cfg_path.exists():
+                    with open(source_cfg_path, "r", encoding="utf-8") as handle:
+                        source_cfg = yaml.safe_load(handle) or {}
+            if source_cfg is None:
+                raise ValueError(
+                    "RAM-finetuned checkpoint detected, but neither checkpoint['source_config'] "
+                    "nor source_run_config.yaml is available for architecture reconstruction."
+                )
+            source_cfg = normalize_conditioning_args_dict(dict(source_cfg))
+            finetune_cfg = dict(checkpoint.get("finetune_config") or cfg)
+            eval_cfg = dict(source_cfg)
+            eval_cfg.update({key: value for key, value in finetune_cfg.items() if value is not None})
+            cfg = normalize_conditioning_args_dict(eval_cfg)
+            build_cfg = source_cfg
+            print("[*] RAM-finetuned PointCloudFFM checkpoint detected; rebuilding architecture from source_config.")
+
         # Dataset path and stats path default to the training run settings.
         data_path = args.data or cfg.get("data")
         if data_path is None:
@@ -2720,18 +2760,12 @@ def main() -> None:
             stats_path=str(stats_path) if stats_path.exists() else None,
         )
 
-        try:
-            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        except pickle.UnpicklingError:
-            print("[warning] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
-            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
         state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
         if isinstance(state_dict, dict) and "_metadata" in state_dict:
             state_dict = dict(state_dict)
             state_dict.pop("_metadata", None)
 
-        model = build_model(cfg, dataset).to(device)
+        model = build_model(build_cfg, dataset).to(device)
         model.load_state_dict(state_dict, strict=True)
         model.eval()
 
@@ -2740,10 +2774,25 @@ def main() -> None:
             cond_fields = ensure_list(cfg.get("cond_fields", [cfg.get("cond_field", 2)]))
 
         if args.n_obs_list is not None:
-            n_obs_list = broadcast_per_field(args.n_obs_list, cond_fields, "n_obs_list")
+            n_obs_list = broadcast_per_field(
+                args.n_obs_list,
+                cond_fields,
+                "n_obs_list",
+                source_fields=cfg.get("cond_fields", [cfg.get("cond_field", 2)]),
+            )
         else:
             default_obs = cfg.get("vis_n_obs_list", cfg.get("n_obs_max_list", [cfg.get("n_obs_max", 256)]))
-            n_obs_list = broadcast_per_field(default_obs, cond_fields, "n_obs_list")
+            default_source_fields = (
+                cfg.get("vis_cond_fields")
+                if cfg.get("vis_n_obs_list") is not None
+                else cfg.get("cond_fields", [cfg.get("cond_field", 2)])
+            )
+            n_obs_list = broadcast_per_field(
+                default_obs,
+                cond_fields,
+                "n_obs_list",
+                source_fields=default_source_fields,
+            )
 
         n_steps = int(args.n_steps if args.n_steps is not None else cfg.get("n_steps_generation", 100))
         active_ode_solver = args.ode_solver
@@ -2762,9 +2811,19 @@ def main() -> None:
         if len(cond_fields) == 0:
             cond_fields = ensure_list(shared_cond.get("cond_fields"))
         if args.n_obs_list is not None:
-            n_obs_list = broadcast_per_field(args.n_obs_list, cond_fields, "n_obs_list")
+            n_obs_list = broadcast_per_field(
+                args.n_obs_list,
+                cond_fields,
+                "n_obs_list",
+                source_fields=shared_cond.get("cond_fields"),
+            )
         else:
-            n_obs_list = broadcast_per_field(shared_cond.get("vis_n_obs_list"), cond_fields, "n_obs_list")
+            n_obs_list = broadcast_per_field(
+                shared_cond.get("vis_n_obs_list"),
+                cond_fields,
+                "n_obs_list",
+                source_fields=shared_cond.get("vis_cond_fields", shared_cond.get("cond_fields")),
+            )
         reco_fn = get_reconstruction_fn(args.baseline_model)
 
     save_root = (

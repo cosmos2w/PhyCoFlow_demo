@@ -252,6 +252,14 @@ coherence rewards produce group-relative advantages, endpoints are analytically
 re-noised, and the policy is trained against a detached velocity MSE target.
 No reward gradients, SDE rollouts, or adjoint sweeps are used.
 
+RAM separates the raw coherence cost from the reward shaping used for
+fine-tuning. `reward_mode` chooses the lower-is-better raw cost, such as
+`global_dist`, `marginal_only`, or `field_l2`. `reward_transform` then maps
+that cost into scalar rewards before the usual group-relative advantage step.
+`negative_cost` is the historical smooth posterior-tilting behavior. For
+stronger posterior-pruning behavior, use scale-free or thresholded transforms
+such as `group_rank`, `top_bottom`, or `softplus_barrier`.
+
 RAM has additional memory controls beyond the base trainer. Endpoint sampling
 still produces full fields, but reward/coherence and velocity matching can use
 separate point subsets:

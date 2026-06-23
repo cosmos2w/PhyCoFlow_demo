@@ -34,16 +34,19 @@
 #   multires_train_case_fraction: 0.3333333333
 
 #----------------------------------------------------------
-# Using enhanced GL_rbf for CFD 1:1:0
-# Retrained with GL_rbf_ENH by topk_rbf_glres mode - 0608
+# ALl high resolution benchmark: test on 0:0:1 for CFD
+# Retrained with GL_rbf_ENH by topk_rbf mode, top_k=32 - 0619
+
+# Reload and continue training from a previous checkpoint - 0622
+
 #----------------------------------------------------------
 
-Demo_Num: 12
-device_ids: [1]
+Demo_Num: 19
+device_ids: [0]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
-RELOAD: false                       # If true, continue from latest matching Demo_Num run.
+RELOAD: true                       # If true, continue from latest matching Demo_Num run.
 reload_checkpoint: "best"           # ["best", "last"]
 
 seed : 42
@@ -64,9 +67,9 @@ dataset_mode: "pdebench_multires"   # ["default", "pdebench_multires"]
 # ----------------------------------------------------------
 pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
-selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-Vx
-multires_ratio: "1:1:0"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
-multires_train_case_fraction: 1     # Keep only this fraction of train cases before L:M:H split.
+selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
+multires_ratio: "0:0:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
+multires_train_case_fraction: 1  # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.25
@@ -92,7 +95,7 @@ sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config com
 rbf_sigma : 0.05
 USE_FOURIER_PE: true   # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
 fourier_pe_num_bands: 24
-fourier_pe_max_freq: 64.0
+fourier_pe_max_freq: 48.0
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf / GL_rbf_ENH
@@ -113,7 +116,7 @@ summary_type: "mean" # Only for GL_rbf / GL_rbf_ENH, mean or cls
 # Recommended first tests:
 #   "topk_rbf"       = clean enhanced model
 #   "topk_rbf_glres" = strongest enhanced model with residual scaffold/importance
-gather_mode: "topk_rbf_glres"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
+gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
 gather_topk: 32
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
