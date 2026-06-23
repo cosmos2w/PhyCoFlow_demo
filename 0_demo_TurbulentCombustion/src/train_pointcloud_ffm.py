@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from tqdm import tqdm
 from datetime import datetime
 
@@ -46,6 +46,14 @@ from Model import (
     FNO,
     FNOFFM,
     )
+from direct_coherence_loss import (
+    DirectCoherenceConfig,
+    DirectGlobalCoherenceLoss,
+    apply_two_objective_update,
+    differentiable_rf_rollout,
+    sample_coherence_points,
+)
+from model_finetune import find_source_run_dir, load_source_config
 
 def parse_args():
 
@@ -63,6 +71,16 @@ def parse_args():
                    default=f"Save_TrainedModel/ffm_tc_pointcloud")
     p.add_argument("--RELOAD", action="store_true",
                    help="If set, try to reload the latest matching checkpoint and continue training.")
+    p.add_argument("--training-mode", dest="training_mode", type=str, default="standard",
+                   choices=["standard", "direct_coherence"])
+    p.add_argument("--initialization", type=str, default="scratch", choices=["scratch", "pretrained"])
+    p.add_argument("--pretrained-run-dir", dest="pretrained_run_dir", type=str, default=None)
+    p.add_argument("--pretrained-source-Demo-Num", dest="pretrained_source_Demo_Num", type=int, default=None)
+    p.add_argument("--pretrained-checkpoint", dest="pretrained_checkpoint", type=str, default="best")
+    p.add_argument("--pretrained-load-optimizer", dest="pretrained_load_optimizer", action="store_true")
+    p.add_argument("--no-pretrained-load-optimizer", dest="pretrained_load_optimizer", action="store_false")
+    p.set_defaults(pretrained_load_optimizer=False)
+    p.add_argument("--pretrained-strict", dest="pretrained_strict", action=argparse.BooleanOptionalAction, default=True)
     
     # ------------------------------
     # Backbone selection
@@ -77,6 +95,7 @@ def parse_args():
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--weight-decay", type=float, default=1e-6)
     p.add_argument("--train-ratio", type=float, default=0.9)
+    p.add_argument("--train-ratio-downsample", dest="train_ratio_downsample", type=float, default=1.0)
     p.add_argument("--time-stride", type=int, default=1)
     p.add_argument("--num-workers", type=int, default=4)
 
@@ -250,6 +269,62 @@ def parse_args():
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--save-every", type=int, default=10)
     p.add_argument("--n-steps-generation", type=int, default=32)
+
+    # ----------------------------------------------------------
+    # Direct coherence training / post-training
+    # ----------------------------------------------------------
+    p.add_argument("--direct-coherence-enabled", dest="direct_coherence_enabled",
+                   action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--data-loss-weight", dest="data_loss_weight", type=float, default=1.0)
+    p.add_argument("--coherence-loss-weight", dest="coherence_loss_weight", type=float, default=0.1)
+    p.add_argument("--coherence-start-epoch", dest="coherence_start_epoch", type=int, default=1)
+    p.add_argument("--coherence-every-n-steps", dest="coherence_every_n_steps", type=int, default=1)
+    p.add_argument("--coherence-interval-rescale", dest="coherence_interval_rescale",
+                   action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--coherence-batch-size", dest="coherence_batch_size", type=int, default=4)
+    p.add_argument("--coherence-n-points", dest="coherence_n_points", type=int, default=4096)
+    p.add_argument("--coherence-rollout-steps", dest="coherence_rollout_steps", type=int, default=2)
+    p.add_argument("--coherence-rollout-solver", dest="coherence_rollout_solver", type=str, default="euler",
+                   choices=["euler", "heun"])
+    p.add_argument("--coherence-obs-consistency-mode", dest="coherence_obs_consistency_mode",
+                   type=str, default="endpoint_smooth",
+                   choices=["none", "default_hard", "endpoint", "endpoint_smooth"])
+    p.add_argument("--coherence-obs-consistency-strength", dest="coherence_obs_consistency_strength",
+                   type=float, default=1.0)
+    p.add_argument("--coherence-obs-consistency-sigma", dest="coherence_obs_consistency_sigma",
+                   type=float, default=0.05)
+    p.add_argument("--coherence-obs-consistency-schedule-power",
+                   dest="coherence_obs_consistency_schedule_power", type=float, default=2.0)
+    p.add_argument("--coherence-obs-consistency-final-clamp",
+                   dest="coherence_obs_consistency_final_clamp",
+                   action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--coherence-self-weight", dest="coherence_self_weight", type=float, default=1.0)
+    p.add_argument("--coherence-mutual-weight", dest="coherence_mutual_weight", type=float, default=0.10)
+    p.add_argument("--coherence-cross-weight", dest="coherence_cross_weight", type=float, default=1.0)
+    p.add_argument("--coherence-channel-weights", dest="coherence_channel_weights",
+                   type=float, nargs="+", default=None)
+    p.add_argument("--coherence-cross-num-directions", dest="coherence_cross_num_directions",
+                   type=int, default=32)
+    p.add_argument("--coherence-cross-top-frac", dest="coherence_cross_top_frac", type=float, default=0.10)
+    p.add_argument("--coherence-cross-seed", dest="coherence_cross_seed", type=int, default=1234)
+    p.add_argument("--coherence-cross-include-axes", dest="coherence_cross_include_axes",
+                   action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--coherence-cross-qmc", dest="coherence_cross_qmc",
+                   action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--coherence-mutual-num-directions", dest="coherence_mutual_num_directions",
+                   type=int, default=16)
+    p.add_argument("--coherence-mutual-seed", dest="coherence_mutual_seed", type=int, default=1234)
+    p.add_argument("--coherence-use-denorm", dest="coherence_use_denorm",
+                   action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--gradient-balance-mode", dest="gradient_balance_mode", type=str,
+                   default="weighted_sum", choices=["weighted_sum", "config"])
+    p.add_argument("--config-missing-behavior", dest="config_missing_behavior", type=str,
+                   default="error", choices=["error", "weighted_sum"])
+    p.add_argument("--config-data-grad-scale", dest="config_data_grad_scale", type=float, default=1.0)
+    p.add_argument("--config-coherence-grad-scale", dest="config_coherence_grad_scale",
+                   type=float, default=1.0)
+    p.add_argument("--coherence-weight-warmup-epochs", dest="coherence_weight_warmup_epochs",
+                   type=int, default=0)
 
     return p.parse_args()
 
@@ -477,6 +552,272 @@ def run_epoch(
     return total / max(count, 1)
 
 
+def build_direct_coherence_config(args) -> DirectCoherenceConfig:
+    return DirectCoherenceConfig(
+        enabled=bool(args.direct_coherence_enabled),
+        self_weight=float(args.coherence_self_weight),
+        mutual_weight=float(args.coherence_mutual_weight),
+        cross_weight=float(args.coherence_cross_weight),
+        channel_weights=args.coherence_channel_weights,
+        cross_num_directions=int(args.coherence_cross_num_directions),
+        cross_top_frac=float(args.coherence_cross_top_frac),
+        cross_seed=int(args.coherence_cross_seed),
+        cross_include_axes=bool(args.coherence_cross_include_axes),
+        cross_qmc=bool(args.coherence_cross_qmc),
+        mutual_num_directions=int(args.coherence_mutual_num_directions),
+        mutual_seed=int(args.coherence_mutual_seed),
+        use_denorm=bool(args.coherence_use_denorm),
+    )
+
+
+def current_coherence_loss_weight(args, epoch: int) -> float:
+    base = float(args.coherence_loss_weight)
+    warmup = int(getattr(args, "coherence_weight_warmup_epochs", 0) or 0)
+    if warmup <= 0 or epoch < int(args.coherence_start_epoch):
+        return base
+    progress = (epoch - int(args.coherence_start_epoch) + 1) / float(warmup)
+    return base * min(max(progress, 0.0), 1.0)
+
+
+def build_epoch_train_loader(train_set, args, epoch: int) -> DataLoader:
+    """
+    Build a fresh random subset loader for one epoch.
+
+    `train_ratio` still defines the train/validation split.  This helper only
+    down-samples the already-built training split for the current epoch.
+    """
+    ratio = min(max(float(getattr(args, "train_ratio_downsample", 1.0)), 0.0), 1.0)
+    n_total = len(train_set)
+    n_epoch = n_total if ratio >= 1.0 else max(1, int(math.ceil(n_total * ratio)))
+    generator = torch.Generator()
+    generator.manual_seed(int(args.seed) + int(epoch) * 1009)
+    if n_epoch < n_total:
+        indices = torch.randperm(n_total, generator=generator)[:n_epoch].tolist()
+        epoch_set = Subset(train_set, indices)
+    else:
+        epoch_set = train_set
+    return DataLoader(
+        epoch_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        generator=generator,
+        num_workers=args.num_workers,
+        pin_memory=torch.cuda.is_available(),
+        collate_fn=collate_snapshots,
+    )
+
+
+def _grad_norm(model: nn.Module) -> float:
+    grads = [
+        p.grad.detach().reshape(-1)
+        for p in model.parameters()
+        if p.requires_grad and p.grad is not None
+    ]
+    if not grads:
+        return float("nan")
+    vec = torch.cat(grads)
+    return float(torch.linalg.vector_norm(vec).detach().cpu())
+
+
+def _mean_metric(rows: list[dict], key: str) -> float:
+    vals = [row[key] for row in rows if key in row and row[key] is not None and math.isfinite(float(row[key]))]
+    if not vals:
+        return float("nan")
+    return float(sum(float(v) for v in vals) / len(vals))
+
+
+def run_epoch_direct_coherence(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    cond_fields: Sequence[int],
+    n_obs_min_list: Sequence[int],
+    n_obs_max_list: Sequence[int],
+    n_query_points: Optional[int],
+    query_sampling: str,
+    query_sample_near_ratio: float,
+    query_sample_far_ratio: float,
+    query_sample_sigma_ratio: float,
+    direct_cfg: DirectCoherenceConfig,
+    args,
+    global_step: int,
+    epoch: int,
+    mean: Optional[torch.Tensor] = None,
+    std: Optional[torch.Tensor] = None,
+) -> tuple[dict, int]:
+    model.train(True)
+    loss_module = DirectGlobalCoherenceLoss(direct_cfg)
+    rows = []
+    applied = 0
+    conflict_count = 0
+    mode_str = "DirectCoherence"
+    pbar = tqdm(loader, desc=f"Epoch {epoch:04d} [{mode_str}]", leave=False)
+
+    for batch in pbar:
+        coords_full = batch["coords"].to(device)
+        fields_full = batch["fields"].to(device)
+        obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+            coords_full=coords_full,
+            fields_full=fields_full,
+            cond_fields=cond_fields,
+            n_obs_min=n_obs_min_list,
+            n_obs_max=n_obs_max_list,
+        )
+
+        effective_n_query = None if getattr(model, "requires_full_grid", False) else n_query_points
+        coords_q, fields_q, _ = sample_query_subset(
+            coords=coords_full,
+            fields=fields_full,
+            n_query=effective_n_query,
+            mode=query_sampling,
+            obs_coords=obs_coords,
+            obs_mask=obs_mask,
+            near_ratio=query_sample_near_ratio,
+            far_ratio=query_sample_far_ratio,
+            sigma_ratio=query_sample_sigma_ratio,
+        )
+        data_loss, _ = model.training_loss(
+            x1=fields_q,
+            coords=coords_q,
+            obs_coords=obs_coords,
+            obs_values=obs_values,
+            obs_mask=obs_mask,
+            obs_field_ids=obs_field_ids,
+            obs_indices=obs_indices,
+        )
+
+        global_step += 1
+        every = max(1, int(args.coherence_every_n_steps))
+        coherence_weight = current_coherence_loss_weight(args, epoch)
+        coherence_active = (
+            bool(direct_cfg.enabled)
+            and int(epoch) >= int(args.coherence_start_epoch)
+            and global_step % every == 0
+            and coherence_weight > 0.0
+        )
+
+        row = {
+            "data_loss": float(data_loss.detach().cpu()),
+            "coherence_loss": float("nan"),
+            "coherence_self": float("nan"),
+            "coherence_mutual": float("nan"),
+            "coherence_cross": float("nan"),
+            "coherence_applied": 0.0,
+            "data_grad_norm": float("nan"),
+            "coherence_grad_norm": float("nan"),
+            "gradient_cosine": float("nan"),
+            "gradient_conflict": 0.0,
+            "global_step": float(global_step),
+        }
+
+        if not coherence_active:
+            optimizer.zero_grad(set_to_none=True)
+            total_loss = float(args.data_loss_weight) * data_loss
+            total_loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            row["data_grad_norm"] = _grad_norm(model)
+            optimizer.step()
+            row["total_loss"] = float(total_loss.detach().cpu())
+        else:
+            bsz = coords_full.shape[0]
+            cbsz = min(max(1, int(args.coherence_batch_size)), bsz)
+            sel = torch.randperm(bsz, device=device)[:cbsz].sort().values
+
+            coords_c = coords_full.index_select(0, sel)
+            fields_c = fields_full.index_select(0, sel)
+            obs_coords_c = obs_coords.index_select(0, sel)
+            obs_values_c = obs_values.index_select(0, sel)
+            obs_mask_c = obs_mask.index_select(0, sel)
+            obs_field_ids_c = obs_field_ids.index_select(0, sel)
+            obs_indices_c = obs_indices.index_select(0, sel) if obs_indices is not None else None
+
+            if getattr(model, "requires_full_grid", False):
+                coords_coh, fields_ref, _ = coords_c, fields_c, None
+            else:
+                coords_coh, fields_ref, _ = sample_coherence_points(
+                    coords=coords_c,
+                    fields=fields_c,
+                    n_points=args.coherence_n_points,
+                )
+
+            x_gen = differentiable_rf_rollout(
+                ffm_model=model,
+                coords=coords_coh,
+                obs_coords=obs_coords_c,
+                obs_values=obs_values_c,
+                obs_mask=obs_mask_c,
+                obs_field_ids=obs_field_ids_c,
+                obs_indices=obs_indices_c,
+                n_steps=args.coherence_rollout_steps,
+                ode_solver=args.coherence_rollout_solver,
+                obs_consistency_mode=args.coherence_obs_consistency_mode,
+                obs_consistency_strength=args.coherence_obs_consistency_strength,
+                obs_consistency_sigma=args.coherence_obs_consistency_sigma,
+                obs_consistency_schedule_power=args.coherence_obs_consistency_schedule_power,
+                obs_consistency_final_clamp=args.coherence_obs_consistency_final_clamp,
+            )
+            coherence_loss_raw, components = loss_module(
+                x_gen=x_gen,
+                x_ref=fields_ref,
+                mean=mean,
+                std=std,
+            )
+            coherence_loss_for_update = coherence_loss_raw
+            if bool(args.coherence_interval_rescale):
+                coherence_loss_for_update = coherence_loss_for_update * every
+
+            grad_info = apply_two_objective_update(
+                model=model,
+                optimizer=optimizer,
+                data_loss=data_loss,
+                coherence_loss=coherence_loss_for_update,
+                mode=args.gradient_balance_mode,
+                data_weight=float(args.data_loss_weight) if args.gradient_balance_mode == "weighted_sum" else float(args.config_data_grad_scale),
+                coherence_weight=coherence_weight if args.gradient_balance_mode == "weighted_sum" else float(args.config_coherence_grad_scale),
+                grad_clip_norm=1.0,
+                config_missing_behavior=args.config_missing_behavior,
+            )
+            applied += 1
+            if bool(grad_info.get("gradient_conflict", False)):
+                conflict_count += 1
+            total_for_log = float(args.data_loss_weight) * data_loss.detach() + coherence_weight * coherence_loss_for_update.detach()
+            row.update({
+                "total_loss": float(total_for_log.cpu()),
+                "coherence_loss": float(coherence_loss_raw.detach().cpu()),
+                "coherence_self": float(components["self_loss"].detach().cpu()),
+                "coherence_mutual": float(components["mutual_loss"].detach().cpu()),
+                "coherence_cross": float(components["cross_loss"].detach().cpu()),
+                "coherence_applied": 1.0,
+                "data_grad_norm": float(grad_info.get("data_grad_norm", float("nan"))),
+                "coherence_grad_norm": float(grad_info.get("coherence_grad_norm", float("nan"))),
+                "gradient_cosine": float(grad_info.get("gradient_cosine", float("nan"))),
+                "gradient_conflict": 1.0 if bool(grad_info.get("gradient_conflict", False)) else 0.0,
+            })
+
+        rows.append(row)
+        pbar.set_postfix_str(
+            f"data={row['data_loss']:.3e} coh={row['coherence_loss']:.3e} applied={int(row['coherence_applied'])}"
+        )
+
+    count = max(len(rows), 1)
+    metrics = {
+        "total_loss": _mean_metric(rows, "total_loss"),
+        "data_loss": _mean_metric(rows, "data_loss"),
+        "coherence_loss": _mean_metric(rows, "coherence_loss"),
+        "coherence_self": _mean_metric(rows, "coherence_self"),
+        "coherence_mutual": _mean_metric(rows, "coherence_mutual"),
+        "coherence_cross": _mean_metric(rows, "coherence_cross"),
+        "coherence_application_fraction": float(applied / count),
+        "data_grad_norm": _mean_metric(rows, "data_grad_norm"),
+        "coherence_grad_norm": _mean_metric(rows, "coherence_grad_norm"),
+        "gradient_cosine": _mean_metric(rows, "gradient_cosine"),
+        "gradient_conflict_fraction": float(conflict_count / max(applied, 1)),
+        "global_step": float(global_step),
+    }
+    return metrics, global_step
+
+
 def find_latest_run_dir(demo_dir: str, save_dir: str, demo_num: int) -> Optional[Path]:
     save_root = Path(demo_dir) / Path(save_dir).parent
     run_prefix = f"{Path(save_dir).name}_DemoN{demo_num}_"
@@ -594,6 +935,197 @@ class TrainingHistoryLogger:
         plt.close(fig)
 
 
+class DirectCoherenceHistoryLogger:
+    def __init__(self, run_dir: Path) -> None:
+        self.csv_path = run_dir / "direct_coherence_history.csv"
+        self.json_path = run_dir / "direct_coherence_history.json"
+        self.plot_path = run_dir / "direct_coherence_history.png"
+        self.rows = []
+        self.fieldnames = [
+            "epoch",
+            "train_total_loss",
+            "train_data_loss",
+            "train_coherence_loss",
+            "coherence_self",
+            "coherence_mutual",
+            "coherence_cross",
+            "coherence_application_fraction",
+            "data_grad_norm",
+            "coherence_grad_norm",
+            "gradient_cosine",
+            "gradient_conflict_fraction",
+            "lr",
+            "global_step",
+        ]
+        with open(self.csv_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.fieldnames)
+            writer.writeheader()
+
+    def log(self, epoch: int, metrics: dict, lr: float, global_step: int) -> None:
+        row = {
+            "epoch": int(epoch),
+            "train_total_loss": metrics.get("total_loss", float("nan")),
+            "train_data_loss": metrics.get("data_loss", float("nan")),
+            "train_coherence_loss": metrics.get("coherence_loss", float("nan")),
+            "coherence_self": metrics.get("coherence_self", float("nan")),
+            "coherence_mutual": metrics.get("coherence_mutual", float("nan")),
+            "coherence_cross": metrics.get("coherence_cross", float("nan")),
+            "coherence_application_fraction": metrics.get("coherence_application_fraction", float("nan")),
+            "data_grad_norm": metrics.get("data_grad_norm", float("nan")),
+            "coherence_grad_norm": metrics.get("coherence_grad_norm", float("nan")),
+            "gradient_cosine": metrics.get("gradient_cosine", float("nan")),
+            "gradient_conflict_fraction": metrics.get("gradient_conflict_fraction", float("nan")),
+            "lr": float(lr),
+            "global_step": int(global_step),
+        }
+        self.rows.append(row)
+        with open(self.csv_path, "a", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.fieldnames)
+            writer.writerow(row)
+        with open(self.json_path, "w", encoding="utf-8") as handle:
+            json.dump(self.rows, handle, indent=2)
+        self._plot()
+
+    @staticmethod
+    def _series(rows: list[dict], key: str) -> tuple[list[int], list[float]]:
+        xs = []
+        ys = []
+        for row in rows:
+            value = row.get(key)
+            if value is None:
+                continue
+            value = float(value)
+            if not math.isfinite(value) or value <= 0.0:
+                continue
+            xs.append(int(row["epoch"]))
+            ys.append(value)
+        return xs, ys
+
+    def _plot(self) -> None:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        left_specs = [
+            ("train_total_loss", "Total", "#1f77b4"),
+            ("train_data_loss", "Data", "#2ca02c"),
+            ("train_coherence_loss", "Physical coherence", "#d62728"),
+        ]
+        for key, label, color in left_specs:
+            xs, ys = self._series(self.rows, key)
+            if xs:
+                axes[0].plot(xs, ys, marker="o", markersize=3, linewidth=1.6, label=label, color=color)
+        axes[0].set_title("Direct Post-Training Losses")
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("Loss")
+        axes[0].grid(True, which="both", ls="--", alpha=0.4)
+        if axes[0].lines:
+            axes[0].set_yscale("log")
+            axes[0].legend()
+
+        right_specs = [
+            ("coherence_self", "Self", "#9467bd"),
+            ("coherence_mutual", "Mutual", "#ff7f0e"),
+            ("coherence_cross", "Cross", "#17becf"),
+        ]
+        for key, label, color in right_specs:
+            xs, ys = self._series(self.rows, key)
+            if xs:
+                axes[1].plot(xs, ys, marker="o", markersize=3, linewidth=1.6, label=label, color=color)
+        axes[1].set_title("Physical Coherence Components")
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("Loss")
+        axes[1].grid(True, which="both", ls="--", alpha=0.4)
+        if axes[1].lines:
+            axes[1].set_yscale("log")
+            axes[1].legend()
+
+        fig.tight_layout()
+        fig.savefig(self.plot_path, dpi=150)
+        plt.close(fig)
+
+
+def resolve_pretrained_checkpoint(demo_dir: str, args) -> tuple[Optional[Path], Optional[Path]]:
+    if str(args.initialization) != "pretrained" or bool(args.RELOAD):
+        return None, None
+    source_run = find_source_run_dir(
+        demo_dir=demo_dir,
+        source_run_dir=args.pretrained_run_dir,
+        source_Demo_Num=args.pretrained_source_Demo_Num,
+        save_dir_hint=args.save_dir,
+    )
+    ckpt_name = str(args.pretrained_checkpoint)
+    ckpt_path = Path(ckpt_name)
+    if ckpt_path.suffix != ".pt":
+        ckpt_path = ckpt_path.with_suffix(".pt")
+    if not ckpt_path.is_absolute():
+        ckpt_path = source_run / ckpt_path
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Pretrained checkpoint not found: {ckpt_path}")
+    return source_run, ckpt_path
+
+
+def checkpoint_metadata(args, direct_cfg: Optional[DirectCoherenceConfig], source_run_dir, source_checkpoint) -> dict:
+    if str(args.training_mode) == "direct_coherence":
+        method = "direct_coherence_rectified_flow"
+    else:
+        method = "1_rectified_flow"
+    return {
+        "method": method,
+        "training_mode": args.training_mode,
+        "initialization": args.initialization,
+        "source_run_dir": None if source_run_dir is None else str(source_run_dir),
+        "source_checkpoint": None if source_checkpoint is None else str(source_checkpoint),
+        "data_loss_weight": float(args.data_loss_weight),
+        "coherence_loss_weight": float(args.coherence_loss_weight),
+        "gradient_balance_mode": args.gradient_balance_mode,
+        "coherence_config": None if direct_cfg is None else direct_cfg.to_dict(),
+    }
+
+
+def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str:
+    if source_run_dir is None:
+        return ""
+    try:
+        source_cfg = load_source_config(source_run_dir)
+    except Exception as exc:
+        return f"\nCould not read source config from {source_run_dir}: {exc}"
+
+    keys = [
+        "backbone",
+        "hidden_dim",
+        "cond_dim",
+        "field_embed_dim",
+        "USE_FOURIER_PE",
+        "fourier_pe_num_bands",
+        "fourier_pe_max_freq",
+        "latent_dim",
+        "num_latents",
+        "num_heads",
+        "num_latent_blocks",
+        "summary_type",
+        "gather_mode",
+        "gather_topk",
+        "gather_query_chunk_size",
+        "learnable_rbf_sigma",
+        "sensor_coord_encoding",
+        "latent_sensor_reinject",
+        "query_latent_readout",
+        "query_readout_type",
+        "query_readout_scale_init",
+        "enhanced_head_norm",
+        "glres_scale_init",
+    ]
+    current = vars(args)
+    lines = ["\nArchitecture keys that commonly affect checkpoint compatibility:"]
+    for key in keys:
+        src = source_cfg.get(key, "<missing>")
+        cur = current.get(key, "<missing>")
+        if src != cur:
+            lines.append(f"  {key}: source={src!r}, current={cur!r}")
+    if len(lines) == 1:
+        lines.append("  No obvious architecture-key differences found in saved config.")
+    return "\n".join(lines)
+
+
 def main():
 
     args = parse_args()
@@ -634,6 +1166,7 @@ def main():
     start_epoch = 1
     best_val = float("inf")
     reload_ckpt = None
+    global_step = 0
     run_timestamp = timestamp
     save_dir = Path(os.path.join(demo_dir, args.save_dir + f"_DemoN{args.Demo_Num}" + f"_{timestamp}"))
 
@@ -642,15 +1175,23 @@ def main():
         if latest_run_dir is not None and (latest_run_dir / "best.pt").exists():
             save_dir = latest_run_dir
             run_timestamp = extract_run_timestamp(latest_run_dir, args.save_dir, args.Demo_Num)
-            reload_ckpt = torch.load(latest_run_dir / "best.pt", map_location="cpu")
+            reload_ckpt = torch.load(latest_run_dir / "best.pt", map_location="cpu", weights_only=False)
             start_epoch = int(reload_ckpt.get("epoch", 0)) + 1
             best_val = float(reload_ckpt.get("val_loss", float("inf")))
+            global_step = int(reload_ckpt.get("global_step", 0))
 
             backup_existing_artifact(latest_run_dir / "best.pt")
             print(f"[*] RELOAD=True, resuming from: {latest_run_dir / 'best.pt'}")
             print(f"[*] Resume will start from epoch {start_epoch}\n")
         else:
             print("[*] RELOAD=True, but no matching best.pt was found. Training will start from scratch.\n")
+
+    source_run_dir, source_checkpoint = resolve_pretrained_checkpoint(demo_dir, args)
+    if source_checkpoint is not None:
+        args.source_run_dir = str(source_run_dir)
+        args.source_checkpoint = str(source_checkpoint)
+        print(f"[*] initialization=pretrained, source run: {source_run_dir}")
+        print(f"[*] initialization=pretrained, checkpoint: {source_checkpoint}")
 
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -666,12 +1207,21 @@ def main():
     recon_dir = save_dir / "Evaluation"
 
     if args.RELOAD and reload_ckpt is not None:
-        for loss_artifact in ("loss_history.csv", "loss_history.json", "loss_history.png"):
+        for loss_artifact in (
+            "loss_history.csv",
+            "loss_history.json",
+            "loss_history.png",
+            "direct_coherence_history.csv",
+            "direct_coherence_history.json",
+            "direct_coherence_history.png",
+        ):
             backup_existing_artifact(save_dir / loss_artifact)
         backup_existing_artifact(recon_dir)
 
     # Initialize helpers
     logger = TrainingHistoryLogger(save_dir)
+    direct_cfg = build_direct_coherence_config(args)
+    direct_logger = DirectCoherenceHistoryLogger(save_dir) if args.training_mode == "direct_coherence" else None
     recon_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"[*] Model checkpoints will save to: {save_dir}")
@@ -905,26 +1455,91 @@ def main():
         if "optimizer" in reload_ckpt:
             optimizer.load_state_dict(reload_ckpt["optimizer"])
         print("[*] Reloaded model state from best.pt")
+    elif source_checkpoint is not None:
+        pretrained_ckpt = torch.load(source_checkpoint, map_location="cpu", weights_only=False)
+        pretrained_state = (
+            pretrained_ckpt["model"]
+            if isinstance(pretrained_ckpt, dict) and "model" in pretrained_ckpt
+            else pretrained_ckpt
+        )
+        try:
+            load_result = model.load_state_dict(pretrained_state, strict=bool(args.pretrained_strict))
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "Pretrained checkpoint is architecture-incompatible with the current model. "
+                "Check backbone/hidden dimensions/conditioning architecture or set pretrained_strict=false "
+                "only if the mismatch is intentional."
+                f"{architecture_compatibility_hint(args, source_run_dir)}"
+            ) from exc
+        if not bool(args.pretrained_strict):
+            print(f"[*] Pretrained load missing keys: {load_result.missing_keys}")
+            print(f"[*] Pretrained load unexpected keys: {load_result.unexpected_keys}")
+        if bool(args.pretrained_load_optimizer) and isinstance(pretrained_ckpt, dict) and "optimizer" in pretrained_ckpt:
+            optimizer.load_state_dict(pretrained_ckpt["optimizer"])
+            print("[*] Loaded optimizer state from pretrained checkpoint")
+        print("[*] Loaded pretrained model state; new run starts at epoch 1")
 
     for epoch in range(start_epoch, args.epochs + 1):
-        tr_loss = run_epoch(
-            model=model,
-            loader=train_loader,
-            optimizer=optimizer,
-            device=device,
-            cond_fields=args.cond_fields,
-            n_obs_min_list=args.n_obs_min_list,
-            n_obs_max_list=args.n_obs_max_list,
-            n_query_points=args.n_query_points,
-            query_sampling=args.query_sampling,
-            query_sample_near_ratio=args.query_sample_near_ratio,
-            query_sample_far_ratio=args.query_sample_far_ratio,
-            query_sample_sigma_ratio=args.query_sample_sigma_ratio,
-            epoch=epoch,
-        )
+        if args.training_mode == "direct_coherence":
+            epoch_train_loader = build_epoch_train_loader(train_set, args, epoch)
+            direct_metrics, global_step = run_epoch_direct_coherence(
+                model=model,
+                loader=epoch_train_loader,
+                optimizer=optimizer,
+                device=device,
+                cond_fields=args.cond_fields,
+                n_obs_min_list=args.n_obs_min_list,
+                n_obs_max_list=args.n_obs_max_list,
+                n_query_points=args.n_query_points,
+                query_sampling=args.query_sampling,
+                query_sample_near_ratio=args.query_sample_near_ratio,
+                query_sample_far_ratio=args.query_sample_far_ratio,
+                query_sample_sigma_ratio=args.query_sample_sigma_ratio,
+                direct_cfg=direct_cfg,
+                args=args,
+                global_step=global_step,
+                epoch=epoch,
+                mean=train_set.mean.to(device),
+                std=train_set.std.to(device),
+            )
+            tr_loss = float(direct_metrics["total_loss"])
+        else:
+            direct_metrics = None
+            tr_loss = run_epoch(
+                model=model,
+                loader=train_loader,
+                optimizer=optimizer,
+                device=device,
+                cond_fields=args.cond_fields,
+                n_obs_min_list=args.n_obs_min_list,
+                n_obs_max_list=args.n_obs_max_list,
+                n_query_points=args.n_query_points,
+                query_sampling=args.query_sampling,
+                query_sample_near_ratio=args.query_sample_near_ratio,
+                query_sample_far_ratio=args.query_sample_far_ratio,
+                query_sample_sigma_ratio=args.query_sample_sigma_ratio,
+                epoch=epoch,
+            )
+            global_step += len(train_loader)
         scheduler.step()
 
-        print(f"[train] epoch={epoch:04d} loss={tr_loss:.6e}")
+        if direct_metrics is not None:
+            print(
+                f"[train] epoch={epoch:04d} total={direct_metrics['total_loss']:.6e} "
+                f"data={direct_metrics['data_loss']:.6e} coherence={direct_metrics['coherence_loss']:.6e} "
+                f"self={direct_metrics['coherence_self']:.3e} mutual={direct_metrics['coherence_mutual']:.3e} "
+                f"cross={direct_metrics['coherence_cross']:.3e} "
+                f"applied={direct_metrics['coherence_application_fraction']:.2%}"
+            )
+            if direct_logger is not None:
+                direct_logger.log(
+                    epoch=epoch,
+                    metrics=direct_metrics,
+                    lr=optimizer.param_groups[0]["lr"],
+                    global_step=global_step,
+                )
+        else:
+            print(f"[train] epoch={epoch:04d} loss={tr_loss:.6e}")
         val_loss = None
         if epoch % args.eval_every == 0 or epoch == 1:
             with torch.no_grad():
@@ -949,18 +1564,19 @@ def main():
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "epoch": epoch,
+                "global_step": global_step,
                 "train_loss": tr_loss,
                 "val_loss": val_loss,
                 "mean": train_set.mean,
                 "std": train_set.std,
                 "field_names": train_set.field_names,
-                "method": "1_rectified_flow",
                 "backbone": args.backbone,
                 "summary_type": args.summary_type,
                 "ode_solver": args.ode_solver,
                 "Num_x": args.Num_x,
                 "Num_y": args.Num_y,
             }
+            ckpt.update(checkpoint_metadata(args, direct_cfg, source_run_dir, source_checkpoint))
             torch.save(ckpt, save_dir / "last.pt")
             if val_loss < best_val:
                 best_val = val_loss

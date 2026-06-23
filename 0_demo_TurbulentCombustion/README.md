@@ -192,6 +192,51 @@ python src/train_pointcloud_ffm.py \
   --RELOAD
 ```
 
+### 1.7 Direct Coherence Post-Training
+
+Standard point-cloud FFM training still uses the ordinary rectified-flow data
+loss path:
+
+```bash
+python src/train_pointcloud_ffm.py \
+  --config Save_config/config_pointcloud_ffm.yaml \
+  --Demo-Num 19
+```
+
+Direct coherence post-training uses the same training entrypoint, but switches
+to a scheduled differentiable clean rollout before applying global coherence
+losses:
+
+```bash
+python src/train_pointcloud_ffm.py \
+  --config Save_config/config_pointcloud_ffm_direct_posttrain.yaml \
+  --Demo-Num 40
+```
+
+In direct post-training, the model first computes the usual RF velocity MSE on
+the normal query subset. On scheduled steps, it also differentiably rolls out a
+clean sample and compares its empirical field distribution to the reference
+with differentiable self, mutual, and cross coherence terms. `coherence_every_n_steps`
+reduces the expense by running that rollout only every N optimizer steps.
+Post-training writes a live monitor next to the usual `loss_history.*` files:
+`direct_coherence_history.csv`, `direct_coherence_history.json`, and
+`direct_coherence_history.png`. The PNG is refreshed every epoch and shows
+total/data/coherence losses plus the self/mutual/cross physical coherence
+components.
+
+Gradient balancing can use either `weighted_sum` or `config`. ConFIG follows
+the separate-gradient conflict-free update pattern and requires the optional
+package:
+
+```bash
+pip install conflictfree
+```
+
+This direct method requires differentiable coherence terms because gradients
+flow through the terminal rollout and Wasserstein sorting/top-k operations.
+That differs from RAM, where detached scalar coherence rewards are used for
+posterior-style policy fine-tuning.
+
 Evaluate a trained model:
 
 ```bash
