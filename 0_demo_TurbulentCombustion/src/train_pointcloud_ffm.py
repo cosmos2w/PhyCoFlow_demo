@@ -81,6 +81,8 @@ def parse_args():
     p.add_argument("--no-pretrained-load-optimizer", dest="pretrained_load_optimizer", action="store_false")
     p.set_defaults(pretrained_load_optimizer=False)
     p.add_argument("--pretrained-strict", dest="pretrained_strict", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--pretrained-use-source-base-config", dest="pretrained_use_source_base_config",
+                   action=argparse.BooleanOptionalAction, default=True)
     
     # ------------------------------
     # Backbone selection
@@ -282,6 +284,8 @@ def parse_args():
     p.add_argument("--coherence-interval-rescale", dest="coherence_interval_rescale",
                    action=argparse.BooleanOptionalAction, default=False)
     p.add_argument("--coherence-batch-size", dest="coherence_batch_size", type=int, default=4)
+    p.add_argument("--coherence-downsample", dest="coherence_downsample",
+                   action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--coherence-n-points", dest="coherence_n_points", type=int, default=4096)
     p.add_argument("--coherence-rollout-steps", dest="coherence_rollout_steps", type=int, default=2)
     p.add_argument("--coherence-rollout-solver", dest="coherence_rollout_solver", type=str, default="euler",
@@ -732,7 +736,7 @@ def run_epoch_direct_coherence(
             obs_field_ids_c = obs_field_ids.index_select(0, sel)
             obs_indices_c = obs_indices.index_select(0, sel) if obs_indices is not None else None
 
-            if getattr(model, "requires_full_grid", False):
+            if getattr(model, "requires_full_grid", False) or not bool(args.coherence_downsample):
                 coords_coh, fields_ref, _ = coords_c, fields_c, None
             else:
                 coords_coh, fields_ref, _ = sample_coherence_points(
@@ -1063,6 +1067,107 @@ def resolve_pretrained_checkpoint(demo_dir: str, args) -> tuple[Optional[Path], 
     return source_run, ckpt_path
 
 
+SOURCE_BASE_CONFIG_KEYS = (
+    # Dataset/split identity. Keep these aligned with the pretrained model's
+    # normalization statistics and split semantics.
+    "data",
+    "train_ratio",
+    "time_stride",
+
+    # Backbone and architecture shape.
+    "backbone",
+    "hidden_dim",
+    "cond_dim",
+    "field_embed_dim",
+    "rbf_sigma",
+    "sigma_min",
+    "USE_FOURIER_PE",
+    "fourier_pe_num_bands",
+    "fourier_pe_max_freq",
+    "latent_dim",
+    "num_latents",
+    "num_heads",
+    "num_latent_blocks",
+    "ff_mult",
+    "attn_dropout",
+    "mlp_dropout",
+    "decode_chunk_size",
+    "share_query_proj",
+    "summary_type",
+    "gather_mode",
+    "gather_topk",
+    "gather_query_chunk_size",
+    "learnable_rbf_sigma",
+    "neighbor_backend",
+    "sensor_local_topk",
+    "sensor_local_dropout",
+    "sensor_coord_encoding",
+    "latent_sensor_reinject",
+    "latent_reinject_every",
+    "query_latent_readout",
+    "query_readout_type",
+    "query_readout_scale_init",
+    "enhanced_head_norm",
+    "glres_scale_init",
+
+    # FNO architecture keys.
+    "Num_x",
+    "Num_y",
+    "fno_modes_x",
+    "fno_modes_y",
+    "fno_hidden_channels",
+    "fno_n_layers",
+    "condition_blur",
+    "condition_blur_kernel",
+    "condition_blur_sigma",
+
+    # Base RF query/prior choices.
+    "n_query_points",
+    "query_sampling",
+    "query_sample_near_ratio",
+    "query_sample_far_ratio",
+    "query_sample_sigma_ratio",
+    "prior",
+    "rff_features",
+    "rff_lengthscale",
+
+    # Sparse conditioning and generation/evaluation defaults.
+    "cond_field",
+    "n_obs_min",
+    "n_obs_max",
+    "cond_fields",
+    "n_obs_min_list",
+    "n_obs_max_list",
+    "vis_cond_fields",
+    "vis_n_obs_list",
+    "ode_solver",
+    "benchmark_n_steps",
+    "n_steps_generation",
+)
+
+
+def apply_pretrained_source_base_config(args, source_run_dir: Optional[Path]) -> list[str]:
+    """
+    In pretrained post-training, prefer the source run's base model/data/
+    conditioning config for checkpoint compatibility.
+
+    Post-training controls such as Demo_Num, device, optimizer, epochs,
+    coherence schedules, and loss weights remain from the direct-posttrain
+    config/CLI.
+    """
+    if source_run_dir is None or not bool(getattr(args, "pretrained_use_source_base_config", True)):
+        return []
+
+    source_cfg = load_source_config(source_run_dir)
+    inherited = []
+    for key in SOURCE_BASE_CONFIG_KEYS:
+        if key not in source_cfg or not hasattr(args, key):
+            continue
+        setattr(args, key, source_cfg[key])
+        inherited.append(key)
+    return inherited
+
+
 def checkpoint_metadata(args, direct_cfg: Optional[DirectCoherenceConfig], source_run_dir, source_checkpoint) -> dict:
     if str(args.training_mode) == "direct_coherence":
         method = "direct_coherence_rectified_flow"
@@ -1078,6 +1183,8 @@ def checkpoint_metadata(args, direct_cfg: Optional[DirectCoherenceConfig], sourc
         "coherence_loss_weight": float(args.coherence_loss_weight),
         "gradient_balance_mode": args.gradient_balance_mode,
         "coherence_config": None if direct_cfg is None else direct_cfg.to_dict(),
+        "pretrained_use_source_base_config": bool(getattr(args, "pretrained_use_source_base_config", True)),
+        "pretrained_inherited_base_config_keys": list(getattr(args, "pretrained_inherited_base_config_keys", [])),
     }
 
 
@@ -1190,8 +1297,20 @@ def main():
     if source_checkpoint is not None:
         args.source_run_dir = str(source_run_dir)
         args.source_checkpoint = str(source_checkpoint)
+        inherited_keys = apply_pretrained_source_base_config(args, source_run_dir)
+        args.pretrained_inherited_base_config_keys = inherited_keys
+        args = normalize_conditioning_args(args)
         print(f"[*] initialization=pretrained, source run: {source_run_dir}")
         print(f"[*] initialization=pretrained, checkpoint: {source_checkpoint}")
+        if inherited_keys:
+            print(
+                "[*] Inherited base model/data/conditioning keys from source run: "
+                + ", ".join(inherited_keys)
+            )
+        else:
+            print("[*] No base config keys inherited from source run.")
+    else:
+        args.pretrained_inherited_base_config_keys = []
 
     save_dir.mkdir(parents=True, exist_ok=True)
 
