@@ -67,6 +67,8 @@ def parse_args():
 
     p.add_argument("--data", type=str, 
                    default="Dataset/Merged_CH4COTU1P.h5")
+    p.add_argument("--FIELD-NAMES", "--FIELD_NAMES", dest="FIELD_NAMES", nargs="+", default=None)
+    p.add_argument("--field-names", dest="field_names", nargs="+", default=None)
     p.add_argument("--save-dir", type=str, 
                    default=f"Save_TrainedModel/ffm_tc_pointcloud")
     p.add_argument("--RELOAD", action="store_true",
@@ -109,7 +111,7 @@ def parse_args():
     p.add_argument("--field-embed-dim", type=int, default=64)
     p.add_argument("--rbf-sigma", type=float, default=0.05)
     p.add_argument("--USE-FOURIER-PE", "--USE_FOURIER_PE", dest="USE_FOURIER_PE", action="store_true",
-                   help="If set, feed Fourier positional coordinate features to point_encoder.")
+                   help="If set, feed Fourier positional coordinate features to point/sensor token encoders.")
     p.add_argument("--fourier-pe-num-bands", type=int, default=32,
                    help="Number of frequency bands for Fourier positional coordinate encoding.")
     p.add_argument("--fourier-pe-max-freq", type=float, default=64.0,
@@ -712,6 +714,12 @@ def run_epoch_direct_coherence(
             "coherence_grad_norm": float("nan"),
             "gradient_cosine": float("nan"),
             "gradient_conflict": 0.0,
+            "combined_grad_norm": float("nan"),
+            "config_data_weight": float("nan"),
+            "config_coherence_weight": float("nan"),
+            "config_fallback_used": 0.0,
+            "config_actual_used": 0.0,
+            "config_aligned_used": 0.0,
             "global_step": float(global_step),
         }
 
@@ -771,14 +779,20 @@ def run_epoch_direct_coherence(
             if bool(args.coherence_interval_rescale):
                 coherence_loss_for_update = coherence_loss_for_update * every
 
+            scheduled_data_weight = float(args.data_loss_weight)
+            scheduled_coherence_weight = float(coherence_weight)
+            if args.gradient_balance_mode == "config":
+                scheduled_data_weight *= float(args.config_data_grad_scale)
+                scheduled_coherence_weight *= float(args.config_coherence_grad_scale)
+
             grad_info = apply_two_objective_update(
                 model=model,
                 optimizer=optimizer,
                 data_loss=data_loss,
                 coherence_loss=coherence_loss_for_update,
                 mode=args.gradient_balance_mode,
-                data_weight=float(args.data_loss_weight) if args.gradient_balance_mode == "weighted_sum" else float(args.config_data_grad_scale),
-                coherence_weight=coherence_weight if args.gradient_balance_mode == "weighted_sum" else float(args.config_coherence_grad_scale),
+                data_weight=scheduled_data_weight,
+                coherence_weight=scheduled_coherence_weight,
                 grad_clip_norm=1.0,
                 config_missing_behavior=args.config_missing_behavior,
             )
@@ -797,6 +811,12 @@ def run_epoch_direct_coherence(
                 "coherence_grad_norm": float(grad_info.get("coherence_grad_norm", float("nan"))),
                 "gradient_cosine": float(grad_info.get("gradient_cosine", float("nan"))),
                 "gradient_conflict": 1.0 if bool(grad_info.get("gradient_conflict", False)) else 0.0,
+                "combined_grad_norm": float(grad_info.get("combined_grad_norm", float("nan"))),
+                "config_data_weight": float(grad_info.get("config_data_weight", float("nan"))),
+                "config_coherence_weight": float(grad_info.get("config_coherence_weight", float("nan"))),
+                "config_fallback_used": 1.0 if bool(grad_info.get("config_fallback_used", False)) else 0.0,
+                "config_actual_used": 1.0 if grad_info.get("config_update_mode") == "config" else 0.0,
+                "config_aligned_used": 1.0 if grad_info.get("config_update_mode") == "weighted_sum_aligned" else 0.0,
             })
 
         rows.append(row)
@@ -817,6 +837,12 @@ def run_epoch_direct_coherence(
         "coherence_grad_norm": _mean_metric(rows, "coherence_grad_norm"),
         "gradient_cosine": _mean_metric(rows, "gradient_cosine"),
         "gradient_conflict_fraction": float(conflict_count / max(applied, 1)),
+        "combined_grad_norm": _mean_metric(rows, "combined_grad_norm"),
+        "config_data_weight": _mean_metric(rows, "config_data_weight"),
+        "config_coherence_weight": _mean_metric(rows, "config_coherence_weight"),
+        "config_fallback_fraction": _mean_metric(rows, "config_fallback_used"),
+        "config_actual_fraction": _mean_metric(rows, "config_actual_used"),
+        "config_aligned_fraction": _mean_metric(rows, "config_aligned_used"),
         "global_step": float(global_step),
     }
     return metrics, global_step
@@ -958,6 +984,12 @@ class DirectCoherenceHistoryLogger:
             "coherence_grad_norm",
             "gradient_cosine",
             "gradient_conflict_fraction",
+            "combined_grad_norm",
+            "config_data_weight",
+            "config_coherence_weight",
+            "config_fallback_fraction",
+            "config_actual_fraction",
+            "config_aligned_fraction",
             "lr",
             "global_step",
         ]
@@ -979,6 +1011,12 @@ class DirectCoherenceHistoryLogger:
             "coherence_grad_norm": metrics.get("coherence_grad_norm", float("nan")),
             "gradient_cosine": metrics.get("gradient_cosine", float("nan")),
             "gradient_conflict_fraction": metrics.get("gradient_conflict_fraction", float("nan")),
+            "combined_grad_norm": metrics.get("combined_grad_norm", float("nan")),
+            "config_data_weight": metrics.get("config_data_weight", float("nan")),
+            "config_coherence_weight": metrics.get("config_coherence_weight", float("nan")),
+            "config_fallback_fraction": metrics.get("config_fallback_fraction", float("nan")),
+            "config_actual_fraction": metrics.get("config_actual_fraction", float("nan")),
+            "config_aligned_fraction": metrics.get("config_aligned_fraction", float("nan")),
             "lr": float(lr),
             "global_step": int(global_step),
         }
@@ -1357,6 +1395,7 @@ def main():
         train_ratio=args.train_ratio,
         seed=args.seed,
         time_stride=args.time_stride,
+        field_names=args.FIELD_NAMES if args.FIELD_NAMES is not None else args.field_names,
         stats_path=str(save_dir / "dataset_stats.pt"),
     )
     val_set = TurbulentCombustionH5Dataset(
@@ -1365,6 +1404,7 @@ def main():
         train_ratio=args.train_ratio,
         seed=args.seed,
         time_stride=args.time_stride,
+        field_names=args.FIELD_NAMES if args.FIELD_NAMES is not None else args.field_names,
         stats_path=str(save_dir / "dataset_stats.pt"),
     )
     train_loader = DataLoader(
@@ -1415,6 +1455,9 @@ def main():
             mlp_dropout=args.mlp_dropout,
             decode_chunk_size=args.decode_chunk_size,
             share_query_proj=args.share_query_proj,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:

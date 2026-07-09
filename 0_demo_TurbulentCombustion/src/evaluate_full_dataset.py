@@ -272,6 +272,7 @@ def _load_model_and_config(args: argparse.Namespace):
         train_ratio=cfg.get("train_ratio", 0.9),
         seed=cfg.get("seed", 42),
         time_stride=cfg.get("time_stride", 1),
+        field_names=cfg.get("FIELD_NAMES", cfg.get("field_names", None)),
         stats_path=stats_path,
     )
 

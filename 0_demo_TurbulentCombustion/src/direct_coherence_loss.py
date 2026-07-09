@@ -409,6 +409,28 @@ def _weighted_sum_update(
     }
 
 
+class _FixedConFIGWeights:
+    """Weight model adapter for conflictfree.ConFIG_update."""
+
+    def __init__(self, weights: torch.Tensor) -> None:
+        self.weights = weights.detach().clone()
+
+    def get_weights(
+        self,
+        gradients: Optional[torch.Tensor] = None,
+        losses: Optional[Sequence] = None,
+        device: Optional[torch.device | str] = None,
+    ) -> torch.Tensor:
+        if gradients is None:
+            raise ValueError("ConFIG fixed weights require gradients.")
+        out = self.weights.to(device=gradients.device if device is None else device, dtype=gradients.dtype)
+        if out.numel() != gradients.shape[0]:
+            raise ValueError(
+                f"ConFIG fixed weights length {out.numel()} does not match gradient count {gradients.shape[0]}."
+            )
+        return out
+
+
 def apply_two_objective_update(
     model,
     optimizer,
@@ -422,9 +444,16 @@ def apply_two_objective_update(
 ) -> dict:
     """Apply weighted-sum or ConFIG two-objective update.
 
-    In ``config`` mode, ``data_weight`` and ``coherence_weight`` are optional
-    gradient pre-scales before the conflict-free update. Manual relative tuning
-    should usually be done with ``weighted_sum`` mode.
+    In ``config`` mode, ``data_weight`` and ``coherence_weight`` are gradient
+    pre-scales before the conflict-free update. Callers should pass the same
+    scheduled loss weights used for logging/warmup, optionally multiplied by
+    ConFIG-specific scale factors.
+
+    For stability, ConFIG is applied only when the two weighted gradients are
+    genuinely conflicting. If they are already aligned, the scheduled weighted
+    sum is the least surprising descent direction. If ConFIG returns a direction
+    that is not a descent direction for an active objective, we also fall back to
+    the scheduled weighted sum.
     """
     mode = str(mode or "weighted_sum").strip().lower()
     if mode == "weighted_sum":
@@ -453,6 +482,17 @@ def apply_two_objective_update(
             "Install with: pip install conflictfree"
         ) from exc
 
+    config_weights = torch.tensor(
+        [float(data_weight), float(coherence_weight)],
+        device=data_loss.device,
+        dtype=data_loss.dtype,
+    ).clamp_min(0.0)
+    if not torch.isfinite(config_weights).all():
+        raise FloatingPointError("ConFIG objective weights contain NaN or Inf values.")
+    if float(config_weights.sum().detach().cpu()) <= 0.0:
+        warnings.warn("Both ConFIG objective weights are zero; falling back to data gradient.", RuntimeWarning, stacklevel=2)
+        config_weights = torch.tensor([1.0, 0.0], device=data_loss.device, dtype=data_loss.dtype)
+
     optimizer.zero_grad(set_to_none=True)
     (float(data_weight) * data_loss).backward()
     g_data = get_gradient_vector(model)
@@ -466,23 +506,55 @@ def apply_two_objective_update(
     coherence_norm = torch.linalg.vector_norm(g_coherence.detach())
     denom = (data_norm * coherence_norm).clamp_min(1e-12)
     cosine = torch.dot(g_data.detach().reshape(-1), g_coherence.detach().reshape(-1)) / denom
+    weighted_sum_grad = g_data + g_coherence
 
     optimizer.zero_grad(set_to_none=True)
     fallback = False
+    update_mode = "config"
     if not data_ok:
         raise FloatingPointError("Data gradient contains NaN or Inf values.")
     if (not coherence_ok) or float(coherence_norm.detach().cpu()) == 0.0:
-        warnings.warn("Invalid or zero coherence gradient; falling back to data gradient.", RuntimeWarning, stacklevel=2)
+        warnings.warn("Invalid or zero coherence gradient; falling back to weighted data gradient.", RuntimeWarning, stacklevel=2)
         apply_gradient_vector(model, g_data)
         fallback = True
+        applied_norm = torch.linalg.vector_norm(g_data.detach())
+        update_mode = "data_fallback"
+    elif float(cosine.detach().cpu()) >= 0.0:
+        apply_gradient_vector(model, weighted_sum_grad)
+        applied_norm = torch.linalg.vector_norm(weighted_sum_grad.detach())
+        update_mode = "weighted_sum_aligned"
     else:
-        g_config = ConFIG_update([g_data, g_coherence])
+        g_config = ConFIG_update(
+            [g_data, g_coherence],
+            weight_model=_FixedConFIGWeights(config_weights),
+        )
         if not torch.isfinite(g_config).all():
-            warnings.warn("ConFIG gradient was invalid; falling back to data gradient.", RuntimeWarning, stacklevel=2)
-            apply_gradient_vector(model, g_data)
+            warnings.warn("ConFIG gradient was invalid; falling back to scheduled weighted-sum gradient.", RuntimeWarning, stacklevel=2)
+            apply_gradient_vector(model, weighted_sum_grad)
             fallback = True
+            applied_norm = torch.linalg.vector_norm(weighted_sum_grad.detach())
+            update_mode = "weighted_sum_invalid_config"
         else:
-            apply_gradient_vector(model, g_config)
+            descent_data = torch.dot(g_config.detach().reshape(-1), g_data.detach().reshape(-1))
+            descent_coherence = torch.dot(g_config.detach().reshape(-1), g_coherence.detach().reshape(-1))
+            active_data = float(data_norm.detach().cpu()) > 0.0 and float(config_weights[0].detach().cpu()) > 0.0
+            active_coherence = float(coherence_norm.detach().cpu()) > 0.0 and float(config_weights[1].detach().cpu()) > 0.0
+            if (active_data and float(descent_data.cpu()) <= 0.0) or (
+                active_coherence and float(descent_coherence.cpu()) <= 0.0
+            ):
+                warnings.warn(
+                    "ConFIG gradient was not a descent direction for an active objective; "
+                    "falling back to scheduled weighted-sum gradient.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                apply_gradient_vector(model, weighted_sum_grad)
+                fallback = True
+                applied_norm = torch.linalg.vector_norm(weighted_sum_grad.detach())
+                update_mode = "weighted_sum_nondescent_config"
+            else:
+                apply_gradient_vector(model, g_config)
+                applied_norm = torch.linalg.vector_norm(g_config.detach())
 
     if grad_clip_norm is not None and float(grad_clip_norm) > 0:
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(grad_clip_norm))
@@ -493,6 +565,10 @@ def apply_two_objective_update(
         "gradient_cosine": float(cosine.detach().cpu()),
         "gradient_conflict": bool(float(cosine.detach().cpu()) < 0.0),
         "config_fallback_used": fallback,
+        "combined_grad_norm": float(applied_norm.detach().cpu()),
+        "config_data_weight": float(config_weights[0].detach().cpu()),
+        "config_coherence_weight": float(config_weights[1].detach().cpu()),
+        "config_update_mode": update_mode,
     }
 
 

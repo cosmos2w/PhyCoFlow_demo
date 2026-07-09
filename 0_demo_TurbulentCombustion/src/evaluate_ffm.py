@@ -273,6 +273,11 @@ def _normalize_eval_config(cfg: dict) -> dict:
     return cfg
 
 
+def _cfg_get_not_none(cfg: dict, key: str, default):
+    value = cfg.get(key, default)
+    return default if value is None else value
+
+
 def _build_prior(cfg: dict):
     if cfg.get("prior", "rff") == "iid":
         return IIDGaussianPrior()
@@ -301,6 +306,9 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             mlp_dropout=cfg.get("mlp_dropout", 0.0),
             decode_chunk_size=cfg.get("decode_chunk_size", 4096),
             share_query_proj=cfg.get("share_query_proj", False),
+            use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+            fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+            fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
         )
         model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
@@ -329,13 +337,14 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
 
     if backbone_name in ["GL_rbf", "GL_rbf_ENH"]:
         enhanced = backbone_name == "GL_rbf_ENH"
-        sensor_coord_encoding = cfg.get("sensor_coord_encoding", "fourier" if enhanced else "raw")
-        latent_sensor_reinject = cfg.get("latent_sensor_reinject", enhanced)
-        query_latent_readout = cfg.get("query_latent_readout", enhanced)
-        enhanced_head_norm = cfg.get("enhanced_head_norm", enhanced)
-        query_readout_scale_init = cfg.get("query_readout_scale_init", 1e-2 if enhanced else 0.0)
-        glres_scale_init = cfg.get("glres_scale_init", 1e-2 if enhanced else 0.0)
-        query_readout_type = cfg.get(
+        sensor_coord_encoding = _cfg_get_not_none(cfg, "sensor_coord_encoding", "fourier" if enhanced else "raw")
+        latent_sensor_reinject = _cfg_get_not_none(cfg, "latent_sensor_reinject", enhanced)
+        query_latent_readout = _cfg_get_not_none(cfg, "query_latent_readout", enhanced)
+        enhanced_head_norm = _cfg_get_not_none(cfg, "enhanced_head_norm", enhanced)
+        query_readout_scale_init = _cfg_get_not_none(cfg, "query_readout_scale_init", 1e-2 if enhanced else 0.0)
+        glres_scale_init = _cfg_get_not_none(cfg, "glres_scale_init", 1e-2 if enhanced else 0.0)
+        query_readout_type = _cfg_get_not_none(
+            cfg,
             "query_readout_type",
             "coord" if enhanced or query_latent_readout else "point",
         )
@@ -891,6 +900,7 @@ def main():
         train_ratio=cfg.get("train_ratio", 0.9),
         seed=cfg.get("seed", 42),
         time_stride=cfg.get("time_stride", 1),
+        field_names=cfg.get("FIELD_NAMES", cfg.get("field_names", None)),
         stats_path=str(model_root / "dataset_stats.pt"),
     )
 

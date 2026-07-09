@@ -2352,6 +2352,10 @@ def main():
         f"endpoint_mb={cfg.get('ram_endpoint_microbatch_size')}, "
         f"loss_mb={cfg.get('ram_loss_microbatch_size')}"
     )
+    configured_field_names = cfg.get(
+        "FIELD_NAMES",
+        cfg.get("field_names", source_cfg.get("FIELD_NAMES", source_cfg.get("field_names", None))),
+    )
 
     train_set = TurbulentCombustionH5Dataset(
         str(data_path),
@@ -2359,6 +2363,7 @@ def main():
         train_ratio=float(cfg.get("train_ratio", 0.9)),
         seed=int(cfg.get("seed", 42)),
         time_stride=int(cfg.get("time_stride", 1)),
+        field_names=configured_field_names,
         stats_path=str(run_dir / "dataset_stats.pt"),
     )
     val_set = TurbulentCombustionH5Dataset(
@@ -2367,6 +2372,7 @@ def main():
         train_ratio=float(cfg.get("train_ratio", 0.9)),
         seed=int(cfg.get("seed", 42)),
         time_stride=int(cfg.get("time_stride", 1)),
+        field_names=configured_field_names,
         stats_path=str(run_dir / "dataset_stats.pt"),
     )
     torch.save({"mean": train_set.mean, "std": train_set.std}, run_dir / "dataset_stats.pt")
@@ -2391,6 +2397,7 @@ def main():
             train_ratio=float(cfg.get("train_ratio", 0.9)),
             seed=int(cfg.get("seed", 42)),
             time_stride=int(cfg.get("time_stride", 1)),
+            field_names=configured_field_names,
             stats_path=str(run_dir / "dataset_stats.pt"),
         )
 

@@ -32,6 +32,41 @@ from obs_consistency import (
 
 FIELD_NAMES = ("CH4", "CO", "T", "U_1", "p")
 
+def normalize_field_names(value: Optional[Union[str, Sequence[object]]]) -> Optional[Tuple[str, ...]]:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        names = [part.strip() for part in value.split(",")]
+    else:
+        names = []
+        for item in value:
+            if isinstance(item, bytes):
+                item = item.decode("utf-8")
+            names.extend(part.strip() for part in str(item).split(","))
+    names = [name for name in names if name]
+    return tuple(names) if names else None
+
+
+def resolve_field_names(
+    h5_file: h5py.File,
+    config_field_names: Optional[Union[str, Sequence[object]]] = None,
+    default_field_names: Sequence[str] = FIELD_NAMES,
+) -> Tuple[str, ...]:
+    num_fields = int(h5_file["fields"].shape[-1])
+    candidates = (
+        h5_file["fields"].attrs.get("selected_fields"),
+        h5_file.attrs.get("selected_fields"),
+        config_field_names,
+        default_field_names,
+    )
+    for candidate in candidates:
+        names = normalize_field_names(candidate)
+        if names is not None and len(names) == num_fields:
+            return names
+    return tuple(f"field_{i}" for i in range(num_fields))
+
 def validate_regular_grid_compatibility(
     dataset: Dataset,
     Num_x: Optional[int],
@@ -206,7 +241,7 @@ class TurbulentCombustionH5Dataset(Dataset):
         split: str = "train",
         train_ratio: float = 0.9,
         seed: int = 42,
-        field_names: Tuple[str, ...] = ("CH4", "CO", "T", "U_1", "p"),
+        field_names: Optional[Union[str, Sequence[object]]] = None,
         stats_path: Optional[str] = None,
         stats_chunk: int = 32,
         time_stride: int = 1,
@@ -214,7 +249,7 @@ class TurbulentCombustionH5Dataset(Dataset):
         super().__init__()
         self.h5_path     = str(h5_path)
         self.split       = split
-        self.field_names = field_names
+        self.field_names = tuple(FIELD_NAMES)
         self.stats_chunk = stats_chunk
         self.time_stride = time_stride
         self._h5         = None
@@ -228,6 +263,7 @@ class TurbulentCombustionH5Dataset(Dataset):
             self.num_points = int(raw_coords.shape[0])
             self.num_fields = int(f["fields"].shape[-1])
             self.times      = torch.from_numpy(f["time"][:].astype(np.float32))
+            self.field_names = resolve_field_names(f, config_field_names=field_names)
 
         all_indices = np.arange(0, self.num_times, self.time_stride, dtype=np.int64)
         rng = np.random.default_rng(seed)

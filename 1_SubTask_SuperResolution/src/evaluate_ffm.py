@@ -247,6 +247,9 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             mlp_dropout=cfg.get("mlp_dropout", 0.0),
             decode_chunk_size=cfg.get("decode_chunk_size", 4096),
             share_query_proj=cfg.get("share_query_proj", False),
+            use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+            fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+            fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
         )
         model = PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
@@ -357,8 +360,6 @@ def _apply_checkpoint_fourier_pe_to_cfg(cfg: dict, ckpt) -> dict:
 
     if has_fourier_state:
         checkpoint_value = True
-    elif isinstance(ckpt, dict) and "USE_FOURIER_PE" in ckpt:
-        checkpoint_value = bool(ckpt["USE_FOURIER_PE"])
     else:
         checkpoint_value = False
 

@@ -416,6 +416,7 @@ def main() -> None:
         train_ratio=float(cfg.get("train_ratio", 0.9)),
         seed=int(cfg.get("seed", 42)),
         time_stride=int(cfg.get("time_stride", 1)),
+        field_names=cfg.get("FIELD_NAMES", cfg.get("field_names", None)),
         stats_path=str(source_run_dir / "dataset_stats.pt"),
     )
     model, source_cfg_loaded, _ = load_pretrained_ffm(

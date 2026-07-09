@@ -389,6 +389,9 @@ class ConditionalPointPerceiver(nn.Module):
         mlp_dropout: float = 0.0,
         decode_chunk_size: Optional[int] = 4096,
         share_query_proj: bool = False,
+        use_fourier_pe: bool = False,
+        fourier_pe_num_bands: int = 32,
+        fourier_pe_max_freq: float = 64.0,
     ) -> None:
         super().__init__()
         self.n_fields = n_fields
@@ -396,6 +399,11 @@ class ConditionalPointPerceiver(nn.Module):
         self.latent_dim = latent_dim
         self.num_latents = num_latents
         self.decode_chunk_size = decode_chunk_size
+        self.use_fourier_pe = bool(use_fourier_pe)
+        self.pos_enc = FourierPositionalEncoding(
+            coord_dim, num_bands=fourier_pe_num_bands, max_freq=fourier_pe_max_freq
+        ) if self.use_fourier_pe else None
+        self.coord_feat_dim = self.pos_enc.out_dim if self.pos_enc is not None else coord_dim
 
         # Field-id embedding lets the model know which physical quantity
         # each sparse sensor measures.
@@ -403,7 +411,7 @@ class ConditionalPointPerceiver(nn.Module):
 
         # Query-state token = [coords, x_t, t]
         self.query_in_proj = make_mlp(
-            in_dim=coord_dim + n_fields + 1,
+            in_dim=self.coord_feat_dim + n_fields + 1,
             hidden_dim=latent_dim,
             out_dim=latent_dim,
             depth=3,
@@ -411,7 +419,7 @@ class ConditionalPointPerceiver(nn.Module):
 
         # Sparse sensor token = [obs_coords, obs_value, field_embedding]
         self.sensor_proj = make_mlp(
-            in_dim=coord_dim + 1 + field_embed_dim,
+            in_dim=self.coord_feat_dim + 1 + field_embed_dim,
             hidden_dim=latent_dim,
             out_dim=latent_dim,
             depth=3,
@@ -422,7 +430,7 @@ class ConditionalPointPerceiver(nn.Module):
             self.query_out_proj = self.query_in_proj
         else:
             self.query_out_proj = make_mlp(
-                in_dim=coord_dim + n_fields + 1,
+                in_dim=self.coord_feat_dim + n_fields + 1,
                 hidden_dim=latent_dim,
                 out_dim=latent_dim,
                 depth=3,
@@ -484,7 +492,8 @@ class ConditionalPointPerceiver(nn.Module):
         """
         bsz, n_pts, _ = x_t.shape
         t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
-        token_in = torch.cat([coords, x_t, t_feat], dim=-1)
+        coord_feat = self.pos_enc(coords) if self.pos_enc is not None else coords
+        token_in = torch.cat([coord_feat, x_t, t_feat], dim=-1)
         return proj(token_in)
 
     def _build_sensor_tokens(
@@ -504,7 +513,8 @@ class ConditionalPointPerceiver(nn.Module):
         field_feat = self.field_embed(safe_field_ids)
         field_feat = field_feat * obs_mask.unsqueeze(-1)
 
-        sensor_in = torch.cat([obs_coords, obs_values, field_feat], dim=-1)
+        obs_coord_feat = self.pos_enc(obs_coords) if self.pos_enc is not None else obs_coords
+        sensor_in = torch.cat([obs_coord_feat, obs_values, field_feat], dim=-1)
         sensor_tokens = self.sensor_proj(sensor_in)
 
         # Zero padded sensor slots so they do not inject junk features.

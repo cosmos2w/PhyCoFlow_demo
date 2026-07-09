@@ -11,12 +11,14 @@
 #   3) If pretrained_use_source_base_config=true, source args.json/run_config
 #      overrides those fallback base values whenever keys exist.
 
+# NOTE: this 501 run tries initialization: "pretrained", coherence_weight_warmup_epochs: 0
+# gradient_balance_mode: "weighted_sum"
 
 # ==========================================================
 # A) NEW run identity and device
 # ==========================================================
 # Demo_Num controls the new output folder, not the source checkpoint.
-Demo_Num: 401
+Demo_Num: 501
 device_ids: [2]
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
@@ -37,7 +39,7 @@ initialization: "pretrained"
 
 # Use either explicit pretrained_run_dir OR pretrained_source_Demo_Num.
 # Explicit pretrained_run_dir wins.
-pretrained_run_dir: "Save_TrainedModel/ffm_tc_pointcloud_DemoN17_20260510_082814"
+pretrained_run_dir: "Save_TrainedModel/ffm_tc_pointcloud_DemoN50_20260706_084857"
 pretrained_source_Demo_Num: null
 pretrained_checkpoint: "best"      # usually "best" or "last"
 pretrained_load_optimizer: false   # normally false for post-training
@@ -146,16 +148,17 @@ coherence_use_denorm: false
 # ==========================================================
 # H) Gradient balancing
 # ==========================================================
-# Choices:
+# gradient_balance_mode Choices:
 #   "weighted_sum" = simple weighted sum; easiest to tune
 #   "config"       = ConFIG conflict-free two-objective update
 # ConFIG requires: pip install conflictfree
 gradient_balance_mode: "weighted_sum"
 config_missing_behavior: "error"  # choices: "error", "weighted_sum"
 
-# Used only by gradient_balance_mode: "config" as gradient pre-scales.
+# Used only by gradient_balance_mode: "config" as extra multipliers on top of
+# data_loss_weight and the scheduled/warmed-up coherence_loss_weight.
 config_data_grad_scale: 1.0
-config_coherence_grad_scale: 1.0
+config_coherence_grad_scale: 0.20
 
 # Example ConFIG switch:
 # gradient_balance_mode: "config"

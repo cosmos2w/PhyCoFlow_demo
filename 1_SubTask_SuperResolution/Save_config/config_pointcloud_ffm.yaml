@@ -34,24 +34,22 @@
 #   multires_train_case_fraction: 0.3333333333
 
 #----------------------------------------------------------
-# ALl high resolution benchmark: test on 0:0:1 for CFD
-# Retrained with GL_rbf_ENH by topk_rbf mode, top_k=32 - 0619
-
-# Reload and continue training from a previous checkpoint - 0622
+# L:M:H = 0:0:1 for CFD with ALL H cases, changed to field 0 (vx), use Perceiver baseline
+# Retrained 0629 with sensor_coord_encoding: "fourier", 
 
 #----------------------------------------------------------
 
-Demo_Num: 19
-device_ids: [0]
+Demo_Num: 26
+device_ids: [1]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
-RELOAD: true                       # If true, continue from latest matching Demo_Num run.
+RELOAD: false                       # If true, continue from latest matching Demo_Num run.
 reload_checkpoint: "best"           # ["best", "last"]
 
 seed : 42
 epochs : 10000
-batch_size : 384
+batch_size : 512
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -69,7 +67,7 @@ pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
 multires_ratio: "0:0:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
-multires_train_case_fraction: 1  # Keep only this fraction of train cases before L:M:H split.
+multires_train_case_fraction: 1.0  # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.25
@@ -83,17 +81,17 @@ Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.25
 #   2) repeated sensor-to-latent re-injection,
 #   3) lightweight query-to-latent global readout,
 #   4) LayerNorm before the fusion head.
-backbone: "GL_rbf_ENH" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
+backbone: "perceiver" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
 # ----------------------------------------------------------
-hidden_dim : 256
+hidden_dim : 128
 cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
-USE_FOURIER_PE: true   # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
+USE_FOURIER_PE: true   # If true, mlp_rbf / perceiver / GL_rbf use Fourier positional coordinate features.
 fourier_pe_num_bands: 24
 fourier_pe_max_freq: 48.0
 
@@ -125,7 +123,7 @@ neighbor_backend: "keops" # choices: ["auto", "torch", "keops"], keops is more e
 # ----------------------------------------------------------
 # Enhanced GL_rbf backbone
 # ----------------------------------------------------------
-sensor_coord_encoding: "fourier"     # "raw" preserves old GL_rbf sensor tokens; "fourier" matches query coordinate PE.
+sensor_coord_encoding: "fourier"     # GL_rbf/GL_rbf_ENH only; Perceiver uses USE_FOURIER_PE for query and sensor coordinates.
 
 latent_sensor_reinject: true         # Latents periodically re-read sparse sensor tokens.
 latent_reinject_every: 1             # Re-inject every N latent blocks when enabled.

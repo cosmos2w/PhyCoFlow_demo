@@ -369,6 +369,11 @@ def normalize_conditioning_args_dict(d: Dict[str, Any]) -> Dict[str, Any]:
     return d
 
 
+def cfg_get_not_none(cfg: Dict[str, Any], key: str, default: Any) -> Any:
+    value = cfg.get(key, default)
+    return default if value is None else value
+
+
 def _candidate_base_dirs(*extra_dirs: Optional[Path]) -> List[Path]:
     seen: set[Path] = set()
     bases: List[Path] = []
@@ -603,6 +608,9 @@ def build_model(cfg: Dict[str, Any], dataset: TurbulentCombustionH5Dataset) -> n
             mlp_dropout=cfg.get("mlp_dropout", 0.0),
             decode_chunk_size=cfg.get("decode_chunk_size", 4096),
             share_query_proj=cfg.get("share_query_proj", False),
+            use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+            fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+            fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
         )
         return PointCloudFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
 
@@ -625,13 +633,14 @@ def build_model(cfg: Dict[str, Any], dataset: TurbulentCombustionH5Dataset) -> n
 
     if backbone_name in {"GL_rbf", "GL_rbf_ENH", "hybrid_localglobal_rbf"}:
         enhanced = backbone_name == "GL_rbf_ENH"
-        sensor_coord_encoding = cfg.get("sensor_coord_encoding", "fourier" if enhanced else "raw")
-        latent_sensor_reinject = cfg.get("latent_sensor_reinject", enhanced)
-        query_latent_readout = cfg.get("query_latent_readout", enhanced)
-        enhanced_head_norm = cfg.get("enhanced_head_norm", enhanced)
-        query_readout_scale_init = cfg.get("query_readout_scale_init", 1e-2 if enhanced else 0.0)
-        glres_scale_init = cfg.get("glres_scale_init", 1e-2 if enhanced else 0.0)
-        query_readout_type = cfg.get(
+        sensor_coord_encoding = cfg_get_not_none(cfg, "sensor_coord_encoding", "fourier" if enhanced else "raw")
+        latent_sensor_reinject = cfg_get_not_none(cfg, "latent_sensor_reinject", enhanced)
+        query_latent_readout = cfg_get_not_none(cfg, "query_latent_readout", enhanced)
+        enhanced_head_norm = cfg_get_not_none(cfg, "enhanced_head_norm", enhanced)
+        query_readout_scale_init = cfg_get_not_none(cfg, "query_readout_scale_init", 1e-2 if enhanced else 0.0)
+        glres_scale_init = cfg_get_not_none(cfg, "glres_scale_init", 1e-2 if enhanced else 0.0)
+        query_readout_type = cfg_get_not_none(
+            cfg,
             "query_readout_type",
             "coord" if enhanced or query_latent_readout else "point",
         )
@@ -1733,6 +1742,7 @@ def _build_eval_dataset(
         train_ratio=float(cfg.get("train_ratio", 0.9)),
         seed=int(cfg.get("seed", 42)),
         time_stride=int(cfg.get("time_stride", 1)),
+        field_names=cfg.get("FIELD_NAMES", cfg.get("field_names", None)),
         stats_path=str(stats_path) if stats_path.exists() else None,
     )
 
@@ -2757,6 +2767,7 @@ def main() -> None:
             train_ratio=float(cfg.get("train_ratio", 0.9)),
             seed=int(cfg.get("seed", 42)),
             time_stride=int(cfg.get("time_stride", 1)),
+            field_names=cfg.get("FIELD_NAMES", cfg.get("field_names", None)),
             stats_path=str(stats_path) if stats_path.exists() else None,
         )
 
@@ -2836,6 +2847,7 @@ def main() -> None:
     eval_dir.mkdir(parents=True, exist_ok=True)
 
     coherence_cfg, hparam_sources, hparam_notes = resolve_global_dist_config(args, num_fields=dataset.num_fields)
+    field_names = list(getattr(dataset, "field_names", FIELD_NAMES))
 
     save_json(eval_dir / "meta.json", {
         "checkpoint": str(checkpoint_path),
@@ -2915,7 +2927,7 @@ def main() -> None:
         n_obs_list=n_obs_list,
         n_steps=n_steps,
         coherence_space=args.coherence_space,
-        field_names=FIELD_NAMES,
+        field_names=field_names,
         coherence_cfg=coherence_cfg,
         hparam_sources=hparam_sources,
         hparam_notes=hparam_notes,
@@ -3015,13 +3027,13 @@ def main() -> None:
         save_per_channel_bar(
             snap_dir / "1_per_channel_w2.png",
             per_channel_np,
-            FIELD_NAMES,
+            field_names,
             title=f"Per-channel W2^2 | snapshot {snapshot_index} | mean={float(result['marginal_score'].detach().cpu()):.3e}",
         )
         save_theta_bar(
             snap_dir / "2_maxswd_theta.png",
             theta_np,
-            FIELD_NAMES,
+            field_names,
             title=f"{theta_title} | snapshot {snapshot_index} | joint={float(result['joint_score'].detach().cpu()):.3e}",
             per_direction_w2=per_dir_np,
             top_indices=result.get("top_indices"),
@@ -3054,7 +3066,7 @@ def main() -> None:
             x_gen=x_gen.detach(),
             x_ref=x_ref.detach(),
             theta=result["theta"].detach(),
-            field_names=FIELD_NAMES,
+            field_names=field_names,
             per_direction_w2=result["per_direction_w2"].detach(),
             direction_mask=result.get("joint_score_mask"),
             title=f"Worst projection spatial map | snapshot {snapshot_index}",
@@ -3063,7 +3075,7 @@ def main() -> None:
             save_pairwise_heatmap(
                 snap_dir / "5_pairwise_2d_swd.png",
                 result["pairwise_2d_swd"].detach().cpu().numpy(),
-                FIELD_NAMES,
+                field_names,
                 title=f"Pairwise 2D SWD | snapshot {snapshot_index} | mean={float(result['pairwise_mean'].detach().cpu()):.3e}",
             )
             save_worst_pair_hexbin(
@@ -3071,7 +3083,7 @@ def main() -> None:
                 x_gen=x_gen.detach(),
                 x_ref=x_ref.detach(),
                 pairwise_mat=result["pairwise_2d_swd"].detach(),
-                field_names=FIELD_NAMES,
+                field_names=field_names,
                 title=f"Worst pair diagnostic | snapshot {snapshot_index}",
             )
 
@@ -3110,7 +3122,7 @@ def main() -> None:
     save_per_channel_bar(
         eval_dir / "aggregate_per_channel_w2.png",
         per_channel_mean,
-        FIELD_NAMES,
+        field_names,
         title=f"Mean per-channel W2^2 across evaluated snapshots | mean={float(np.mean(aggregate_marg_scores)):.3e}",
     )
 
@@ -3121,7 +3133,7 @@ def main() -> None:
         save_pairwise_heatmap(
             eval_dir / "aggregate_pairwise_2d_swd.png",
             pairwise_mean,
-            FIELD_NAMES,
+            field_names,
             title=f"Mean pairwise 2D SWD across evaluated snapshots | mean={float(np.mean(aggregate_pairwise_means)):.3e}",
         )
         aggregate_report["pairwise_2d_swd_mean"] = pairwise_mean.tolist()

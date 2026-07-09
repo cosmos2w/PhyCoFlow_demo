@@ -199,7 +199,7 @@ def parse_args():
     p.add_argument("--field-embed-dim", type=int, default=64)
     p.add_argument("--rbf-sigma", type=float, default=0.05)
     p.add_argument("--USE-FOURIER-PE", "--USE_FOURIER_PE", dest="USE_FOURIER_PE", action="store_true",
-                   help="If set, feed Fourier positional coordinate features to point_encoder.")
+                   help="If set, feed Fourier positional coordinate features to point/sensor token encoders.")
     p.add_argument("--fourier-pe-num-bands", type=int, default=32,
                    help="Number of frequency bands for Fourier positional coordinate encoding.")
     p.add_argument("--fourier-pe-max-freq", type=float, default=64.0,
@@ -579,8 +579,6 @@ def infer_fourier_pe_from_checkpoint(ckpt: dict) -> Tuple[bool, Optional[int], O
 
     if has_fourier_state:
         return True, num_bands, max_freq
-    if isinstance(ckpt, dict) and "USE_FOURIER_PE" in ckpt:
-        return bool(ckpt["USE_FOURIER_PE"]), None, None
     return False, None, None
 
 
@@ -988,6 +986,9 @@ def main():
             mlp_dropout=args.mlp_dropout,
             decode_chunk_size=args.decode_chunk_size,
             share_query_proj=args.share_query_proj,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:
