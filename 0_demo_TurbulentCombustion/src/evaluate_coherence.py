@@ -576,6 +576,88 @@ def load_run_config(run_dir: Path) -> Dict[str, Any]:
     return load_run_args(run_dir)
 
 
+def resolve_effective_pointcloud_config(
+    run_dir: Path,
+    checkpoint: Any,
+    yaml_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Recover the effective configuration used to build a PointCloudFFM checkpoint.
+
+    Standard runs can be rebuilt directly from run_config.yaml.  Pretrained
+    direct-coherence runs are different: their YAML is the launch template and
+    may retain fallback base-model/data values, while args.json is written after
+    source-run inheritance and therefore records the resolved configuration that
+    actually produced the checkpoint.
+
+    If a legacy inherited checkpoint has no args.json, reconstruct only the
+    explicitly recorded inherited keys from the source run.  Never silently use
+    the launch-template fallbacks for an inherited checkpoint.
+    """
+    cfg = normalize_conditioning_args_dict(dict(yaml_cfg))
+    if not isinstance(checkpoint, dict):
+        return cfg
+
+    inherited_keys = [str(key) for key in checkpoint.get("pretrained_inherited_base_config_keys", [])]
+    training_mode = str(checkpoint.get("training_mode", cfg.get("training_mode", "standard"))).lower()
+    initialization = str(checkpoint.get("initialization", cfg.get("initialization", "scratch"))).lower()
+    uses_source_base = bool(
+        checkpoint.get(
+            "pretrained_use_source_base_config",
+            cfg.get("pretrained_use_source_base_config", False),
+        )
+    )
+    inherited_run = bool(inherited_keys) or (
+        training_mode == "direct_coherence"
+        and initialization == "pretrained"
+        and uses_source_base
+    )
+    if not inherited_run:
+        return cfg
+
+    args_path = run_dir / "args.json"
+    if args_path.exists():
+        effective_cfg = load_run_args(run_dir)
+        print(
+            "[*] Inherited PointCloudFFM checkpoint detected; rebuilding from "
+            "the resolved effective configuration in args.json."
+        )
+        return effective_cfg
+
+    if not inherited_keys:
+        raise FileNotFoundError(
+            f"Inherited checkpoint under {run_dir} has no args.json and does not record "
+            "pretrained_inherited_base_config_keys, so its effective architecture cannot be recovered safely."
+        )
+
+    source_run_value = checkpoint.get("source_run_dir") or cfg.get("pretrained_run_dir")
+    if not source_run_value:
+        raise FileNotFoundError(
+            f"Inherited checkpoint under {run_dir} has no args.json and no source_run_dir metadata."
+        )
+    source_run = resolve_input_path(
+        str(source_run_value),
+        label="Pretrained source run",
+        extra_base_dirs=[run_dir, infer_demo_dir(run_dir)],
+    )
+    if not source_run.is_dir():
+        raise FileNotFoundError(f"Pretrained source run is not a directory: {source_run}")
+    source_cfg = load_run_args(source_run) if (source_run / "args.json").exists() else load_run_config(source_run)
+    missing = [key for key in inherited_keys if key not in source_cfg]
+    if missing:
+        raise KeyError(
+            "Cannot reconstruct inherited PointCloudFFM configuration; source run is missing keys: "
+            + ", ".join(missing)
+        )
+    for key in inherited_keys:
+        cfg[key] = source_cfg[key]
+    print(
+        "[*] Inherited PointCloudFFM checkpoint detected; args.json is unavailable, "
+        "so recorded inherited keys were recovered from the source run."
+    )
+    return normalize_conditioning_args_dict(cfg)
+
+
 def build_prior(cfg: Dict[str, Any]) -> nn.Module:
     prior_name = str(cfg.get("prior", "rff"))
     if prior_name == "iid":
@@ -1688,8 +1770,31 @@ def save_aggregate_violin(
                 rasterized=vals.size > 250,
             )
             q25, med, q75 = np.percentile(vals, [25, 50, 75])
+            mean = float(np.mean(vals))
             ax.plot([pos, pos], [q25, q75], color="black", lw=1.2, zorder=4)
             ax.scatter([pos], [float(med)], s=26, marker="D", color="black", zorder=5)
+            ax.scatter(
+                [pos],
+                [mean],
+                s=42,
+                marker="o",
+                facecolor="white",
+                edgecolor=palette[key],
+                linewidth=1.4,
+                zorder=6,
+            )
+            ax.annotate(
+                f"mean = {mean:.2e}",
+                xy=(pos, mean),
+                xytext=(0, 7),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=6.5,
+                color=palette[key],
+                bbox=dict(boxstyle="round,pad=0.16", fc="white", ec="none", alpha=0.82),
+                zorder=7,
+            )
 
         ax.set_xticks(positions)
         ax.set_xticklabels(labels, rotation=20, ha="right")
@@ -2727,8 +2832,12 @@ def main() -> None:
             print("[warning] Restricted torch.load failed; retrying with weights_only=False for a trusted local checkpoint.")
             checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
+        is_ram_checkpoint = isinstance(checkpoint, dict) and str(checkpoint.get("finetune_method", "")).startswith("RAM")
+        if not is_ram_checkpoint:
+            cfg = resolve_effective_pointcloud_config(run_dir, checkpoint, cfg)
+
         build_cfg = cfg
-        if isinstance(checkpoint, dict) and str(checkpoint.get("finetune_method", "")).startswith("RAM"):
+        if is_ram_checkpoint:
             source_cfg = checkpoint.get("source_config")
             if source_cfg is None:
                 source_cfg_path = run_dir / "source_run_config.yaml"

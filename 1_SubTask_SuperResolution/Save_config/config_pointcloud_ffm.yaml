@@ -40,12 +40,12 @@
 #----------------------------------------------------------
 
 Demo_Num: 26
-device_ids: [1]
+device_ids: [2]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 RELOAD: false                       # If true, continue from latest matching Demo_Num run.
-reload_checkpoint: "best"           # ["best", "last"]
+reload_checkpoint: "last"           # ["best", "last"]
 
 seed : 42
 epochs : 10000

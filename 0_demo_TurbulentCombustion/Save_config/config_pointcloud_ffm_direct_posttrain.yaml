@@ -11,15 +11,17 @@
 #   3) If pretrained_use_source_base_config=true, source args.json/run_config
 #      overrides those fallback base values whenever keys exist.
 
-# NOTE: this 501 run tries initialization: "pretrained", coherence_weight_warmup_epochs: 0
+# NOTE: this 503 run tries initialization: "pretrained", coherence_weight_warmup_epochs: 0
 # gradient_balance_mode: "weighted_sum"
+# Test lowering fluctuation: batch_size -> 48, lr -> 5.0e-5, coherence_loss_weight -> 1.0
+# coherence_obs_consistency_mode: "none"
 
 # ==========================================================
 # A) NEW run identity and device
 # ==========================================================
 # Demo_Num controls the new output folder, not the source checkpoint.
-Demo_Num: 501
-device_ids: [2]
+Demo_Num: 503
+device_ids: [1]
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 
@@ -41,7 +43,7 @@ initialization: "pretrained"
 # Explicit pretrained_run_dir wins.
 pretrained_run_dir: "Save_TrainedModel/ffm_tc_pointcloud_DemoN50_20260706_084857"
 pretrained_source_Demo_Num: null
-pretrained_checkpoint: "best"      # usually "best" or "last"
+pretrained_checkpoint: "last"      # usually "best" or "last"
 pretrained_load_optimizer: false   # normally false for post-training
 pretrained_strict: true            # true catches architecture mismatches
 
@@ -58,14 +60,14 @@ pretrained_use_source_base_config: true
 # These remain from this template even when source base config is inherited.
 seed : 42
 epochs : 10000
-batch_size : 96
-lr : 1.0e-4
+batch_size : 48
+lr : 5.0e-5
 weight_decay : 1.0e-6
 num_workers : 4
 
 # Fresh fraction of the training split used each epoch.
 # 1.0 = full training split. Lower values reduce coherence rollout cost.
-train_ratio_downsample: 0.25
+train_ratio_downsample: 0.20
 
 
 # ==========================================================
@@ -78,7 +80,7 @@ data_loss_weight: 0.1
 coherence_loss_weight: 1.0
 
 # Optional linear warmup after coherence_start_epoch. 0 disables warmup.
-coherence_weight_warmup_epochs: 0
+coherence_weight_warmup_epochs: 100
 
 
 # ==========================================================
@@ -109,7 +111,7 @@ coherence_n_points: 4096
 # uses sensor coordinates instead of full-grid indices.
 coherence_rollout_steps: 2
 coherence_rollout_solver: "euler"                 # choices: "euler", "heun"
-coherence_obs_consistency_mode: "endpoint_smooth" # choices: "none", "endpoint_smooth", "endpoint", "default_hard"
+coherence_obs_consistency_mode: "none" # choices: "none", "endpoint_smooth", "endpoint", "default_hard"
 coherence_obs_consistency_strength: 1.0
 coherence_obs_consistency_sigma: 0.05
 coherence_obs_consistency_schedule_power: 2.0

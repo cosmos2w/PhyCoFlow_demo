@@ -845,7 +845,13 @@ def main():
         import json
         json.dump(vars(args), f, indent=2)
     if os.path.exists(config_path):
-        shutil.copy(config_path, save_dir / "run_config.yaml")
+        # When resuming with the existing run's own run_config.yaml, the
+        # source and destination are identical.  shutil.copy raises
+        # SameFileError in that case, even though no copy is needed.
+        config_src = Path(config_path).resolve()
+        config_dst = (save_dir / "run_config.yaml").resolve()
+        if config_src != config_dst:
+            shutil.copy2(config_src, config_dst)
     
     # Keep all run artifacts under the model directory, matching 0_demo and
     # the unified baseline trainers. Legacy Save_loss_csv/ and

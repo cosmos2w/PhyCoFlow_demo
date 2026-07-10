@@ -6,14 +6,15 @@
 
 #----------------------------------------------------------
 # Use Merged_CH4COTU1P.h5 for training, which contains 4 fields: CH4, CO, T, U_1, p
-# Try Fourier Positional Encoding & Using temperature sensor only
+# Try Fourier Positional Encoding & Using temperature  & U_1 as conditioning fields for training
 # Work as baseline for later PDE coherence calculation
 #----------------------------------------------------------
 
-Demo_Num: 6
-device_ids: [0]
+Demo_Num: 7
+device_ids: [2]
 
 data: "Dataset/Merged_CH4COTU1P.h5" # Two options: Merged_CH4COTU1P or Merged_COTU0U1P (newly added)
+FIELD_NAMES: ["CH4", "CO", "T", "U_1", "p"] # ["CH4", "CO", "T", "U_1", "p"] or ["CO", "T", "U_0", "U_1", "p"]
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 
 seed : 42
@@ -128,12 +129,12 @@ save_every : 500         # Saving reconstruction visualizations after save_every
 n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # Setting up the conditioning process
-cond_fields :   [2]          # For Merged_CH4COTU1P: "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
-n_obs_min_list: [192]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
-n_obs_max_list: [384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
+cond_fields :   [2, 3]          # For Merged_CH4COTU1P: "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+n_obs_min_list: [192, 192]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
+n_obs_max_list: [384, 384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
 
 vis_cond_fields:            # help="Visualization conditioned fields. Defaults to cond_fields if None
-vis_n_obs_list: [256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
+vis_n_obs_list: [256, 256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
 
 # ===== Rectified Flow generation controls =====
 ode_solver : "euler"
