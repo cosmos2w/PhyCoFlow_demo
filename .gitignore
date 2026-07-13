@@ -15,7 +15,7 @@ Save_PhyCoEval/
 .agents/
 
 figures/generated/
-
+Save_TrainedModel/
 
 *.pt
 *.pth

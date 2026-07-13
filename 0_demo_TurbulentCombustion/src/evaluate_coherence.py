@@ -474,6 +474,55 @@ def choose_checkpoint(path_str: str) -> Tuple[Path, Path]:
     return pts[0], path
 
 
+def resolve_latentfm_stage1_checkpoint(
+    *,
+    cfg: Dict[str, Any],
+    checkpoint: Optional[Dict[str, Any]],
+    run_dir: Path,
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """Resolve a Latent-FM VAE checkpoint, including a portable archive copy.
+
+    Stage-2 checkpoints record the stage-1 path used during training.  That
+    absolute path is informative but is often invalid after a model archive is
+    relocated.  A complete archived Latent-FM family can instead provide its
+    shared VAE in a sibling ``Stage0`` (or legacy ``Stage1``) directory.  The
+    returned pair is ``(resolved_path, recorded_path)`` so callers can report
+    when the portable fallback was required.  No architecture is inferred from
+    the directory: the normal baseline adapter still validates and loads the
+    checkpoint itself.
+    """
+    if str(cfg.get("baseline_model", "")).lower() != "latent_fm" or int(cfg.get("training_stage", 1)) != 2:
+        return None, None
+
+    stage2_cfg = cfg.get("latent_fm_params", {}).get("stage2", {})
+    embedded = checkpoint.get("ae_checkpoint") if isinstance(checkpoint, dict) else None
+    configured = stage2_cfg.get("stage1_checkpoint")
+    recorded_value = embedded or configured
+    recorded_path = Path(recorded_value).expanduser() if recorded_value else None
+
+    candidates: list[Path] = []
+    if recorded_path is not None:
+        candidates.extend((recorded_path, run_dir / recorded_path, DEMO_DIR / recorded_path))
+
+    # ``Stage0`` is the portable archive convention for the shared VAE.  Keep
+    # ``Stage1`` as a compatibility alias for older archives.
+    for stage_dir in ("Stage0", "Stage1"):
+        candidates.extend((run_dir.parent / stage_dir / "last.pt", run_dir.parent / stage_dir / "best.pt"))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            canonical = candidate.resolve()
+        except OSError:
+            canonical = candidate
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        if canonical.is_file():
+            return canonical, recorded_path
+    return None, recorded_path
+
+
 def infer_checkpoint_family(
     checkpoint_path: Path,
     run_dir: Path,
@@ -598,6 +647,32 @@ def resolve_effective_pointcloud_config(
     if not isinstance(checkpoint, dict):
         return cfg
 
+    def reconcile_checkpoint_architecture(candidate: Dict[str, Any]) -> Dict[str, Any]:
+        """Repair stale Perceiver positional-encoding YAML from state metadata.
+
+        Older archived PointCloudFFM runs can carry a launch-template YAML that
+        disagrees with the serialized Perceiver module.  The positional encoder
+        owns a registered ``model.pos_enc.freqs`` buffer, so its presence is an
+        unambiguous checkpoint-level architecture signal.  Only reconcile this
+        one state-defined option; all other user configuration remains intact.
+        """
+        state = checkpoint.get("model")
+        if str(candidate.get("backbone", "")).lower() != "perceiver" or not isinstance(state, dict):
+            return normalize_conditioning_args_dict(candidate)
+        freq_key = "model.pos_enc.freqs"
+        checkpoint_uses_fourier = freq_key in state
+        configured_uses_fourier = bool(candidate.get("USE_FOURIER_PE", False))
+        if configured_uses_fourier != checkpoint_uses_fourier:
+            candidate = dict(candidate)
+            candidate["USE_FOURIER_PE"] = checkpoint_uses_fourier
+            if checkpoint_uses_fourier:
+                candidate["fourier_pe_num_bands"] = int(state[freq_key].numel())
+            print(
+                "[*] Perceiver checkpoint/YAML positional-encoding mismatch; "
+                f"using checkpoint metadata (USE_FOURIER_PE={checkpoint_uses_fourier})."
+            )
+        return normalize_conditioning_args_dict(candidate)
+
     inherited_keys = [str(key) for key in checkpoint.get("pretrained_inherited_base_config_keys", [])]
     training_mode = str(checkpoint.get("training_mode", cfg.get("training_mode", "standard"))).lower()
     initialization = str(checkpoint.get("initialization", cfg.get("initialization", "scratch"))).lower()
@@ -613,7 +688,7 @@ def resolve_effective_pointcloud_config(
         and uses_source_base
     )
     if not inherited_run:
-        return cfg
+        return reconcile_checkpoint_architecture(cfg)
 
     args_path = run_dir / "args.json"
     if args_path.exists():
@@ -622,7 +697,7 @@ def resolve_effective_pointcloud_config(
             "[*] Inherited PointCloudFFM checkpoint detected; rebuilding from "
             "the resolved effective configuration in args.json."
         )
-        return effective_cfg
+        return reconcile_checkpoint_architecture(effective_cfg)
 
     if not inherited_keys:
         raise FileNotFoundError(
@@ -655,7 +730,7 @@ def resolve_effective_pointcloud_config(
         "[*] Inherited PointCloudFFM checkpoint detected; args.json is unavailable, "
         "so recorded inherited keys were recovered from the source run."
     )
-    return normalize_conditioning_args_dict(cfg)
+    return reconcile_checkpoint_architecture(cfg)
 
 
 def build_prior(cfg: Dict[str, Any]) -> nn.Module:
@@ -1022,6 +1097,7 @@ def _baseline_reconstruct_sit(
         num_x,
         h_pad,
         w_pad,
+        point_to_grid=bundle.components.get("point_to_grid"),
     )
     if cond_mode == "interp":
         obs_value_grid = baseline_lib.nearest_fill_grid(obs_value_grid, obs_mask_grid)
@@ -1035,7 +1111,12 @@ def _baseline_reconstruct_sit(
         n_steps=n_steps,
         sampler_type=ode_solver or "euler",
     )
-    return baseline_lib.grid_to_pointcloud(recon_grid, num_y, num_x)
+    return baseline_lib.grid_to_pointcloud(
+        recon_grid,
+        num_y,
+        num_x,
+        point_to_grid=bundle.components.get("point_to_grid"),
+    )
 
 
 def _baseline_reconstruct_s3gm(
@@ -1887,9 +1968,22 @@ def load_baseline_context(
     args.baseline_model = cfg["baseline_model"]
 
     if cfg["baseline_model"] == "latent_fm" and int(cfg["training_stage"]) == 2:
-        ae_checkpoint = checkpoint.get("ae_checkpoint") if isinstance(checkpoint, dict) else None
-        if ae_checkpoint:
-            cfg["latent_fm_params"]["stage2"]["stage1_checkpoint"] = ae_checkpoint
+        ae_checkpoint, recorded_ae_checkpoint = resolve_latentfm_stage1_checkpoint(
+            cfg=cfg, checkpoint=checkpoint if isinstance(checkpoint, dict) else None, run_dir=run_dir
+        )
+        if ae_checkpoint is None:
+            recorded = recorded_ae_checkpoint or "<none>"
+            raise FileNotFoundError(
+                "Latent FM stage 2 requires its shared stage-0/stage-1 VAE checkpoint. "
+                f"Recorded dependency is unavailable: {recorded}. Expected a valid archive sibling "
+                f"at {run_dir.parent / 'Stage0'} or {run_dir.parent / 'Stage1'}."
+            )
+        cfg["latent_fm_params"]["stage2"]["stage1_checkpoint"] = str(ae_checkpoint)
+        if recorded_ae_checkpoint is not None and ae_checkpoint != recorded_ae_checkpoint:
+            print(
+                f"[DEPENDENCY] Latent FM / {run_dir.name} | using archived shared VAE: {ae_checkpoint}",
+                flush=True,
+            )
 
     stats_path = run_dir / "dataset_stats.pt"
 

@@ -3,53 +3,25 @@
 
 # For multi-resolution training & super-resolution task
 
-# Option A — simplest workflow: 
-# Step-1: Put the multi-resolution settings in this YAML as the default source of truth
-# Step 2: Run only: python src/train_pointcloud_ffm.py --config Save_config/config_pointcloud_ffm.yaml
-
-# Option B — explicit / manual manifest build
-# We can run:
-# python src/organize_train_MultiRes.py \
-#     --processed-root ./Dataset/PDE_Bench/Processed \
-#     --dataset-name CFD \
-#     --selected-field-idx 0 \
-#     --multires-ratio 1:1:1 \
-#     --multires-train-case-fraction 1.0
-# That creates a manifest JSON, for example something like: Dataset/PDE_Bench/Processed/manifests/CFD_field0_ratio_1-1-1.json 
-
-# Then in YAML set: multires_manifest_path: "Dataset/PDE_Bench/Processed/manifests/CFD_field0_ratio_1-1-1.json"
-# and run training normally: python src/train_pointcloud_ffm.py --config Save_config/config_pointcloud_ffm.yaml
-# This forces training to reuse exactly that manifest.
-
-# Added Case_Truncate_Ratio
-# 0 < Case_Truncate_Ratio < 1 → drop the first floor(ratio * N_time) frames of every case
-# Case_Truncate_Ratio >= 1 or < 0 → raise error
-#
-# Added multires_train_case_fraction
-# 0 < multires_train_case_fraction <= 1 controls the total training case budget
-# BEFORE splitting active cases by multires_ratio. Default 1.0 preserves the
-# old behavior. For a high-resolution-only ablation matched to the H case count
-# in 1:1:1, use:
-#   multires_ratio: "0:0:1"
-#   multires_train_case_fraction: 0.3333333333
-
 #----------------------------------------------------------
-# L:M:H = 0:0:1 for CFD with ALL H cases, changed to field 0 (vx), use Perceiver baseline
-# Retrained 0629 with sensor_coord_encoding: "fourier", 
+# ALl high resolution benchmark: test on 0:0:1 for CFD
+# Retrained with GL_rbf_ENH by topk_rbf mode, top_k=32 - 0619
+
+# Reload and continue training from a previous checkpoint - 0622
 
 #----------------------------------------------------------
 
-Demo_Num: 26
-device_ids: [2]
+Demo_Num: 17
+device_ids: [0]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 RELOAD: false                       # If true, continue from latest matching Demo_Num run.
-reload_checkpoint: "last"           # ["best", "last"]
+reload_checkpoint: "best"           # ["best", "last"]
 
 seed : 42
 epochs : 10000
-batch_size : 512
+batch_size : 384
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -67,7 +39,7 @@ pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
 multires_ratio: "0:0:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
-multires_train_case_fraction: 1.0  # Keep only this fraction of train cases before L:M:H split.
+multires_train_case_fraction: 0.34  # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.25
@@ -81,7 +53,7 @@ Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.25
 #   2) repeated sensor-to-latent re-injection,
 #   3) lightweight query-to-latent global readout,
 #   4) LayerNorm before the fusion head.
-backbone: "perceiver" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
+backbone: "GL_rbf_ENH" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -91,9 +63,9 @@ cond_dim : 128
 field_embed_dim : 128
 sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
 rbf_sigma : 0.05
-USE_FOURIER_PE: true   # If true, mlp_rbf / perceiver / GL_rbf use Fourier positional coordinate features.
-fourier_pe_num_bands: 24
-fourier_pe_max_freq: 48.0
+USE_FOURIER_PE: true   # If true, mlp_rbf / GL_rbf point_encoder uses Fourier positional coordinate features.
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
 
 # ----------------------------------------------------------
 # Hyperparameters for Perceiver backbone or GL_rbf / GL_rbf_ENH
@@ -101,8 +73,8 @@ fourier_pe_max_freq: 48.0
 latent_dim: 128
 num_latents: 128
 num_heads: 8
-num_latent_blocks: 4
-ff_mult: 4
+num_latent_blocks: 3
+ff_mult: 3
 attn_dropout: 0.0
 mlp_dropout: 0.0
 decode_chunk_size: 4096
@@ -114,7 +86,7 @@ summary_type: "mean" # Only for GL_rbf / GL_rbf_ENH, mean or cls
 # Recommended first tests:
 #   "topk_rbf"       = clean enhanced model
 #   "topk_rbf_glres" = strongest enhanced model with residual scaffold/importance
-gather_mode: "topk_rbf"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
+gather_mode: "topk_rbf_glres"  # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_glres"]
 gather_topk: 32
 gather_query_chunk_size: 1024 # Set as null if gather_mode: "rbf"
 learnable_rbf_sigma: true
@@ -123,7 +95,7 @@ neighbor_backend: "keops" # choices: ["auto", "torch", "keops"], keops is more e
 # ----------------------------------------------------------
 # Enhanced GL_rbf backbone
 # ----------------------------------------------------------
-sensor_coord_encoding: "fourier"     # GL_rbf/GL_rbf_ENH only; Perceiver uses USE_FOURIER_PE for query and sensor coordinates.
+sensor_coord_encoding: "fourier"     # "raw" preserves old GL_rbf sensor tokens; "fourier" matches query coordinate PE.
 
 latent_sensor_reinject: true         # Latents periodically re-read sparse sensor tokens.
 latent_reinject_every: 1             # Re-inject every N latent blocks when enabled.
@@ -160,7 +132,6 @@ rff_lengthscale : 0.15
 
 eval_every : 5
 save_every : 500         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
-n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
 
 # ----------------------------------------------------------
 # Setting up the conditioning process

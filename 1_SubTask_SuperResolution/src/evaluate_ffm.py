@@ -69,7 +69,7 @@ def parse_args():
     
     p.add_argument("--checkpoint", type=str, default="best", choices=["best", "last"],
                    help="Which checkpoint to load from the recovered run directory.")
-    p.add_argument("--n-steps-generation", type=int, default = 8,
+    p.add_argument("--n-steps-generation", type=int, default = 2,
                    help="Override generation steps. Defaults to YAML n_steps_generation if present.")
     p.add_argument(
         "--ode-solver",
@@ -163,20 +163,25 @@ def _extract_timestamp(path: Path) -> Optional[str]:
     return m.group(2) if m else None
 
 
-def _find_latest_yaml(cfg_dir: Path, demo_num: int) -> Path:
-    pattern = f"config_pointcloud_ffm_DemoN{demo_num}_*.yaml"
-    candidates = sorted(cfg_dir.glob(pattern))
+def _find_latest_model_dir(demo_root: Path, demo_num: int) -> Path:
+    model_roots = [
+        demo_root / "Save_TrainedModel",
+        demo_root / "Save_TrainedModel" / "ffm_cases",
+    ]
+    pattern = f"*_DemoN{demo_num}_*"
+    candidates = [
+        candidate
+        for model_root in model_roots
+        for candidate in model_root.glob(pattern)
+        if candidate.is_dir() and _extract_timestamp(candidate) is not None
+    ]
     if not candidates:
+        searched = ", ".join(str(path) for path in model_roots)
         raise FileNotFoundError(
-            f"No config backup found for Demo_Num={demo_num} in {cfg_dir}"
+            f"No model directory found for Demo_Num={demo_num}; searched: {searched}"
         )
 
-    def _sort_key(p: Path):
-        ts = _extract_timestamp(p)
-        return ts if ts is not None else p.stat().st_mtime
-
-    candidates = sorted(candidates, key=_sort_key)
-    return candidates[-1]
+    return max(candidates, key=lambda path: _extract_timestamp(path))
 
 
 def _normalize_eval_config(cfg: dict) -> dict:
@@ -840,26 +845,28 @@ def main():
     cfg_dir = demo_root / "Save_config" / "pointcloud_ffm"
 
     try:
-        yaml_path = _find_latest_yaml(cfg_dir, args.Demo_Num)
+        model_root = _find_latest_model_dir(demo_root, args.Demo_Num)
     except FileNotFoundError as e:
         print(f"[Warning: !] {e}")
+        raise SystemExit(1)
+
+    train_timestamp = _extract_timestamp(model_root)
+    if train_timestamp is None:
+        print(f"[Warning: !] Could not parse timestamp from model directory: {model_root.name}")
+        raise SystemExit(1)
+
+    # The run-local config is the source of truth, especially after a resumed
+    # training run. Fall back to the timestamped config backup for older runs.
+    yaml_path = model_root / "run_config.yaml"
+    if not yaml_path.exists():
+        yaml_path = cfg_dir / f"config_pointcloud_ffm_DemoN{args.Demo_Num}_{train_timestamp}.yaml"
+    if not yaml_path.exists():
+        print(f"[Warning: !] Matching config not found for model directory: {model_root}")
         raise SystemExit(1)
 
     with open(yaml_path, "r") as f:
         cfg = yaml.safe_load(f) or {}
     cfg = _normalize_eval_config(cfg)
-
-    train_timestamp = _extract_timestamp(yaml_path)
-    if train_timestamp is None:
-        print(f"[Warning: !] Could not parse timestamp from config filename: {yaml_path.name}")
-        raise SystemExit(1)
-
-    save_dir_cfg = Path(cfg.get("save_dir", "Save_TrainedModel/ffm_tc_pointcloud"))
-    model_root = demo_root / save_dir_cfg.parent / f"{save_dir_cfg.name}_DemoN{args.Demo_Num}_{train_timestamp}"
-
-    if not model_root.exists():
-        print(f"[Warning: !] Matching model directory not found: {model_root}")
-        raise SystemExit(1)
 
     ckpt_path = model_root / f"{args.checkpoint}.pt"
     if not ckpt_path.exists():

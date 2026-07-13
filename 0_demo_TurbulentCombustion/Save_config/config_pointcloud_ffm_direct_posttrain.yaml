@@ -13,8 +13,8 @@
 
 # NOTE: this 503 run tries initialization: "pretrained", coherence_weight_warmup_epochs: 0
 # gradient_balance_mode: "weighted_sum"
-# Test lowering fluctuation: batch_size -> 48, lr -> 5.0e-5, coherence_loss_weight -> 1.0
-# coherence_obs_consistency_mode: "none"
+# Test lowering fluctuation: train_ratio_downsample -> 0.50, batch_size -> 72, lr -> 5.0e-5, coherence_loss_weight -> 1.0
+# coherence_obs_consistency_mode: "endpoint_smooth"
 
 # ==========================================================
 # A) NEW run identity and device
@@ -60,14 +60,14 @@ pretrained_use_source_base_config: true
 # These remain from this template even when source base config is inherited.
 seed : 42
 epochs : 10000
-batch_size : 48
+batch_size : 72
 lr : 5.0e-5
 weight_decay : 1.0e-6
 num_workers : 4
 
 # Fresh fraction of the training split used each epoch.
 # 1.0 = full training split. Lower values reduce coherence rollout cost.
-train_ratio_downsample: 0.20
+train_ratio_downsample: 0.50
 
 
 # ==========================================================
@@ -80,7 +80,7 @@ data_loss_weight: 0.1
 coherence_loss_weight: 1.0
 
 # Optional linear warmup after coherence_start_epoch. 0 disables warmup.
-coherence_weight_warmup_epochs: 100
+coherence_weight_warmup_epochs: 0
 
 
 # ==========================================================
@@ -111,7 +111,7 @@ coherence_n_points: 4096
 # uses sensor coordinates instead of full-grid indices.
 coherence_rollout_steps: 2
 coherence_rollout_solver: "euler"                 # choices: "euler", "heun"
-coherence_obs_consistency_mode: "none" # choices: "none", "endpoint_smooth", "endpoint", "default_hard"
+coherence_obs_consistency_mode: "endpoint_smooth" # choices: "none", "endpoint_smooth", "endpoint", "default_hard"
 coherence_obs_consistency_strength: 1.0
 coherence_obs_consistency_sigma: 0.05
 coherence_obs_consistency_schedule_power: 2.0
@@ -157,14 +157,14 @@ coherence_use_denorm: false
 gradient_balance_mode: "weighted_sum"
 config_missing_behavior: "error"  # choices: "error", "weighted_sum"
 
-# Used only by gradient_balance_mode: "config" as extra multipliers on top of
-# data_loss_weight and the scheduled/warmed-up coherence_loss_weight.
-config_data_grad_scale: 1.0
-config_coherence_grad_scale: 0.20
-
 # Example ConFIG switch:
 # gradient_balance_mode: "config"
 # config_missing_behavior: "weighted_sum"
+
+# Used only by gradient_balance_mode: "config" as extra multipliers on top of
+# data_loss_weight and the scheduled/warmed-up coherence_loss_weight.
+config_data_grad_scale: 1.0
+config_coherence_grad_scale: 0.50
 
 
 # ==========================================================

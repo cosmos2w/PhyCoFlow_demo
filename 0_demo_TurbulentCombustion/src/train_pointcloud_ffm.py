@@ -55,6 +55,15 @@ from direct_coherence_loss import (
 )
 from model_finetune import find_source_run_dir, load_source_config
 
+
+def checkpoint_model_state(checkpoint):
+    """Return a loadable model state, stripping legacy non-parameter keys."""
+    state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
+    if isinstance(state_dict, dict) and "_metadata" in state_dict:
+        state_dict = dict(state_dict)
+        state_dict.pop("_metadata", None)
+    return state_dict
+
 def parse_args():
 
     p = argparse.ArgumentParser("Train a starter conditional point-cloud FFM on turbulent combustion HDF5 data.")
@@ -895,8 +904,64 @@ def backup_existing_artifact(path: Path) -> None:
         shutil.copy2(path, target)
 
 
+def backup_artifact_to_dir(path: Path, backup_dir: Path) -> Optional[Path]:
+    if not path.exists():
+        return None
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    target = backup_dir / path.name
+    if target.exists():
+        target = backup_path(target)
+    if path.is_dir():
+        shutil.copytree(path, target)
+    else:
+        shutil.copy2(path, target)
+    return target
+
+
+def copy_file_if_different(src, dst) -> bool:
+    src_path = Path(src).resolve()
+    dst_path = Path(dst).resolve()
+    if src_path == dst_path:
+        return False
+    shutil.copy2(src_path, dst_path)
+    return True
+
+
+def _coerce_history_value(value):
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return value
+    return int(numeric) if numeric.is_integer() else numeric
+
+
+def load_history_rows(csv_path: Path, max_epoch: Optional[int] = None) -> list[dict]:
+    if not csv_path.exists() or csv_path.stat().st_size == 0:
+        return []
+
+    rows = []
+    with open(csv_path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for raw_row in reader:
+            if not raw_row:
+                continue
+            row = {key: _coerce_history_value(value) for key, value in raw_row.items()}
+            epoch = row.get("epoch")
+            if epoch is None:
+                continue
+            epoch = int(epoch)
+            if max_epoch is not None and epoch > max_epoch:
+                continue
+            row["epoch"] = epoch
+            rows.append(row)
+    return rows
+
+
 class TrainingHistoryLogger:
-    def __init__(self, run_dir: Path) -> None:
+    def __init__(self, run_dir: Path, initial_rows: Optional[list[dict]] = None) -> None:
         self.csv_path = run_dir / "loss_history.csv"
         self.json_path = run_dir / "loss_history.json"
         self.plot_path = run_dir / "loss_history.png"
@@ -904,6 +969,21 @@ class TrainingHistoryLogger:
         with open(self.csv_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(["epoch", "train_loss", "val_loss"])
+            for raw_row in initial_rows or []:
+                row = {
+                    "epoch": int(raw_row["epoch"]),
+                    "train_loss": None if raw_row.get("train_loss") is None else float(raw_row["train_loss"]),
+                    "val_loss": None if raw_row.get("val_loss") is None else float(raw_row["val_loss"]),
+                }
+                self.rows.append(row)
+                writer.writerow([
+                    row["epoch"],
+                    "" if row["train_loss"] is None else row["train_loss"],
+                    "" if row["val_loss"] is None else row["val_loss"],
+                ])
+        with open(self.json_path, "w", encoding="utf-8") as handle:
+            json.dump(self.rows, handle, indent=2)
+        self._plot()
 
     def log_and_plot(self, epoch: int, train_loss: float, val_loss: Optional[float] = None) -> None:
         row = {
@@ -922,7 +1002,9 @@ class TrainingHistoryLogger:
             ])
         with open(self.json_path, "w", encoding="utf-8") as handle:
             json.dump(self.rows, handle, indent=2)
+        self._plot()
 
+    def _plot(self) -> None:
         train_points = [
             (item["epoch"], item["train_loss"])
             for item in self.rows
@@ -966,7 +1048,7 @@ class TrainingHistoryLogger:
 
 
 class DirectCoherenceHistoryLogger:
-    def __init__(self, run_dir: Path) -> None:
+    def __init__(self, run_dir: Path, initial_rows: Optional[list[dict]] = None) -> None:
         self.csv_path = run_dir / "direct_coherence_history.csv"
         self.json_path = run_dir / "direct_coherence_history.json"
         self.plot_path = run_dir / "direct_coherence_history.png"
@@ -996,6 +1078,14 @@ class DirectCoherenceHistoryLogger:
         with open(self.csv_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.fieldnames)
             writer.writeheader()
+            for raw_row in initial_rows or []:
+                row = {key: raw_row.get(key) for key in self.fieldnames}
+                row["epoch"] = int(row["epoch"])
+                self.rows.append(row)
+                writer.writerow(row)
+        with open(self.json_path, "w", encoding="utf-8") as handle:
+            json.dump(self.rows, handle, indent=2)
+        self._plot()
 
     def log(self, epoch: int, metrics: dict, lr: float, global_step: int) -> None:
         row = {
@@ -1085,21 +1175,40 @@ class DirectCoherenceHistoryLogger:
         plt.close(fig)
 
 
-def resolve_pretrained_checkpoint(demo_dir: str, args) -> tuple[Optional[Path], Optional[Path]]:
-    if str(args.initialization) != "pretrained" or bool(args.RELOAD):
+def resolve_checkpoint_path(source_run: Path, checkpoint: str) -> Path:
+    ckpt_path = Path(str(checkpoint))
+    if ckpt_path.suffix != ".pt":
+        ckpt_path = ckpt_path.with_suffix(".pt")
+    if not ckpt_path.is_absolute():
+        ckpt_path = source_run / ckpt_path
+    return ckpt_path
+
+
+def resolve_pretrained_checkpoint(demo_dir: str, args, reload_ckpt=None) -> tuple[Optional[Path], Optional[Path]]:
+    if bool(args.RELOAD) and isinstance(reload_ckpt, dict) and reload_ckpt.get("source_run_dir"):
+        source_run = Path(reload_ckpt["source_run_dir"])
+        if not source_run.is_absolute():
+            source_run = Path(demo_dir) / source_run
+        if not source_run.exists():
+            raise FileNotFoundError(f"Reload checkpoint source_run_dir does not exist: {source_run}")
+        source_checkpoint = reload_ckpt.get("source_checkpoint")
+        if source_checkpoint in (None, ""):
+            return source_run, None
+        ckpt_path = Path(source_checkpoint)
+        if not ckpt_path.is_absolute():
+            ckpt_path = source_run / ckpt_path
+        return source_run, ckpt_path
+
+    if str(args.initialization) != "pretrained":
         return None, None
+
     source_run = find_source_run_dir(
         demo_dir=demo_dir,
         source_run_dir=args.pretrained_run_dir,
         source_Demo_Num=args.pretrained_source_Demo_Num,
         save_dir_hint=args.save_dir,
     )
-    ckpt_name = str(args.pretrained_checkpoint)
-    ckpt_path = Path(ckpt_name)
-    if ckpt_path.suffix != ".pt":
-        ckpt_path = ckpt_path.with_suffix(".pt")
-    if not ckpt_path.is_absolute():
-        ckpt_path = source_run / ckpt_path
+    ckpt_path = resolve_checkpoint_path(source_run, args.pretrained_checkpoint)
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Pretrained checkpoint not found: {ckpt_path}")
     return source_run, ckpt_path
@@ -1311,35 +1420,52 @@ def main():
     start_epoch = 1
     best_val = float("inf")
     reload_ckpt = None
+    reload_checkpoint_path = None
+    resume_backup_dir = None
     global_step = 0
     run_timestamp = timestamp
     save_dir = Path(os.path.join(demo_dir, args.save_dir + f"_DemoN{args.Demo_Num}" + f"_{timestamp}"))
 
     if args.RELOAD:
         latest_run_dir = find_latest_run_dir(demo_dir=demo_dir, save_dir=args.save_dir, demo_num=args.Demo_Num)
-        if latest_run_dir is not None and (latest_run_dir / "best.pt").exists():
+        if latest_run_dir is not None:
+            reload_checkpoint_path = latest_run_dir / "last.pt"
+            if not reload_checkpoint_path.exists():
+                reload_checkpoint_path = latest_run_dir / "best.pt"
+            if not reload_checkpoint_path.exists():
+                reload_checkpoint_path = None
+
+        if reload_checkpoint_path is not None:
             save_dir = latest_run_dir
             run_timestamp = extract_run_timestamp(latest_run_dir, args.save_dir, args.Demo_Num)
-            reload_ckpt = torch.load(latest_run_dir / "best.pt", map_location="cpu", weights_only=False)
+            reload_ckpt = torch.load(reload_checkpoint_path, map_location="cpu", weights_only=False)
             start_epoch = int(reload_ckpt.get("epoch", 0)) + 1
             best_val = float(reload_ckpt.get("val_loss", float("inf")))
+            best_checkpoint_path = latest_run_dir / "best.pt"
+            if best_checkpoint_path.exists() and best_checkpoint_path != reload_checkpoint_path:
+                best_ckpt = torch.load(best_checkpoint_path, map_location="cpu", weights_only=False)
+                best_val = min(best_val, float(best_ckpt.get("val_loss", float("inf"))))
             global_step = int(reload_ckpt.get("global_step", 0))
 
-            backup_existing_artifact(latest_run_dir / "best.pt")
-            print(f"[*] RELOAD=True, resuming from: {latest_run_dir / 'best.pt'}")
+            print(f"[*] RELOAD=True, resuming from: {reload_checkpoint_path}")
             print(f"[*] Resume will start from epoch {start_epoch}\n")
         else:
-            print("[*] RELOAD=True, but no matching best.pt was found. Training will start from scratch.\n")
+            print("[*] RELOAD=True, but no matching last.pt or best.pt was found. Training will start from scratch.\n")
 
-    source_run_dir, source_checkpoint = resolve_pretrained_checkpoint(demo_dir, args)
-    if source_checkpoint is not None:
+    source_run_dir, source_checkpoint = resolve_pretrained_checkpoint(demo_dir, args, reload_ckpt=reload_ckpt)
+    if source_run_dir is not None:
         args.source_run_dir = str(source_run_dir)
-        args.source_checkpoint = str(source_checkpoint)
+        args.source_checkpoint = None if source_checkpoint is None else str(source_checkpoint)
         inherited_keys = apply_pretrained_source_base_config(args, source_run_dir)
         args.pretrained_inherited_base_config_keys = inherited_keys
         args = normalize_conditioning_args(args)
-        print(f"[*] initialization=pretrained, source run: {source_run_dir}")
-        print(f"[*] initialization=pretrained, checkpoint: {source_checkpoint}")
+        if reload_ckpt is not None:
+            print(f"[*] RELOAD source base config run: {source_run_dir}")
+            if source_checkpoint is not None:
+                print(f"[*] RELOAD original source checkpoint: {source_checkpoint}")
+        else:
+            print(f"[*] initialization=pretrained, source run: {source_run_dir}")
+            print(f"[*] initialization=pretrained, checkpoint: {source_checkpoint}")
         if inherited_keys:
             print(
                 "[*] Inherited base model/data/conditioning keys from source run: "
@@ -1351,20 +1477,18 @@ def main():
         args.pretrained_inherited_base_config_keys = []
 
     save_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save the final parsed args to a JSON in the model folder just to be safe
-    with open(save_dir / "args.json", "w") as f:
-        json.dump(vars(args), f, indent=2)
-    if os.path.exists(config_path):
-        shutil.copy(config_path, save_dir / "run_config.yaml")
-
-    # Keep all run artifacts under the model directory, matching the unified
-    # baseline trainers. The old Save_loss_csv/ and Save_reconstruction_files/
-    # roots are no longer used by this trainer.
     recon_dir = save_dir / "Evaluation"
+    resume_checkpoint_epoch = int(reload_ckpt.get("epoch", 0)) if reload_ckpt is not None else None
+    initial_history_rows = []
+    initial_direct_history_rows = []
 
     if args.RELOAD and reload_ckpt is not None:
-        for loss_artifact in (
+        resume_backup_dir = save_dir / "bk" / f"resume_{timestamp}"
+        for artifact in (
+            "last.pt",
+            "best.pt",
+            "args.json",
+            "run_config.yaml",
             "loss_history.csv",
             "loss_history.json",
             "loss_history.png",
@@ -1372,13 +1496,37 @@ def main():
             "direct_coherence_history.json",
             "direct_coherence_history.png",
         ):
-            backup_existing_artifact(save_dir / loss_artifact)
-        backup_existing_artifact(recon_dir)
+            backup_artifact_to_dir(save_dir / artifact, resume_backup_dir)
+        backup_artifact_to_dir(recon_dir, resume_backup_dir)
+        print(f"[*] Pre-resume artifacts backed up to: {resume_backup_dir}")
+
+        initial_history_rows = load_history_rows(save_dir / "loss_history.csv", max_epoch=resume_checkpoint_epoch)
+        initial_direct_history_rows = load_history_rows(
+            save_dir / "direct_coherence_history.csv",
+            max_epoch=resume_checkpoint_epoch,
+        )
+        print(f"[*] Active loss history restored through epoch {resume_checkpoint_epoch}.")
+
+    # Save the final parsed args to a JSON in the model folder just to be safe
+    with open(save_dir / "args.json", "w") as f:
+        json.dump(vars(args), f, indent=2)
+    if os.path.exists(config_path):
+        config_copied = copy_file_if_different(config_path, save_dir / "run_config.yaml")
+        if not config_copied:
+            print("[*] Config already lives in run folder; skipping run_config.yaml copy.")
+
+    # Keep all run artifacts under the model directory, matching the unified
+    # baseline trainers. The old Save_loss_csv/ and Save_reconstruction_files/
+    # roots are no longer used by this trainer.
 
     # Initialize helpers
-    logger = TrainingHistoryLogger(save_dir)
+    logger = TrainingHistoryLogger(save_dir, initial_rows=initial_history_rows)
     direct_cfg = build_direct_coherence_config(args)
-    direct_logger = DirectCoherenceHistoryLogger(save_dir) if args.training_mode == "direct_coherence" else None
+    direct_logger = (
+        DirectCoherenceHistoryLogger(save_dir, initial_rows=initial_direct_history_rows)
+        if args.training_mode == "direct_coherence"
+        else None
+    )
     recon_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"[*] Model checkpoints will save to: {save_dir}")
@@ -1613,17 +1761,13 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     if reload_ckpt is not None:
-        model.load_state_dict(reload_ckpt["model"])
+        model.load_state_dict(checkpoint_model_state(reload_ckpt))
         if "optimizer" in reload_ckpt:
             optimizer.load_state_dict(reload_ckpt["optimizer"])
-        print("[*] Reloaded model state from best.pt")
+        print(f"[*] Reloaded model state from {reload_checkpoint_path.name}")
     elif source_checkpoint is not None:
         pretrained_ckpt = torch.load(source_checkpoint, map_location="cpu", weights_only=False)
-        pretrained_state = (
-            pretrained_ckpt["model"]
-            if isinstance(pretrained_ckpt, dict) and "model" in pretrained_ckpt
-            else pretrained_ckpt
-        )
+        pretrained_state = checkpoint_model_state(pretrained_ckpt)
         try:
             load_result = model.load_state_dict(pretrained_state, strict=bool(args.pretrained_strict))
         except RuntimeError as exc:
