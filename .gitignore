@@ -1,37 +1,60 @@
 
-0_DemoCase/
-1_PoolFire/
-_OlderVersion/
-PDE_Bench/
-
-__pycache__/
-
-Loss_Demo*/
-ffm_tc_pointcloud*/
-ForViewDataset/
-ForOfflineEvaluation/
-bk/
+# Legacy, external, or local-only project trees
+/0_DemoCase/
+/1_PoolFire/
+/_OlderVersion/
+/PDE_Bench/
+/Loss_Demo*/
+/ffm_tc_pointcloud*/
+/ForViewDataset/
+/ForOfflineEvaluation/
+/bk/
 Save_PhyCoEval/
-.agents/
+/.agents/
 
-figures/generated/
+# Dataset-generation source code, notebooks, tests, and Markdown under
+# datagen/ are versioned. Only the machine-local storage link is ignored;
+# it points to the large raw/processed datasets under /data/wanglz/.
+/datagen/data
+/datagen/**/outputs/
+/datagen/**/.ipynb_checkpoints/
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated figures and trained-model directories
+/figures/generated/
 Save_TrainedModel/
 
+# Large numerical datasets, checkpoints, and archives
 *.pt
 *.pth
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.tar
+*.tar.gz
+*.zip
+*.log
+
+# Generated visualization and report exports
 *.png
 *.gif
-*.csv
-*.h5
-*.tar
-*.pt
-*.yaml
-*.txt
 *.svg
+*.csv
 *.json
+*.txt
 *.codex
-*.npz
+*.pdf
 
+# Most YAML files are generated experiment configurations. The canonical
+# configurations used by this repository are explicitly allow-listed below.
+*.yaml
 !config_pointcloud_ffm.yaml
 !config_baseline_Gen.yaml
 !config_baseline_Det.yaml

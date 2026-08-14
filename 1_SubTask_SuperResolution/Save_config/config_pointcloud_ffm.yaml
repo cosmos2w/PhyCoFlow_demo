@@ -5,23 +5,21 @@
 
 #----------------------------------------------------------
 # ALl high resolution benchmark: test on 0:0:1 for CFD
-# Retrained with GL_rbf_ENH by topk_rbf mode, top_k=32 - 0619
-
-# Reload and continue training from a previous checkpoint - 0622
+# Retrained with GL_rbf_ENH by topk_rbf mode, top_k=32 - 0806
 
 #----------------------------------------------------------
 
-Demo_Num: 17
-device_ids: [0]
+Demo_Num: 19
+device_ids: [2]
 
 # data: "Dataset/Merged_CH4COTU1P.h5"
 save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
 RELOAD: false                       # If true, continue from latest matching Demo_Num run.
-reload_checkpoint: "best"           # ["best", "last"]
+reload_checkpoint: "last"           # ["best", "last"]
 
 seed : 42
 epochs : 10000
-batch_size : 384
+batch_size : 256
 lr : 2.0e-4
 weight_decay : 1.0e-6
 train_ratio : 0.9
@@ -39,7 +37,7 @@ pdebench_dataset_name: "CFD"         # ["RD", "CFD"]
 pdebench_processed_root: "Dataset/PDE_Bench/Processed"
 selected_field_idx_raw: 0           # RD: 0-Species_0 ; CFD: 0-density, 1-pressure, 2-Vx, 3-Vy
 multires_ratio: "0:0:1"             # L:M:H, like "1:1:1", "1:1:0", "0:0:1"
-multires_train_case_fraction: 0.34  # Keep only this fraction of train cases before L:M:H split.
+multires_train_case_fraction: 1  # Keep only this fraction of train cases before L:M:H split.
 multires_manifest_path: ""          # optional; leave empty for auto-build
 eval_resolution: "H"
 Case_Truncate_Ratio: 0.25            # RD: 0.5 / CFD: 0.25

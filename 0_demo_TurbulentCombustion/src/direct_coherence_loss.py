@@ -495,10 +495,10 @@ def apply_two_objective_update(
 
     optimizer.zero_grad(set_to_none=True)
     (float(data_weight) * data_loss).backward()
-    g_data = get_gradient_vector(model)
+    g_data = get_gradient_vector(model, none_grad_mode="zero")
     optimizer.zero_grad(set_to_none=True)
     (float(coherence_weight) * coherence_loss).backward()
-    g_coherence = get_gradient_vector(model)
+    g_coherence = get_gradient_vector(model, none_grad_mode="zero")
 
     data_ok = torch.isfinite(g_data).all()
     coherence_ok = torch.isfinite(g_coherence).all()
@@ -515,12 +515,12 @@ def apply_two_objective_update(
         raise FloatingPointError("Data gradient contains NaN or Inf values.")
     if (not coherence_ok) or float(coherence_norm.detach().cpu()) == 0.0:
         warnings.warn("Invalid or zero coherence gradient; falling back to weighted data gradient.", RuntimeWarning, stacklevel=2)
-        apply_gradient_vector(model, g_data)
+        apply_gradient_vector(model, g_data, none_grad_mode="zero")
         fallback = True
         applied_norm = torch.linalg.vector_norm(g_data.detach())
         update_mode = "data_fallback"
     elif float(cosine.detach().cpu()) >= 0.0:
-        apply_gradient_vector(model, weighted_sum_grad)
+        apply_gradient_vector(model, weighted_sum_grad, none_grad_mode="zero")
         applied_norm = torch.linalg.vector_norm(weighted_sum_grad.detach())
         update_mode = "weighted_sum_aligned"
     else:
@@ -530,7 +530,7 @@ def apply_two_objective_update(
         )
         if not torch.isfinite(g_config).all():
             warnings.warn("ConFIG gradient was invalid; falling back to scheduled weighted-sum gradient.", RuntimeWarning, stacklevel=2)
-            apply_gradient_vector(model, weighted_sum_grad)
+            apply_gradient_vector(model, weighted_sum_grad, none_grad_mode="zero")
             fallback = True
             applied_norm = torch.linalg.vector_norm(weighted_sum_grad.detach())
             update_mode = "weighted_sum_invalid_config"
@@ -548,12 +548,12 @@ def apply_two_objective_update(
                     RuntimeWarning,
                     stacklevel=2,
                 )
-                apply_gradient_vector(model, weighted_sum_grad)
+                apply_gradient_vector(model, weighted_sum_grad, none_grad_mode="zero")
                 fallback = True
                 applied_norm = torch.linalg.vector_norm(weighted_sum_grad.detach())
                 update_mode = "weighted_sum_nondescent_config"
             else:
-                apply_gradient_vector(model, g_config)
+                apply_gradient_vector(model, g_config, none_grad_mode="zero")
                 applied_norm = torch.linalg.vector_norm(g_config.detach())
 
     if grad_clip_norm is not None and float(grad_clip_norm) > 0:

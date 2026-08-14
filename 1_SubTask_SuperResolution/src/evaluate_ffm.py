@@ -53,8 +53,8 @@ def parse_args():
         "Standalone evaluator for trained FFM models.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--Demo-Num", dest="Demo_Num", type=int, required=True, 
-                   help="Demo ID to recover.")
+    p.add_argument("--Demo-Num", dest="Demo_Num", type=int, default=None,
+                   help="Demo ID to recover. Optional when --checkpoint-path is supplied.")
     p.add_argument("--demo-root", type=str, default=".", 
                    help="Project/demo root directory.")
     p.add_argument("--split", type=str, default="test", 
@@ -69,6 +69,16 @@ def parse_args():
     
     p.add_argument("--checkpoint", type=str, default="best", choices=["best", "last"],
                    help="Which checkpoint to load from the recovered run directory.")
+    p.add_argument(
+        "--checkpoint-path",
+        type=str,
+        default=None,
+        help=(
+            "Exact checkpoint file to evaluate. Its parent directory is treated as the run "
+            "directory and configuration is recovered from run_config.yaml, args.json, or "
+            "the matching timestamped config backup."
+        ),
+    )
     p.add_argument("--n-steps-generation", type=int, default = 2,
                    help="Override generation steps. Defaults to YAML n_steps_generation if present.")
     p.add_argument(
@@ -129,7 +139,10 @@ def parse_args():
         help="Evaluate multiple sparse-observation consistency modes using the same sensor set.",
     )
     
-    return p.parse_args()
+    args = p.parse_args()
+    if args.checkpoint_path is None and args.Demo_Num is None:
+        p.error("either --Demo-Num or --checkpoint-path is required")
+    return args
 
 class IIDGaussianPrior(torch.nn.Module):
     def forward(self, coords: torch.Tensor, n_channels: int) -> torch.Tensor:
@@ -163,6 +176,13 @@ def _extract_timestamp(path: Path) -> Optional[str]:
     return m.group(2) if m else None
 
 
+def _extract_demo_num(path: Path) -> Optional[int]:
+    m = re.search(r"DemoN(\d+)", path.name)
+    if m is None:
+        m = re.search(r"demo_N(\d+)", path.name)
+    return int(m.group(1)) if m else None
+
+
 def _find_latest_model_dir(demo_root: Path, demo_num: int) -> Path:
     model_roots = [
         demo_root / "Save_TrainedModel",
@@ -182,6 +202,55 @@ def _find_latest_model_dir(demo_root: Path, demo_num: int) -> Path:
         )
 
     return max(candidates, key=lambda path: _extract_timestamp(path))
+
+
+def _load_run_config(model_root: Path, demo_root: Path, demo_num: int,
+                     train_timestamp: Optional[str]) -> Tuple[dict, Path]:
+    """Recover one run's configuration without depending on the newest run."""
+    run_config = model_root / "run_config.yaml"
+    if run_config.exists():
+        with run_config.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}, run_config
+
+    args_path = model_root / "args.json"
+    timestamped_config = None
+    if train_timestamp is not None:
+        candidate = (
+            demo_root / "Save_config" / "pointcloud_ffm"
+            / f"config_pointcloud_ffm_DemoN{demo_num}_{train_timestamp}.yaml"
+        )
+        if candidate.exists():
+            timestamped_config = candidate
+
+    if args_path.exists():
+        with args_path.open("r", encoding="utf-8") as handle:
+            saved_args = json.load(handle) or {}
+        # Use the immutable timestamped backup as a base when available, then
+        # overlay the run-local saved arguments. This also supports older,
+        # partially populated args.json files without trusting a mutable default.
+        cfg = {}
+        if timestamped_config is not None:
+            with timestamped_config.open("r", encoding="utf-8") as handle:
+                cfg.update(yaml.safe_load(handle) or {})
+        else:
+            raw_config = saved_args.get("config")
+            if raw_config:
+                candidate = Path(raw_config).expanduser()
+                if not candidate.is_absolute():
+                    candidate = demo_root / candidate
+                if candidate.exists():
+                    with candidate.open("r", encoding="utf-8") as handle:
+                        cfg.update(yaml.safe_load(handle) or {})
+        cfg.update(saved_args)
+        return cfg, args_path
+
+    if timestamped_config is not None:
+        with timestamped_config.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}, timestamped_config
+
+    raise FileNotFoundError(
+        f"No run_config.yaml, args.json, or matching timestamped config found in {model_root}"
+    )
 
 
 def _normalize_eval_config(cfg: dict) -> dict:
@@ -842,41 +911,51 @@ def main():
     args = parse_args()
 
     demo_root = Path(args.demo_root).resolve()
-    cfg_dir = demo_root / "Save_config" / "pointcloud_ffm"
-
-    try:
-        model_root = _find_latest_model_dir(demo_root, args.Demo_Num)
-    except FileNotFoundError as e:
-        print(f"[Warning: !] {e}")
-        raise SystemExit(1)
+    if args.checkpoint_path is not None:
+        ckpt_path = Path(args.checkpoint_path).expanduser().resolve()
+        model_root = ckpt_path.parent
+        recovered_demo_num = _extract_demo_num(model_root)
+        if args.Demo_Num is None:
+            args.Demo_Num = recovered_demo_num
+        elif recovered_demo_num is not None and args.Demo_Num != recovered_demo_num:
+            print(
+                f"[Warning: !] --Demo-Num={args.Demo_Num} does not match checkpoint directory "
+                f"DemoN{recovered_demo_num}: {model_root}"
+            )
+            raise SystemExit(1)
+        if args.Demo_Num is None:
+            print(f"[Warning: !] Could not infer Demo_Num from checkpoint directory: {model_root.name}")
+            raise SystemExit(1)
+    else:
+        try:
+            model_root = _find_latest_model_dir(demo_root, args.Demo_Num)
+        except FileNotFoundError as e:
+            print(f"[Warning: !] {e}")
+            raise SystemExit(1)
+        ckpt_path = model_root / f"{args.checkpoint}.pt"
 
     train_timestamp = _extract_timestamp(model_root)
     if train_timestamp is None:
-        print(f"[Warning: !] Could not parse timestamp from model directory: {model_root.name}")
-        raise SystemExit(1)
+        train_timestamp = "unknown_run"
 
-    # The run-local config is the source of truth, especially after a resumed
-    # training run. Fall back to the timestamped config backup for older runs.
-    yaml_path = model_root / "run_config.yaml"
-    if not yaml_path.exists():
-        yaml_path = cfg_dir / f"config_pointcloud_ffm_DemoN{args.Demo_Num}_{train_timestamp}.yaml"
-    if not yaml_path.exists():
-        print(f"[Warning: !] Matching config not found for model directory: {model_root}")
-        raise SystemExit(1)
-
-    with open(yaml_path, "r") as f:
-        cfg = yaml.safe_load(f) or {}
-    cfg = _normalize_eval_config(cfg)
-
-    ckpt_path = model_root / f"{args.checkpoint}.pt"
     if not ckpt_path.exists():
         print(f"[Warning: !] Checkpoint not found: {ckpt_path}")
         raise SystemExit(1)
 
+    try:
+        cfg, config_path = _load_run_config(
+            model_root, demo_root, int(args.Demo_Num),
+            None if train_timestamp == "unknown_run" else train_timestamp,
+        )
+    except (FileNotFoundError, json.JSONDecodeError, yaml.YAMLError) as e:
+        print(f"[Warning: !] Could not recover configuration for {model_root}: {e}")
+        raise SystemExit(1)
+    cfg = _normalize_eval_config(cfg)
+
     device = torch.device(args.device if args.device is not None else ("cuda:0" if torch.cuda.is_available() else "cpu"))
 
     try:
-        ckpt = torch.load(ckpt_path, map_location=device)
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
     except pickle.UnpicklingError:
         print("[Warning: !] Restricted torch.load failed; retrying with weights_only=False "
             "for a trusted local checkpoint.")
@@ -1141,7 +1220,8 @@ def main():
 
     summary = {
         "demo_num": int(args.Demo_Num),
-        "yaml_path": str(yaml_path),
+        "yaml_path": str(config_path),
+        "config_path": str(config_path),
         "model_root": str(model_root),
         "checkpoint": str(ckpt_path),
         "split": args.split,
@@ -1166,7 +1246,7 @@ def main():
         json.dump(summary, f, indent=2)
 
     print("[*] Evaluation finished.")
-    print(f"[*] YAML      : {yaml_path}")
+    print(f"[*] Config    : {config_path}")
     print(f"[*] Checkpoint: {ckpt_path}")
     print(f"[*] Output dir : {out_dir}")
     print(f"[*] Metrics         : {json.dumps(metrics, indent=2)}")

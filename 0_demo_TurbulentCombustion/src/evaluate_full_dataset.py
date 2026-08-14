@@ -253,13 +253,54 @@ def _load_model_and_config(args: argparse.Namespace):
         raise RuntimeError(f"Could not parse timestamp from config filename: {yaml_path.name}")
 
     save_dir_cfg = Path(cfg.get("save_dir", "Save_TrainedModel/ffm_tc_pointcloud"))
-    model_root = demo_root / save_dir_cfg.parent / (
+    save_root = save_dir_cfg.parent if save_dir_cfg.is_absolute() else demo_root / save_dir_cfg.parent
+    model_root = save_root / (
         f"{save_dir_cfg.name}_DemoN{args.Demo_Num}_{train_timestamp}"
     )
-    ckpt_path = model_root / f"{args.checkpoint}.pt"
 
     if not model_root.exists():
-        raise FileNotFoundError(f"Matching model directory not found: {model_root}")
+        # RELOAD training creates a new timestamped config backup, but resumes in
+        # the original run directory.  In that case the newest config timestamp
+        # does not have a same-timestamp model directory.  Resolve the newest
+        # actual run containing the requested checkpoint instead.
+        run_prefix = f"{save_dir_cfg.name}_DemoN{args.Demo_Num}_"
+        candidates = sorted(
+            path
+            for path in save_root.glob(f"{run_prefix}*")
+            if path.is_dir() and (path / f"{args.checkpoint}.pt").is_file()
+        )
+        if not candidates:
+            raise FileNotFoundError(
+                f"Matching model directory not found: {model_root}. "
+                f"No fallback run matching {save_root / (run_prefix + '*')} "
+                f"contains {args.checkpoint}.pt."
+            )
+
+        model_root = candidates[-1]
+        print(
+            "[Warning: !] The latest config backup has no same-timestamp model "
+            f"directory; using resumed run: {model_root}"
+        )
+
+    # args.json records the effective training arguments after inherited
+    # pretrained settings are applied.  run_config.yaml is only the input
+    # config and can therefore disagree with the checkpoint architecture.
+    args_path = model_root / "args.json"
+    run_config_path = model_root / "run_config.yaml"
+    if args_path.is_file():
+        yaml_path = args_path
+        with open(args_path, "r") as f:
+            cfg = _normalize_eval_config(json.load(f) or {})
+    elif run_config_path.is_file():
+        yaml_path = run_config_path
+        with open(run_config_path, "r") as f:
+            cfg = _normalize_eval_config(yaml.safe_load(f) or {})
+
+    run_timestamp = _extract_timestamp(model_root)
+    if run_timestamp is not None:
+        train_timestamp = run_timestamp
+
+    ckpt_path = model_root / f"{args.checkpoint}.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
