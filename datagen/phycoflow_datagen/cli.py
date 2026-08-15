@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,7 @@ def _add_physical_arguments(parser: argparse.ArgumentParser, case: str) -> None:
         parser.add_argument("--perturbation-amplitude", type=_positive_float, default=0.5, help="Standard deviation of the smooth perturbation added to laminar vorticity.")
         parser.add_argument("--perturbation-filter", type=_positive_float, default=0.025, help="Coefficient in the initial spectral filter exp(-coefficient*|k|^4).")
     elif case == "electro_thermal":
+        parser.add_argument("--workers", type=_positive_int, default=1, help="Independent CPU processes used for trajectory-level parallelism. Worker processes solve only; the parent serializes checksummed writes and manifest updates.")
         parser.add_argument("--parameter-seed", type=int, default=23, help="Scrambled Sobol seed used for the deterministic five-parameter design.")
         parser.add_argument("--ellipse-a-min", type=_positive_float, default=0.020, help="Minimum silicon ellipse semi-axis a in metres.")
         parser.add_argument("--ellipse-a-max", type=_positive_float, default=0.030, help="Maximum silicon ellipse semi-axis a in metres.")
@@ -258,8 +260,54 @@ def _comparable_simulation_config(config: dict[str, Any]) -> dict[str, Any]:
         "no_progress",
         "num_trajectories",
         "output_dir",
+        "workers",
     }
     return {key: value for key, value in config.items() if key not in ignored}
+
+
+def _prepare_trajectory_payload(
+    case: str,
+    config: dict[str, Any],
+    result: dict[str, np.ndarray],
+    backend_description: str,
+) -> tuple[dict[str, np.ndarray], str, dict[str, float] | None, dict[str, Any]]:
+    """Attach sampled conditions and diagnostics to one completed solver result."""
+
+    condition_values = result.pop("condition_values", None)
+    diagnostic_config = dict(config)
+    conditions = None
+    if condition_values is not None:
+        condition_values = np.asarray(condition_values, dtype=np.float64)
+        expected_conditions = CASES[case]["condition_names"]
+        if condition_values.shape != (len(expected_conditions),):
+            raise ValueError(
+                f"solver returned condition_values {condition_values.shape}; "
+                f"expected {(len(expected_conditions),)}"
+            )
+        conditions = {
+            name: float(value)
+            for name, value in zip(expected_conditions, condition_values)
+        }
+        diagnostic_config.update(conditions)
+    diagnostics = compute_diagnostics(
+        case,
+        result["state"],
+        result["time"],
+        diagnostic_config,
+        result=result,
+    )
+    return result, backend_description, conditions, diagnostics
+
+
+def _solve_trajectory_worker(
+    case: str, config: dict[str, Any], seed: int
+) -> tuple[dict[str, np.ndarray], str, dict[str, float] | None, dict[str, Any]]:
+    """Process-pool entry point; it performs no filesystem or manifest writes."""
+
+    result, backend = run_solver(case, config, seed, progress=None)
+    return _prepare_trajectory_payload(
+        case, config, result, backend.device_description
+    )
 
 
 def generate_main(case_name: str, argv: list[str] | None = None) -> None:
@@ -329,58 +377,45 @@ def generate_main(case_name: str, argv: list[str] | None = None) -> None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     completed = set(int(value) for value in manifest.get("completed_trajectories", []))
 
-    outer_values = range(args.num_trajectories)
-    outer = outer_values if args.no_progress else tqdm(
-        outer_values, total=args.num_trajectories, desc="Overall trajectories", unit="trajectory", position=0
-    )
-
     def inner_progress(iterable, **kwargs):
         return tqdm(iterable, leave=False, position=1, unit="step", dynamic_ncols=True, **kwargs)
 
-    generated = 0
+    pending_trajectory_ids: list[int] = []
     skipped = 0
-    for trajectory_id in outer:
+    for trajectory_id in range(args.num_trajectories):
         if args.resume and raw_trajectory_is_complete(args.output_dir, trajectory_id):
             completed.add(trajectory_id)
             skipped += 1
-            if not args.no_progress:
-                outer.set_postfix_str(f"skipped validated {trajectory_id:06d}")
             continue
         npz_path, json_path = trajectory_paths(args.output_dir, trajectory_id)
         if args.resume and (npz_path.exists() or json_path.exists()):
             raise RuntimeError(
                 f"trajectory {trajectory_id} exists but failed validation; inspect it or rerun with --overwrite"
             )
+        pending_trajectory_ids.append(trajectory_id)
+
+    outer = None if args.no_progress else tqdm(
+        total=args.num_trajectories,
+        initial=skipped,
+        desc="Overall trajectories",
+        unit="trajectory",
+        position=0,
+        dynamic_ncols=True,
+    )
+    generated = 0
+
+    def save_completed_trajectory(
+        trajectory_id: int,
+        payload: tuple[
+            dict[str, np.ndarray],
+            str,
+            dict[str, float] | None,
+            dict[str, Any],
+        ],
+    ) -> None:
+        nonlocal generated
+        result, backend_description, conditions, diagnostics = payload
         seed = args.seed_start + trajectory_id
-        result, backend = run_solver(
-            case,
-            config,
-            seed,
-            None if args.no_progress else inner_progress,
-        )
-        condition_values = result.pop("condition_values", None)
-        diagnostic_config = dict(config)
-        conditions = None
-        if condition_values is not None:
-            condition_values = np.asarray(condition_values, dtype=np.float64)
-            expected_conditions = CASES[case]["condition_names"]
-            if condition_values.shape != (len(expected_conditions),):
-                raise ValueError(
-                    f"solver returned condition_values {condition_values.shape}; "
-                    f"expected {(len(expected_conditions),)}"
-                )
-            conditions = {
-                name: float(value)
-                for name, value in zip(expected_conditions, condition_values)
-            }
-            diagnostic_config.update(conditions)
-        diagnostics = compute_diagnostics(
-            case,
-            result["state"],
-            result["time"],
-            diagnostic_config,
-            result=result,
-        )
         metadata = {
             "case": case,
             "display_name": CASES[case]["display_name"],
@@ -391,7 +426,7 @@ def generate_main(case_name: str, argv: list[str] | None = None) -> None:
             "field_names": CASES[case]["field_names"],
             "config": config,
             "conditions": conditions,
-            "backend_description": backend.device_description,
+            "backend_description": backend_description,
             "code_commit": commit,
             "package_versions": versions,
             "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -410,9 +445,53 @@ def generate_main(case_name: str, argv: list[str] | None = None) -> None:
         manifest["completed_trajectories"] = sorted(completed)
         manifest["last_updated_utc"] = datetime.now(timezone.utc).isoformat()
         atomic_write_json(manifest_path, manifest)
-        if not args.no_progress:
+        if outer is not None:
+            outer.update(1)
             outer.set_postfix_str(f"saved {trajectory_id:06d}")
-    if hasattr(outer, "close"):
+
+    workers = int(getattr(args, "workers", 1))
+    if workers == 1 or len(pending_trajectory_ids) <= 1:
+        for trajectory_id in pending_trajectory_ids:
+            seed = args.seed_start + trajectory_id
+            result, backend = run_solver(
+                case,
+                config,
+                seed,
+                None if args.no_progress else inner_progress,
+            )
+            payload = _prepare_trajectory_payload(
+                case, config, result, backend.device_description
+            )
+            save_completed_trajectory(trajectory_id, payload)
+    else:
+        active_workers = min(workers, len(pending_trajectory_ids))
+        print(
+            "Parallel electro-thermal execution: "
+            f"workers={active_workers}, pending trajectories={len(pending_trajectory_ids)}. "
+            "Worker progress is reported per completed trajectory."
+        )
+        futures = {}
+        with ProcessPoolExecutor(max_workers=active_workers) as executor:
+            for trajectory_id in pending_trajectory_ids:
+                seed = args.seed_start + trajectory_id
+                future = executor.submit(
+                    _solve_trajectory_worker, case, config, seed
+                )
+                futures[future] = trajectory_id
+            try:
+                for future in as_completed(futures):
+                    trajectory_id = futures[future]
+                    save_completed_trajectory(trajectory_id, future.result())
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+
+    manifest["completed_trajectories"] = sorted(completed)
+    manifest["trajectory_count_requested"] = args.num_trajectories
+    manifest["last_updated_utc"] = datetime.now(timezone.utc).isoformat()
+    atomic_write_json(manifest_path, manifest)
+    if outer is not None:
         outer.close()
     print(
         f"Generation complete: generated={generated}, skipped={skipped}, "

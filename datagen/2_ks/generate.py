@@ -1,6 +1,6 @@
 """Generate raw 1D Kuramoto--Sivashinsky trajectories.
 
-GPU example (physical GPU 1 becomes logical cuda:0):
+GPU example:
   CUDA_VISIBLE_DEVICES=1 conda run -n phycoflow_env python datagen/2_ks/generate.py --device cuda:0 --num-trajectories 100
 
 CPU reference example:

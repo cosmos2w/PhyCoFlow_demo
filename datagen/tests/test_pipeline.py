@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from phycoflow_datagen.cases import CASES
+from phycoflow_datagen.cli import generate_main
 from phycoflow_datagen.diagnostics import compute_diagnostics
 from phycoflow_datagen.h5_pipeline import process_raw_to_h5, validate_h5
 from phycoflow_datagen.plotting import create_qa_figure
@@ -26,6 +27,7 @@ from phycoflow_datagen.storage import (
     SCHEMA_VERSION,
     load_raw_trajectory,
     package_versions,
+    raw_trajectory_is_complete,
     write_raw_trajectory,
 )
 
@@ -256,6 +258,69 @@ def test_solver_raw_h5_and_visualization_roundtrip(case: str, tmp_path: Path) ->
     )
     assert figure_summary["diagnostics"]["finite"] is True
     assert figure_path.stat().st_size > 10_000
+
+
+def test_parallel_electro_thermal_generation_and_resume(tmp_path: Path) -> None:
+    """Workers solve independently while the parent writes valid raw records."""
+
+    raw_dir = tmp_path / "electro_thermal_parallel"
+    common_args = [
+        "--output-dir",
+        str(raw_dir),
+        "--dataset-id",
+        "pytest_parallel",
+        "--num-trajectories",
+        "2",
+        "--seed-start",
+        "5",
+        "--resolution",
+        "12",
+        "--backend",
+        "numpy",
+        "--device",
+        "cpu",
+        "--no-progress",
+    ]
+    generate_main("electro_thermal", [*common_args, "--workers", "2"])
+
+    manifest = json.loads((raw_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["completed_trajectories"] == [0, 1]
+    assert manifest["trajectory_count_requested"] == 2
+    hashes_before = {}
+    conditions = []
+    first_arrays = None
+    first_metadata = None
+    for trajectory_id in range(2):
+        assert raw_trajectory_is_complete(raw_dir, trajectory_id)
+        npz_path = raw_dir / "trajectories" / f"trajectory_{trajectory_id:06d}.npz"
+        arrays, metadata = load_raw_trajectory(npz_path)
+        assert metadata["seed"] == 5 + trajectory_id
+        assert np.isfinite(arrays["state"]).all()
+        conditions.append(metadata["conditions"])
+        hashes_before[trajectory_id] = metadata["sha256"]
+        if trajectory_id == 0:
+            first_arrays = arrays
+            first_metadata = metadata
+    assert conditions[0] != conditions[1]
+
+    # Parallel scheduling must not change a realization relative to direct solve.
+    assert first_arrays is not None and first_metadata is not None
+    sequential_result, _ = run_solver(
+        "electro_thermal", first_metadata["config"], seed=5
+    )
+    sequential_result.pop("condition_values")
+    assert sequential_result.keys() == first_arrays.keys()
+    for name, expected in sequential_result.items():
+        np.testing.assert_array_equal(first_arrays[name], expected)
+
+    # Worker count is a launch control, so a resumed run may safely change it.
+    generate_main(
+        "electro_thermal", [*common_args, "--workers", "1", "--resume"]
+    )
+    for trajectory_id in range(2):
+        npz_path = raw_dir / "trajectories" / f"trajectory_{trajectory_id:06d}.npz"
+        _, metadata = load_raw_trajectory(npz_path)
+        assert metadata["sha256"] == hashes_before[trajectory_id]
 
 
 @pytest.mark.parametrize("case", GPU_CAPABLE_CASES)

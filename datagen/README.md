@@ -51,7 +51,7 @@ CUDA_VISIBLE_DEVICES=1 conda run -n phycoflow_env \
 
 conda run -n phycoflow_env \
   python datagen/5_electro_thermal/generate.py --backend numpy --device cpu \
-  --resolution 128 --num-trajectories 16
+    --resolution 128 --num-trajectories 16 --workers 4
 
 conda run -n phycoflow_env \
   python datagen/6_mass_transport_fluid/generate.py --backend numpy --device cpu \
@@ -63,6 +63,13 @@ There are two nested progress displays: overall completed trajectories and the
 current trajectory's numerical steps. `--resume` skips only checksum-validated
 trajectories. Use `--dry-run` to inspect the complete resolved configuration and
 storage estimate without creating a directory.
+
+Electro-thermal generation accepts `--workers N` to solve independent steady
+realizations in separate CPU processes. The parent process alone writes the
+checksummed trajectory files and manifest, so interrupted runs remain safely
+resumable. Start with `--workers 4` at resolution 128 and increase only if RAM
+allows; the worker count may be changed when using `--resume` without changing
+the physical dataset.
 
 Important tunable options include trajectory count/seeds, resolution, `dt`,
 burn-in/record time, save cadence, solver/storage precision, domain length, and
