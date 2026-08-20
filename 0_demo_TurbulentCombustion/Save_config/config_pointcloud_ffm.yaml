@@ -25,6 +25,47 @@ train_ratio : 0.9
 time_stride : 1
 num_workers : 4
 
+# ==========================================================
+# LEGACY DATA PATH REFERENCE
+# Temporary for controlled A/B comparison. To activate the full historical
+# profile, replace the active candidate values below with these values.
+# ==========================================================
+# data_path_mode: "legacy"
+# coord_batch_mode: "legacy_clone"
+# index_sampling_mode: "legacy_randperm"
+# sampling_device: "legacy_gpu"
+# field_read_mode: "legacy_full_snapshot"
+# gpu_transfer_mode: "legacy_full"
+# dataloader_persistent_workers: false
+# dataloader_prefetch_factor: null
+# non_blocking_transfer: false
+# training_log_every_n_steps: 1
+
+# ==========================================================
+# OPTIMIZED DATA PATH CANDIDATE
+# Keep this explicit while benchmarking against legacy. Set a component to null
+# to inherit its data_path_mode profile default.
+# ==========================================================
+data_path_mode: "optimized"       # choices: ["legacy", "optimized"]
+coord_batch_mode: "shared_mesh"   # choices: ["legacy_clone", "shared_mesh"]
+index_sampling_mode: "scalable"   # choices: ["legacy_randperm", "scalable"]
+sampling_device: "cpu"            # choices: ["legacy_gpu", "cpu"]
+
+# Benchmark both. The current contiguous HDF5 layout may favor the default full read.
+field_read_mode: "legacy_full_snapshot"  # choices: ["legacy_full_snapshot", "indexed_union"]
+# field_read_mode: "indexed_union"
+
+gpu_transfer_mode: "selected_only"       # choices: ["legacy_full", "selected_only"]
+dataloader_persistent_workers: true
+dataloader_prefetch_factor: 2
+non_blocking_transfer: true
+
+data_path_diagnostics: true
+data_path_diag_every_n_steps: 50
+data_path_diag_warmup_steps: 5
+data_path_diag_max_steps_per_epoch: 10
+training_log_every_n_steps: 20
+
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
