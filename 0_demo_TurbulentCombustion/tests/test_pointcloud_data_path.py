@@ -67,14 +67,18 @@ def test_profile_resolution_and_incompatible_overrides():
     legacy = resolve_data_path_config({"data_path_mode": "legacy"})
     assert legacy.coord_batch_mode == "legacy_clone"
     assert legacy.sampling_device == "legacy_gpu"
+    assert legacy.field_normalization_mode == "legacy_full_after_read"
     assert legacy.gpu_transfer_mode == "legacy_full"
+    assert legacy.data_path_diag_storage_mode == "legacy_rewrite"
     assert legacy.training_log_every_n_steps == 1
 
     optimized = resolve_data_path_config({"data_path_mode": "optimized"})
     assert optimized.coord_batch_mode == "shared_mesh"
     assert optimized.index_sampling_mode == "scalable"
     assert optimized.field_read_mode == "legacy_full_snapshot"
+    assert optimized.field_normalization_mode == "selected_after_full_read"
     assert optimized.gpu_transfer_mode == "selected_only"
+    assert optimized.data_path_diag_storage_mode == "append"
 
     hybrid = resolve_data_path_config(
         {"data_path_mode": "legacy", "coord_batch_mode": "shared_mesh"}
@@ -90,6 +94,12 @@ def test_profile_resolution_and_incompatible_overrides():
         resolve_data_path_config(
             {"data_path_mode": "legacy", "index_sampling_mode": "scalable"}
         )
+    with pytest.raises(ValueError, match="indexed_union.*requires.*selected_after_full_read"):
+        resolve_data_path_config({
+            "data_path_mode": "optimized",
+            "field_read_mode": "indexed_union",
+            "field_normalization_mode": "legacy_full_after_read",
+        })
 
 
 def test_scalable_sampler_is_unique_sorted_reproducible_at_million_scale():
@@ -133,9 +143,16 @@ def test_shared_mesh_items_do_not_clone_coordinates(tiny_h5: Path):
     assert full["fields"].shape == (shared.num_points, shared.num_fields)
 
 
-@pytest.mark.parametrize("field_read_mode", ["legacy_full_snapshot", "indexed_union"])
+@pytest.mark.parametrize(
+    ("field_read_mode", "field_normalization_mode"),
+    [
+        ("legacy_full_snapshot", "legacy_full_after_read"),
+        ("legacy_full_snapshot", "selected_after_full_read"),
+        ("indexed_union", "selected_after_full_read"),
+    ],
+)
 def test_selected_materialization_matches_full_path_for_identical_indices(
-    tiny_h5: Path, field_read_mode: str
+    tiny_h5: Path, field_read_mode: str, field_normalization_mode: str
 ):
     full_ds = _dataset(tiny_h5, coord_mode="legacy_clone", defer=False)
     selected_ds = _dataset(tiny_h5, coord_mode="shared_mesh", defer=True)
@@ -172,6 +189,7 @@ def test_selected_materialization_matches_full_path_for_identical_indices(
         query_indices=queries,
         obs_layout=layout,
         field_read_mode=field_read_mode,
+        field_normalization_mode=field_normalization_mode,
     )
 
     assert torch.equal(actual["query_indices"], queries)
@@ -212,6 +230,8 @@ class _SmokeFFM(torch.nn.Module):
 
     def training_loss(self, *, x1, coords, obs_values, **kwargs):
         # Exercise every selected floating input while keeping the smoke model tiny.
+        if self.training:
+            assert self.scale.grad is None, "zero_grad must run before the standard forward"
         loss = (self.scale * x1).square().mean()
         loss = loss + 0.0 * coords.sum() + 0.0 * obs_values.sum()
         return loss, {}
@@ -277,15 +297,47 @@ def test_training_loop_smoke_and_diagnostics(
     assert np.isfinite(loss)
     assert len(diagnostics.rows) == 2
     assert (output_dir / "data_path_diagnostics.csv").exists()
-    assert (output_dir / "data_path_diagnostics.json").exists()
+    if profile == "legacy":
+        assert (output_dir / "data_path_diagnostics.json").exists()
+    else:
+        assert (output_dir / "data_path_diagnostics.jsonl").exists()
+        assert (output_dir / "data_path_diagnostics_summary.json").exists()
     required = {
         "loader_wait_ms", "index_sampling_ms", "hdf5_read_ms",
         "cpu_normalization_ms", "cpu_materialization_ms", "h2d_ms",
         "sparse_condition_materialization_ms", "query_materialization_ms",
         "pre_model_total_ms", "model_forward_ms", "backward_ms",
         "optimizer_ms", "total_training_step_ms", "gpu_peak_allocated_mb",
-        "gpu_peak_reserved_mb",
+        "gpu_peak_reserved_mb", "allocated_before_model_mb",
     }
     assert required.issubset(diagnostics.rows[0])
     if device.type == "cuda":
         assert diagnostics.rows[0]["gpu_peak_allocated_mb"] > 0
+
+
+def test_append_diagnostics_are_bounded_and_do_not_rewrite_history(tmp_path: Path):
+    cfg = resolve_data_path_config({
+        "data_path_mode": "optimized",
+        "data_path_diagnostics": True,
+        "data_path_diag_every_n_steps": 1,
+        "data_path_diag_warmup_steps": 0,
+        "data_path_diag_max_steps_per_epoch": 2,
+    })
+    diagnostics = DataPathDiagnostics(tmp_path, cfg)
+    diagnostics.record({"epoch": 1, "step": 0, "latency_ms": 2.0})
+    diagnostics.record({"epoch": 1, "step": 1, "latency_ms": 4.0})
+    diagnostics.flush()
+    diagnostics.record({"epoch": 2, "step": 0, "latency_ms": 6.0})
+    diagnostics.flush()
+
+    assert len(diagnostics.rows) == 1
+    assert diagnostics.rows[0]["epoch"] == 2
+    with open(tmp_path / "data_path_diagnostics.csv") as handle:
+        assert len(handle.readlines()) == 4  # one header plus three appended rows
+    with open(tmp_path / "data_path_diagnostics.jsonl") as handle:
+        assert len(handle.readlines()) == 3
+    with open(tmp_path / "data_path_diagnostics_summary.json") as handle:
+        summary = __import__("json").load(handle)
+    assert summary["latest_epoch"]["samples"] == 1
+    assert summary["cumulative"]["samples"] == 3
+    assert summary["cumulative"]["mean"]["latency_ms"] == pytest.approx(4.0)

@@ -35,7 +35,9 @@ num_workers : 4
 # index_sampling_mode: "legacy_randperm"
 # sampling_device: "legacy_gpu"
 # field_read_mode: "legacy_full_snapshot"
+# field_normalization_mode: "legacy_full_after_read"
 # gpu_transfer_mode: "legacy_full"
+# data_path_diag_storage_mode: "legacy_rewrite"
 # dataloader_persistent_workers: false
 # dataloader_prefetch_factor: null
 # non_blocking_transfer: false
@@ -54,6 +56,7 @@ sampling_device: "cpu"            # choices: ["legacy_gpu", "cpu"]
 # Benchmark both. The current contiguous HDF5 layout may favor the default full read.
 field_read_mode: "legacy_full_snapshot"  # choices: ["legacy_full_snapshot", "indexed_union"]
 # field_read_mode: "indexed_union"
+field_normalization_mode: "selected_after_full_read"  # choices: ["legacy_full_after_read", "selected_after_full_read"]
 
 gpu_transfer_mode: "selected_only"       # choices: ["legacy_full", "selected_only"]
 dataloader_persistent_workers: true
@@ -61,6 +64,7 @@ dataloader_prefetch_factor: 2
 non_blocking_transfer: true
 
 data_path_diagnostics: true
+data_path_diag_storage_mode: "append"  # choices: ["legacy_rewrite", "append"]
 data_path_diag_every_n_steps: 50
 data_path_diag_warmup_steps: 5
 data_path_diag_max_steps_per_epoch: 10

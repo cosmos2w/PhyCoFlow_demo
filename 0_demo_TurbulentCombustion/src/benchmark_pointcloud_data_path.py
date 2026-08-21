@@ -107,8 +107,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stats-path", default=None)
     parser.add_argument("--output", default="data_path_benchmark.csv")
     parser.add_argument(
-        "--profiles", nargs="+", default=["legacy", "optimized", "optimized_indexed"],
-        choices=["legacy", "optimized", "optimized_indexed"],
+        "--profiles", nargs="+",
+        default=["legacy", "optimized_fullnorm", "optimized", "optimized_indexed"],
+        choices=["legacy", "optimized_fullnorm", "optimized", "optimized_indexed"],
     )
     parser.add_argument("--batch-size", dest="batch_sizes", type=int, nargs="+", default=[4])
     parser.add_argument("--n-query-points", nargs="+", default=["4096", "16384", "65536"])
@@ -128,6 +129,8 @@ def parse_args() -> argparse.Namespace:
 
 def profile_config(name: str):
     overrides = {"data_path_mode": "legacy" if name == "legacy" else "optimized"}
+    if name == "optimized_fullnorm":
+        overrides["field_normalization_mode"] = "legacy_full_after_read"
     if name == "optimized_indexed":
         overrides["field_read_mode"] = "indexed_union"
     return resolve_data_path_config(overrides)
@@ -234,6 +237,7 @@ def benchmark_one(name, n_query, batch_size, n_obs, yaml_cfg, cli, device):
         "index_sampling_mode": cfg.index_sampling_mode,
         "sampling_device": cfg.sampling_device,
         "field_read_mode": cfg.field_read_mode,
+        "field_normalization_mode": cfg.field_normalization_mode,
         "gpu_transfer_mode": cfg.gpu_transfer_mode,
         "batch_size": batch_size,
         "N_full": dataset.num_points,

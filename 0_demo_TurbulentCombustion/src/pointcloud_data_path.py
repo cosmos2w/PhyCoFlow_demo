@@ -25,7 +25,9 @@ _CHOICES = {
     "index_sampling_mode": {"legacy_randperm", "scalable"},
     "sampling_device": {"legacy_gpu", "cpu"},
     "field_read_mode": {"legacy_full_snapshot", "indexed_union"},
+    "field_normalization_mode": {"legacy_full_after_read", "selected_after_full_read"},
     "gpu_transfer_mode": {"legacy_full", "selected_only"},
+    "data_path_diag_storage_mode": {"legacy_rewrite", "append"},
 }
 
 _PROFILE_DEFAULTS = {
@@ -34,7 +36,9 @@ _PROFILE_DEFAULTS = {
         "index_sampling_mode": "legacy_randperm",
         "sampling_device": "legacy_gpu",
         "field_read_mode": "legacy_full_snapshot",
+        "field_normalization_mode": "legacy_full_after_read",
         "gpu_transfer_mode": "legacy_full",
+        "data_path_diag_storage_mode": "legacy_rewrite",
         "dataloader_persistent_workers": False,
         "dataloader_prefetch_factor": None,
         "non_blocking_transfer": False,
@@ -47,7 +51,9 @@ _PROFILE_DEFAULTS = {
         # Contiguous HDF5 layouts often favor a full sequential read.  Keep the
         # indexed union as an explicit benchmark dimension, not an assumption.
         "field_read_mode": "legacy_full_snapshot",
+        "field_normalization_mode": "selected_after_full_read",
         "gpu_transfer_mode": "selected_only",
+        "data_path_diag_storage_mode": "append",
         "dataloader_persistent_workers": True,
         "dataloader_prefetch_factor": 2,
         "non_blocking_transfer": True,
@@ -63,7 +69,9 @@ class ResolvedDataPathConfig:
     index_sampling_mode: str
     sampling_device: str
     field_read_mode: str
+    field_normalization_mode: str
     gpu_transfer_mode: str
+    data_path_diag_storage_mode: str
     dataloader_persistent_workers: bool
     dataloader_prefetch_factor: int | None
     non_blocking_transfer: bool
@@ -96,7 +104,9 @@ def resolve_data_path_config(source: Any) -> ResolvedDataPathConfig:
         "index_sampling_mode",
         "sampling_device",
         "field_read_mode",
+        "field_normalization_mode",
         "gpu_transfer_mode",
+        "data_path_diag_storage_mode",
         "dataloader_persistent_workers",
         "dataloader_prefetch_factor",
         "non_blocking_transfer",
@@ -141,6 +151,14 @@ def resolve_data_path_config(source: Any) -> ResolvedDataPathConfig:
         raise ValueError(
             "indexed_union requires sampling_device='cpu' and gpu_transfer_mode='selected_only'."
         )
+    if (
+        values["field_read_mode"] == "indexed_union"
+        and values["field_normalization_mode"] != "selected_after_full_read"
+    ):
+        raise ValueError(
+            "indexed_union reads only selected rows and therefore requires "
+            "field_normalization_mode='selected_after_full_read'."
+        )
 
     return ResolvedDataPathConfig(**values)
 
@@ -161,7 +179,9 @@ def print_resolved_data_path_config(config: ResolvedDataPathConfig) -> None:
         ("index_sampling_mode", config.index_sampling_mode),
         ("sampling_device", config.sampling_device),
         ("field_read_mode", config.field_read_mode),
+        ("normalization_mode", config.field_normalization_mode),
         ("gpu_transfer_mode", config.gpu_transfer_mode),
+        ("diagnostic_storage", config.data_path_diag_storage_mode),
         ("persistent_workers", config.dataloader_persistent_workers),
         ("prefetch_factor", config.dataloader_prefetch_factor),
         ("non_blocking_transfer", config.non_blocking_transfer),
@@ -480,8 +500,17 @@ def materialize_selected_batch(
     query_indices: torch.Tensor,
     obs_layout: Mapping[str, torch.Tensor],
     field_read_mode: str,
+    field_normalization_mode: str = "legacy_full_after_read",
 ) -> dict[str, Any]:
     """Read/normalize/materialize only tensors needed by the model call."""
+    if (
+        field_read_mode == "indexed_union"
+        and field_normalization_mode != "selected_after_full_read"
+    ):
+        raise ValueError(
+            "indexed_union requires field_normalization_mode="
+            "'selected_after_full_read'."
+        )
     batch_size = len(items)
     max_obs = obs_layout["obs_indices"].shape[1]
     n_query = query_indices.shape[1]
@@ -519,10 +548,23 @@ def materialize_selected_batch(
             raw = dataset.read_fields(time_index)
             hdf5_s += time.perf_counter() - read_start
             norm_start = time.perf_counter()
-            full = (raw - dataset.mean) / dataset.std
+            if field_normalization_mode == "legacy_full_after_read":
+                full = (raw - dataset.mean) / dataset.std
+                fields_q[batch_idx] = full.index_select(0, q_idx)
+                obs_values[batch_idx, valid, 0] = full[o_idx, field_ids]
+            elif field_normalization_mode == "selected_after_full_read":
+                union = torch.unique(torch.cat((q_idx, o_idx)), sorted=True)
+                raw_selected = raw.index_select(0, union)
+                selected = (raw_selected - dataset.mean) / dataset.std
+                q_pos = torch.searchsorted(union, q_idx)
+                o_pos = torch.searchsorted(union, o_idx)
+                fields_q[batch_idx] = selected.index_select(0, q_pos)
+                obs_values[batch_idx, valid, 0] = selected[o_pos, field_ids]
+            else:
+                raise ValueError(
+                    f"Unknown field_normalization_mode: {field_normalization_mode!r}."
+                )
             normalize_s += time.perf_counter() - norm_start
-            fields_q[batch_idx] = full.index_select(0, q_idx)
-            obs_values[batch_idx, valid, 0] = full[o_idx, field_ids]
         else:
             raise ValueError(f"Unknown field_read_mode: {field_read_mode!r}.")
 
@@ -620,6 +662,7 @@ class PointCloudBatchCollator:
                 query_indices=query_indices,
                 obs_layout=obs_layout,
                 field_read_mode=self.config.field_read_mode,
+                field_normalization_mode=self.config.field_normalization_mode,
             )
             timings.update(batch["data_path_timings"])
             timings["cpu_materialization_ms"] = max(
@@ -685,6 +728,10 @@ class DataPathDiagnostics:
         self.config = config
         self.rows: list[dict[str, Any]] = []
         self._epoch_samples: dict[int, int] = {}
+        self._active_epoch: int | None = None
+        self._cumulative_count = 0
+        self._cumulative_sums: dict[str, float] = {}
+        self._csv_keys: list[str] | None = None
 
     def should_sample(self, epoch: int, step: int) -> bool:
         if not self.config.data_path_diagnostics:
@@ -698,14 +745,65 @@ class DataPathDiagnostics:
 
     def record(self, row: Mapping[str, Any]) -> None:
         clean = dict(row)
-        self.rows.append(clean)
         epoch = int(clean["epoch"])
+        if self.config.data_path_diag_storage_mode == "append":
+            if self._active_epoch != epoch:
+                self.rows.clear()
+                self._epoch_samples.clear()
+                self._active_epoch = epoch
+        self.rows.append(clean)
         self._epoch_samples[epoch] = self._epoch_samples.get(epoch, 0) + 1
+        if self.config.data_path_diag_storage_mode == "append":
+            self._append_row(clean)
+            self._cumulative_count += 1
+            for key, value in clean.items():
+                if isinstance(value, (int, float)) and key not in {"epoch", "step"}:
+                    self._cumulative_sums[key] = self._cumulative_sums.get(key, 0.0) + float(value)
+
+    def _append_row(self, row: Mapping[str, Any]) -> None:
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = self.save_dir / "data_path_diagnostics.csv"
+        keys = list(row.keys())
+        if self._csv_keys is None:
+            self._csv_keys = keys
+        elif keys != self._csv_keys:
+            raise ValueError("Diagnostic append rows must use a stable schema.")
+        write_header = not csv_path.exists() or csv_path.stat().st_size == 0
+        with open(csv_path, "a", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=keys)
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
+        with open(self.save_dir / "data_path_diagnostics.jsonl", "a") as handle:
+            handle.write(json.dumps(dict(row), separators=(",", ":")) + "\n")
 
     def flush(self) -> None:
         if not self.rows:
             return
         self.save_dir.mkdir(parents=True, exist_ok=True)
+        if self.config.data_path_diag_storage_mode == "append":
+            numeric_keys = [
+                key for key, value in self.rows[0].items()
+                if isinstance(value, (int, float)) and key not in {"epoch", "step"}
+            ]
+            latest = {
+                "epoch": int(self.rows[-1]["epoch"]),
+                "samples": len(self.rows),
+                "mean": {
+                    key: sum(float(row[key]) for row in self.rows) / len(self.rows)
+                    for key in numeric_keys
+                },
+            }
+            cumulative = {
+                "samples": self._cumulative_count,
+                "mean": {
+                    key: value / max(self._cumulative_count, 1)
+                    for key, value in self._cumulative_sums.items()
+                },
+            }
+            with open(self.save_dir / "data_path_diagnostics_summary.json", "w") as handle:
+                json.dump({"latest_epoch": latest, "cumulative": cumulative}, handle, indent=2)
+            return
         keys = list(self.rows[0].keys())
         with open(self.save_dir / "data_path_diagnostics.csv", "w", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=keys)

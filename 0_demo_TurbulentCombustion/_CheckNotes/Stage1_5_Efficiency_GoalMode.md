@@ -12,7 +12,7 @@ architecture experiments are excluded.
 | Stage | Status | Gate evidence |
 |---|---|---|
 | 1. Matched evaluation and order control | Passed | Fixed manifest, 192 paired GPU-0 evaluations, 12+12 epoch reversed-order control |
-| 2. Data-path polish | Not started | Pending |
+| 2. Data-path polish | Passed | Selected normalization equivalence, append diagnostics, real-data A/B benchmark |
 | 3. Million-point scaling | Not started | Pending |
 | 4. Cached/streamed reconstruction | Not started | Pending |
 | 5. Query-microbatch training | Not started | Pending |
@@ -81,3 +81,53 @@ architecture experiments are excluded.
 - The optimized timing advantage survives reversed order.
 - No model or RF mathematics changed in Stage 1.
 - Complete regression suite on physical GPU 0: **20 passed in 15.73 s**.
+
+## Stage 2 log
+
+### Implementation
+
+- Added independent `field_normalization_mode` control. The optimized default
+  performs one sequential full HDF5 snapshot read, forms one sorted query/observation
+  union, gathers raw rows, and normalizes only that union. The exact historical
+  full-snapshot normalization remains available.
+- Added append-only CSV/JSONL diagnostics with a bounded current-epoch memory
+  window and compact latest/cumulative summary JSON. `legacy_rewrite` remains
+  available for controlled comparison.
+- Moved standard-training `zero_grad(set_to_none=True)` before forward and added
+  `allocated_before_model_mb` diagnostics. Direct-coherence update ordering was
+  intentionally left unchanged.
+- Added explicit active and legacy defaults in the main YAML and an
+  `optimized_fullnorm` benchmark profile.
+
+### Commands and evidence
+
+- Focused suite: `pytest -q tests/test_pointcloud_data_path.py`: **13 passed in
+  10.45 s** (project conda environment).
+- Complete regression suite on physical GPU 0: **22 passed in 10.78 s**.
+- Real contiguous HDF5 benchmark: `N_full=40,300`, batch 4, `M=256`, GPU 0,
+  2 warmups + 8 measured iterations, isolated process per normalization mode.
+- At the active `N_query=4,096`, selected normalization reduced normalization
+  time from `2.600 ms` to `1.866 ms` (**28.2%**), pre-model latency from
+  `9.559 ms` to `7.688 ms` (**19.6%**), and total measured data-path step from
+  `10.544 ms` to `8.025 ms` (**23.9%**).
+- Isolated maximum host RSS was `610,900 KiB` for full normalization versus
+  `605,232 KiB` for selected normalization (**0.93% lower**).
+- At `N_query=16,384` on this small 40,300-point mesh, union construction and
+  indexing outweigh avoided normalization: total was `13.095 ms` selected vs
+  `11.776 ms` full normalization. This crossover is documented rather than
+  hidden; the Stage-2 optimized default targets the active 4,096-query case and
+  future much larger meshes. Stage 3 measures the scaling boundary explicitly.
+- Machine-readable output and the exact benchmark commands are under
+  `_CheckNotes/Stage2_data_path/`.
+
+### Stage-2 gate decision: PASSED
+
+- Both full-read normalization paths match legacy selected tensors at
+  `rtol=atol=1e-6`; indexed-union remains explicit and requires selected
+  normalization.
+- Active-workload CPU normalization/pre-model time and host RSS improve.
+- Append diagnostics perform O(new rows) persistence and O(current epoch) summary
+  work rather than rewriting an ever-growing history.
+- Standard training passes and asserts gradients are cleared before forward.
+- No model, checkpoint, GL-RBF, top-k, KeOps, RFF, or RF objective mathematics
+  changed.

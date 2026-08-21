@@ -141,8 +141,12 @@ def parse_args():
                    choices=["legacy_gpu", "cpu"])
     p.add_argument("--field-read-mode", type=str, default=None,
                    choices=["legacy_full_snapshot", "indexed_union"])
+    p.add_argument("--field-normalization-mode", type=str, default=None,
+                   choices=["legacy_full_after_read", "selected_after_full_read"])
     p.add_argument("--gpu-transfer-mode", type=str, default=None,
                    choices=["legacy_full", "selected_only"])
+    p.add_argument("--data-path-diag-storage-mode", type=str, default=None,
+                   choices=["legacy_rewrite", "append"])
     p.add_argument("--dataloader-persistent-workers", default=None,
                    action=argparse.BooleanOptionalAction)
     p.add_argument("--dataloader-prefetch-factor", type=int, default=None)
@@ -783,6 +787,11 @@ def run_epoch(
             torch.cuda.memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0
         )
 
+        if training:
+            optimizer.zero_grad(set_to_none=True)
+        allocated_before_model_mb = (
+            torch.cuda.memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0
+        )
         _sync_cuda_for_diagnostic(device, diagnostic_step)
         start = time.perf_counter()
         loss, _ = model.training_loss(
@@ -800,7 +809,6 @@ def run_epoch(
         backward_ms = 0.0
         optimizer_ms = 0.0
         if training:
-            optimizer.zero_grad(set_to_none=True)
             start = time.perf_counter()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -831,7 +839,9 @@ def run_epoch(
                 "index_sampling_mode": data_path_config.index_sampling_mode,
                 "sampling_device": data_path_config.sampling_device,
                 "field_read_mode": data_path_config.field_read_mode,
+                "field_normalization_mode": data_path_config.field_normalization_mode,
                 "gpu_transfer_mode": data_path_config.gpu_transfer_mode,
+                "data_path_diag_storage_mode": data_path_config.data_path_diag_storage_mode,
                 "batch_size": int(tensors["coords_q"].shape[0]),
                 "N_full": int(batch.get("n_full", batch.get("fields", tensors["fields_q"]).shape[1])),
                 "N_query": int(tensors["coords_q"].shape[1]),
@@ -850,6 +860,7 @@ def run_epoch(
                 "optimizer_ms": optimizer_ms,
                 "total_training_step_ms": (time.perf_counter() - total_step_start) * 1000.0,
                 "allocated_after_materialization_mb": allocated_after_materialization_mb,
+                "allocated_before_model_mb": allocated_before_model_mb,
                 "gpu_peak_allocated_mb": (
                     torch.cuda.max_memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0
                 ),
