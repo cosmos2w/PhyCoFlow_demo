@@ -7,14 +7,16 @@ changes and does not launch training automatically.
 
 ## Matched protocol
 
-Both runs use seed 42, batch size 96, the same dataset split, Adam settings,
+Both runs use seed 42, batch size 64, the same dataset split, Adam settings,
 GL_rbf_ENH widths/blocks, `topk_rbf_glres`, K=32, RFF prior and Rectified-Flow
 objective, optimized Stage 1–5 data handling, and cached-streamed
 reconstruction. An initial launch with the active-config batch size 144 showed
 that F1's requested 8,192-query microbatch needs about 45.6 GiB and cannot fit a
-full optimizer step on the 48 GiB GPU. Both formal runs therefore use the same
-previously validated batch size 96; the failed startup produced no F1 update,
-and F0 was stopped after epoch 1 so the matched pair could restart from scratch.
+full optimizer step on the 48 GiB GPU. Batch 96 also reached about 44.7 GiB and
+failed during backward. Both formal runs therefore use the same batch size 64
+to preserve the requested 16,384/8,192 supervision design with a safe memory
+margin. The failed F1 startups did not complete an optimizer step; their matched
+F0 attempts were stopped so the final pair could restart from scratch.
 
 - F0 (`Demo_Num: 9300`): 4,096 effective queries, monolithic execution.
 - F1 (`Demo_Num: 9301`): 16,384 effective queries, 8,192-query execution
