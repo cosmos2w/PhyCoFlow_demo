@@ -77,19 +77,29 @@ class TrainingMonitor:
             tqdm.write(f"Run directory: {self.run_dir}")
             tqdm.write(f"Live loss figure: {self.plot_path}")
             tqdm.write(f"Live coherence figure: {self.coherence_plot_path}")
-        self.progress = self._new_progress(initial=int(start_step))
+        self.progress = self._new_progress(
+            epoch=self.active_epoch,
+            initial=int(start_step) % self.steps_per_epoch,
+        )
 
     def _epoch_batch_count(self, epoch: int) -> int:
         epoch_start = (epoch - 1) * self.steps_per_epoch
-        return min(self.steps_per_epoch, self.configured_steps - epoch_start)
+        return max(
+            1,
+            min(
+                self.steps_per_epoch,
+                self.configured_steps - epoch_start,
+                self.final_step - epoch_start,
+            ),
+        )
 
-    def _new_progress(self, *, initial: int):
+    def _new_progress(self, *, epoch: int, initial: int):
         self._epoch_started = perf_counter()
         self._epoch_observed_batches = 0
         return tqdm(
-            total=self.final_step,
+            total=self._epoch_batch_count(epoch),
             initial=initial,
-            desc=f"{self.description} epoch {self.active_epoch}/{self.total_epochs}",
+            desc=f"{self.description} epoch {epoch}/{self.total_epochs}",
             unit="batch",
             dynamic_ncols=True,
             leave=True,
@@ -134,8 +144,9 @@ class TrainingMonitor:
             self.progress.set_description(
                 f"{self.description} epoch {epoch}/{self.total_epochs}", refresh=False
             )
+            self.progress.reset(total=self._epoch_batch_count(epoch))
         batch_in_epoch = (step - 1) % self.steps_per_epoch + 1
-        increment = max(0, step - self.progress.n)
+        increment = max(0, batch_in_epoch - self.progress.n)
         self._epoch_observed_batches += 1 if increment else 0
         elapsed = perf_counter() - self._epoch_started
         epoch_estimate = (
