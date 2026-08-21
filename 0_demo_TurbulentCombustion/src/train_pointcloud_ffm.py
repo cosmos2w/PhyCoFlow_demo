@@ -297,6 +297,11 @@ def parse_args():
     # These are hyperparameters for training process
     # ------------------------------
     p.add_argument("--n-query-points", type=int, default=4096)
+    p.add_argument("--reconstruction-execution-mode", type=str, default="legacy_full",
+                   choices=["legacy_full", "cached_streamed"])
+    p.add_argument("--reconstruction-query-chunk-size", type=int, default=8192)
+    p.add_argument("--reconstruction-cache-level", type=str, default="static_features",
+                   choices=["none", "geometry", "static_features"])
     p.add_argument("--query-sampling", type=str, default="uniform", choices=["uniform", "obs_mix"])
     p.add_argument("--query-sample-near-ratio", type=float, default=0.25)
     p.add_argument("--query-sample-far-ratio", type=float, default=0.25)
@@ -2324,6 +2329,9 @@ def main():
                     snapshot_index=0,
                     file_tag=f"{args.ode_solver}_nfe{nfe}",
                     save_metrics_json = True,
+                    reconstruction_execution_mode=args.reconstruction_execution_mode,
+                    reconstruction_query_chunk_size=args.reconstruction_query_chunk_size,
+                    reconstruction_cache_level=args.reconstruction_cache_level,
                 )
 
                 metric_str = ", ".join([f"{k}:{v:.4e}" for k, v in recon_metrics.items()])

@@ -160,6 +160,13 @@ condition_blur_sigma: 2.5
 # These are hyperparameters for the training process
 # ----------------------------------------------------------
 n_query_points : 4096       # Number of query points to be evaluated in training process
+
+# Reconstruction execution reference:
+# reconstruction_execution_mode: "legacy_full"
+# reconstruction_cache_level: "none"
+reconstruction_execution_mode: "cached_streamed"  # choices: ["legacy_full", "cached_streamed"]
+reconstruction_query_chunk_size: 8192
+reconstruction_cache_level: "static_features"      # choices: ["none", "geometry", "static_features"]
 query_sampling: "uniform"   # "obs_mix" or "uniform" (faster)
 query_sample_near_ratio: 0.25
 query_sample_far_ratio: 0.25

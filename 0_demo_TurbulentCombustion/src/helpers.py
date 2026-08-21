@@ -930,6 +930,9 @@ def reconstruct_snapshot(
     n_obs_list: Union[int, Sequence[int]] = 256,
     n_steps: int = 100,
     ode_solver: Optional[str] = None,
+    reconstruction_execution_mode: str = "legacy_full",
+    reconstruction_query_chunk_size: int = 8192,
+    reconstruction_cache_level: str = "static_features",
 ):
     """
     Reconstruct one snapshot under arbitrary sparse conditioning.
@@ -989,6 +992,13 @@ def reconstruct_snapshot(
 
     if "ode_solver" in sig.parameters and ode_solver is not None:
         sample_kwargs["ode_solver"] = ode_solver
+    for key, value in {
+        "reconstruction_execution_mode": reconstruction_execution_mode,
+        "reconstruction_query_chunk_size": reconstruction_query_chunk_size,
+        "reconstruction_cache_level": reconstruction_cache_level,
+    }.items():
+        if key in sig.parameters:
+            sample_kwargs[key] = value
 
     recon = model.sample(**sample_kwargs)
 
@@ -1028,6 +1038,9 @@ def visualize_reconstruction(
     obs_consistency_compare_modes: Optional[Sequence[str]] = None,
     obs_consistency_chunk_size: int = 8192,
     sparse_condition: Optional[dict] = None,
+    reconstruction_execution_mode: str = "legacy_full",
+    reconstruction_query_chunk_size: int = 8192,
+    reconstruction_cache_level: str = "static_features",
 ):
     """
     Reconstruct full fields from arbitrary sparse sensors and save improved plots.
@@ -1087,6 +1100,13 @@ def visualize_reconstruction(
     sig = inspect.signature(model.sample)
     if "ode_solver" in sig.parameters and ode_solver is not None:
         sample_kwargs["ode_solver"] = ode_solver
+    for key, value in {
+        "reconstruction_execution_mode": reconstruction_execution_mode,
+        "reconstruction_query_chunk_size": reconstruction_query_chunk_size,
+        "reconstruction_cache_level": reconstruction_cache_level,
+    }.items():
+        if key in sig.parameters:
+            sample_kwargs[key] = value
 
     recon = model.sample(**sample_kwargs)
 

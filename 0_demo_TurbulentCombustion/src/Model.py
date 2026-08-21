@@ -2,7 +2,7 @@
 
 import math, os, torch
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Sequence
+from typing import Any, Dict, Mapping, Optional, Tuple, Sequence
 
 import numpy as np
 import torch.nn as nn
@@ -592,6 +592,7 @@ class ConditionalPointPerceiver(nn.Module):
             outputs.append(self.head(decoded))
 
         return torch.cat(outputs, dim=1)
+
 
     def forward(
         self,
@@ -1434,6 +1435,233 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
         return torch.cat(outputs, dim=1)
 
+    def prepare_condition_context(
+        self,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Build differentiable observation-only state once per condition."""
+        sensor_tokens = self._build_sensor_tokens(
+            obs_coords, obs_values, obs_mask, obs_field_ids,
+        )
+        latents = self._encode_latents(sensor_tokens, obs_mask)
+        global_feat = self._extract_global_summary(latents)
+        refined = self.sensor_back_attn(q=sensor_tokens, kv=latents, kv_padding_mask=None)
+        refined = refined * obs_mask.unsqueeze(-1)
+        refined = self.sensor_out_proj(refined) * obs_mask.unsqueeze(-1)
+        if self.gather_mode == "topk_rbf_ptlocal":
+            refined = self._sensor_local_refine(obs_coords, refined, obs_mask)
+        context = {
+            "obs_coords": obs_coords,
+            "obs_mask": obs_mask,
+            "latents": latents,
+            "global_feat": global_feat,
+            "refined_sensor_feat": refined,
+        }
+        if self.gather_mode == "topk_rbf_glres":
+            context["sensor_importance_bias"] = self._compute_sensor_importance_bias(
+                refined, obs_mask,
+            )
+        return context
+
+    def _aggregate_topk_from_geometry(
+        self,
+        topk_d2: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_valid: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+    ) -> torch.Tensor:
+        if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
+            raise ValueError("Geometry caching supports topk_rbf and topk_rbf_glres.")
+        sensor_feat = batched_gather_3d(
+            condition_context["refined_sensor_feat"], topk_idx,
+        )
+        sigma = (
+            torch.exp(self.log_rbf_sigma).clamp_min(1e-6)
+            if self.learnable_rbf_sigma else self.rbf_sigma
+        )
+        logits = -topk_d2 / (2 * sigma ** 2 + 1e-12)
+        importance = condition_context.get("sensor_importance_bias")
+        if importance is not None:
+            logits = logits + self.sensor_importance_scale * batched_gather_2d(
+                importance, topk_idx,
+            )
+        weights = torch.softmax(logits.masked_fill(~topk_valid, -1e9), dim=-1)
+        return torch.sum(weights.unsqueeze(-1) * sensor_feat, dim=2)
+
+    def prepare_query_context(
+        self,
+        coords: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+        cache_level: str = "none",
+        chunk_size: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Cache geometry or inference-only static query features in FP32."""
+        if cache_level not in ("none", "geometry", "static_features"):
+            raise ValueError("Unknown reconstruction cache level.")
+        chunk_size = max(1, int(chunk_size or self.gather_query_chunk_size or 8192))
+        context: Dict[str, Any] = {
+            "cache_level": cache_level,
+            "n_query": int(coords.shape[1]),
+            "chunk_size": chunk_size,
+        }
+        if cache_level == "none":
+            return context
+        if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
+            raise ValueError("Query caching supports topk_rbf and topk_rbf_glres.")
+        if self.pos_enc is None:
+            context["coord_feat"] = coords
+        else:
+            coord_feat = coords.new_empty(coords.shape[0], coords.shape[1], self.coord_feat_dim)
+            for start in range(0, coords.shape[1], chunk_size):
+                end = min(start + chunk_size, coords.shape[1])
+                coord_feat[:, start:end] = self.pos_enc(coords[:, start:end])
+            context["coord_feat"] = coord_feat
+        if cache_level == "geometry":
+            k = min(self.gather_topk, condition_context["obs_coords"].shape[1])
+            topk_d2 = coords.new_empty(coords.shape[0], coords.shape[1], k)
+            topk_idx = torch.empty(
+                coords.shape[0], coords.shape[1], k,
+                dtype=torch.long, device=coords.device,
+            )
+            topk_valid = torch.empty(
+                coords.shape[0], coords.shape[1], k,
+                dtype=torch.bool, device=coords.device,
+            )
+            for start in range(0, coords.shape[1], chunk_size):
+                end = min(start + chunk_size, coords.shape[1])
+                d2, idx, _, _, valid = self._get_topk_neighbors(
+                    coords[:, start:end],
+                    condition_context["obs_coords"],
+                    condition_context["refined_sensor_feat"],
+                    condition_context["obs_mask"],
+                    k,
+                )
+                topk_d2[:, start:end] = d2
+                topk_idx[:, start:end] = idx
+                topk_valid[:, start:end] = valid
+            context.update(
+                topk_d2=topk_d2,
+                topk_idx=topk_idx,
+                topk_valid=topk_valid,
+            )
+            return context
+        if self.training and torch.is_grad_enabled():
+            raise ValueError("static_features caching is inference-only.")
+        if self.use_query_latent_readout and self.query_readout_type != "coord":
+            raise ValueError("static_features requires coordinate query readout.")
+        local_cache = coords.new_empty(
+            coords.shape[0], coords.shape[1],
+            condition_context["refined_sensor_feat"].shape[-1],
+        )
+        query_global_cache = (
+            coords.new_empty(coords.shape[0], coords.shape[1], condition_context["global_feat"].shape[-1])
+            if self.use_query_latent_readout else None
+        )
+        for start in range(0, coords.shape[1], chunk_size):
+            end = min(start + chunk_size, coords.shape[1])
+            coords_c = coords[:, start:end]
+            empty_feat = coords_c.new_empty(coords_c.shape[0], coords_c.shape[1], 0)
+            local_cache[:, start:end] = self._aggregate_chunk(
+                coords_c,
+                empty_feat,
+                condition_context["obs_coords"],
+                condition_context["refined_sensor_feat"],
+                condition_context["obs_mask"],
+                condition_context.get("sensor_importance_bias"),
+            )
+            if self.use_query_latent_readout:
+                q = self._build_query_readout_tokens(empty_feat, coords_c)
+                readout = self.query_latent_readout(
+                    q=q, kv=condition_context["latents"], kv_padding_mask=None,
+                )
+                query_global_cache[:, start:end] = self.query_readout_out(readout)
+        context["local_cond"] = local_cache
+        if query_global_cache is not None:
+            context["query_global"] = query_global_cache
+        return context
+
+    def forward_query_chunk(
+        self,
+        t: torch.Tensor,
+        x_t_chunk: torch.Tensor,
+        coords_chunk: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+        query_context: Optional[Mapping[str, Any]] = None,
+        query_slice: Optional[slice] = None,
+    ) -> torch.Tensor:
+        """Run the complete dynamic velocity head for one query chunk."""
+        bsz, n_pts, _ = x_t_chunk.shape
+        query_slice = query_slice or slice(0, n_pts)
+        cached_coord = None if query_context is None else query_context.get("coord_feat")
+        coord_feat = (
+            cached_coord[:, query_slice]
+            if cached_coord is not None
+            else (self.pos_enc(coords_chunk) if self.pos_enc is not None else coords_chunk)
+        )
+        t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
+        point_feat = self.point_encoder(torch.cat([coord_feat, x_t_chunk, t_feat], dim=-1))
+        global_feat = condition_context["global_feat"]
+        if self.use_query_latent_readout:
+            cached_global = None if query_context is None else query_context.get("query_global")
+            if cached_global is None:
+                q = self._build_query_readout_tokens(point_feat, coords_chunk)
+                readout = self.query_latent_readout(
+                    q=q, kv=condition_context["latents"], kv_padding_mask=None,
+                )
+                query_global = self.query_readout_out(readout)
+            else:
+                query_global = cached_global[:, query_slice]
+            global_for_head = global_feat.unsqueeze(1) + self.query_readout_scale * query_global
+        else:
+            global_for_head = global_feat.unsqueeze(1).expand(bsz, n_pts, -1)
+        cached_local = None if query_context is None else query_context.get("local_cond")
+        if cached_local is not None:
+            local_cond = cached_local[:, query_slice]
+        elif query_context is not None and "topk_idx" in query_context:
+            local_cond = self._aggregate_topk_from_geometry(
+                query_context["topk_d2"][:, query_slice],
+                query_context["topk_idx"][:, query_slice],
+                query_context["topk_valid"][:, query_slice],
+                condition_context,
+            )
+        else:
+            local_cond = self.aggregate_sparse_obs(
+                coords_chunk,
+                point_feat,
+                condition_context["obs_coords"],
+                condition_context["refined_sensor_feat"],
+                condition_context["obs_mask"],
+                condition_context.get("sensor_importance_bias"),
+            )
+        head_in = torch.cat([point_feat, global_for_head, local_cond], dim=-1)
+        residual = self.head(self.head_in_norm(head_in))
+        if self.gather_mode == "topk_rbf_glres":
+            return self.coarse_scale * self._predict_global_coarse(point_feat, global_feat) + residual
+        return residual
+
+    @staticmethod
+    def context_nbytes(context: Mapping[str, Any]) -> int:
+        seen: set[tuple[int, int]] = set()
+        total = 0
+
+        def visit(value: Any) -> None:
+            nonlocal total
+            if torch.is_tensor(value):
+                storage = value.untyped_storage()
+                key = (storage.data_ptr(), storage.nbytes())
+                if key not in seen:
+                    seen.add(key)
+                    total += storage.nbytes()
+            elif isinstance(value, Mapping):
+                for child in value.values():
+                    visit(child)
+
+        visit(context)
+        return total
+
     def forward(
         self,
         t: torch.Tensor,
@@ -1995,6 +2223,126 @@ class PointCloudFFM(nn.Module):
             "target_rms": float(target.pow(2).mean().sqrt().detach().cpu()),
         }
 
+    def _sample_cached_streamed(
+        self,
+        *,
+        x: torch.Tensor,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+        clamp_indices: Optional[torch.Tensor],
+        ts: torch.Tensor,
+        ode_solver: str,
+        obs_consistency_mode: str,
+        obs_consistency_strength: float,
+        obs_consistency_schedule_power: float,
+        obs_consistency_final_clamp: bool,
+        value_map: Optional[torch.Tensor],
+        mask_map: Optional[torch.Tensor],
+        reconstruction_query_chunk_size: int,
+        reconstruction_cache_level: str,
+    ) -> torch.Tensor:
+        if not hasattr(self.model, "prepare_condition_context"):
+            raise ValueError(
+                "cached_streamed reconstruction requires a backbone with the context API."
+            )
+        chunk_size = max(1, int(reconstruction_query_chunk_size))
+        condition_context = self.model.prepare_condition_context(
+            obs_coords=obs_coords,
+            obs_values=obs_values,
+            obs_mask=obs_mask,
+            obs_field_ids=obs_field_ids,
+        )
+        query_context = self.model.prepare_query_context(
+            coords=coords,
+            condition_context=condition_context,
+            cache_level=reconstruction_cache_level,
+            chunk_size=chunk_size,
+        )
+        self._last_reconstruction_condition_bytes = self.model.context_nbytes(condition_context)
+        self._last_reconstruction_cache_bytes = self.model.context_nbytes(query_context)
+        bsz = coords.shape[0]
+        for i in range(len(ts) - 1):
+            t0 = ts[i].expand(bsz)
+            dt = ts[i + 1] - ts[i]
+            for start in range(0, coords.shape[1], chunk_size):
+                end = min(start + chunk_size, coords.shape[1])
+                query_slice = slice(start, end)
+                x_chunk = x[:, query_slice]
+                coords_chunk = coords[:, query_slice]
+                v0 = self.model.forward_query_chunk(
+                    t=t0,
+                    x_t_chunk=x_chunk,
+                    coords_chunk=coords_chunk,
+                    condition_context=condition_context,
+                    query_context=query_context,
+                    query_slice=query_slice,
+                )
+                if obs_consistency_mode in ("endpoint", "endpoint_smooth"):
+                    v0 = apply_endpoint_observation_consistency(
+                        x_t=x_chunk,
+                        v=v0,
+                        t=t0,
+                        value_map=value_map[:, query_slice],
+                        mask_map=mask_map[:, query_slice],
+                        strength=obs_consistency_strength,
+                        schedule_power=obs_consistency_schedule_power,
+                    )
+                if ode_solver == "heun":
+                    x_euler = x_chunk + dt * v0
+                    t1 = ts[i + 1].expand(bsz)
+                    v1 = self.model.forward_query_chunk(
+                        t=t1,
+                        x_t_chunk=x_euler,
+                        coords_chunk=coords_chunk,
+                        condition_context=condition_context,
+                        query_context=query_context,
+                        query_slice=query_slice,
+                    )
+                    if (
+                        obs_consistency_mode in ("endpoint", "endpoint_smooth")
+                        and float(ts[i + 1].item()) < 1.0
+                    ):
+                        v1 = apply_endpoint_observation_consistency(
+                            x_t=x_euler,
+                            v=v1,
+                            t=t1,
+                            value_map=value_map[:, query_slice],
+                            mask_map=mask_map[:, query_slice],
+                            strength=obs_consistency_strength,
+                            schedule_power=obs_consistency_schedule_power,
+                        )
+                    x[:, query_slice] = x_chunk + 0.5 * dt * (v0 + v1)
+                else:
+                    x[:, query_slice] = x_chunk + dt * v0
+
+            if obs_consistency_mode == "default_hard" and clamp_indices is not None:
+                x = scatter_observed_values(
+                    x=x,
+                    obs_values=obs_values,
+                    obs_mask=obs_mask,
+                    obs_indices=clamp_indices,
+                    obs_field_ids=obs_field_ids,
+                    strength=1.0,
+                )
+
+        if (
+            obs_consistency_final_clamp
+            and obs_consistency_mode != "none"
+            and clamp_indices is not None
+        ):
+            x = scatter_observed_values(
+                x=x,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_indices=clamp_indices,
+                obs_field_ids=obs_field_ids,
+                strength=1.0,
+            )
+        return x
+
     @torch.no_grad()
     def sample(
         self,
@@ -2012,6 +2360,9 @@ class PointCloudFFM(nn.Module):
         obs_consistency_schedule_power: float = 2.0,
         obs_consistency_final_clamp: bool = True,
         obs_consistency_chunk_size: int = 8192,
+        reconstruction_execution_mode: str = "legacy_full",
+        reconstruction_query_chunk_size: int = 8192,
+        reconstruction_cache_level: str = "static_features",
     ) -> torch.Tensor:
         """
         Integrate the learned rectified-flow ODE from x0 ~ prior to x1.
@@ -2021,6 +2372,10 @@ class PointCloudFFM(nn.Module):
         """
         if n_steps < 1:
             raise ValueError(f"n_steps must be >= 1, got {n_steps}")
+        if reconstruction_execution_mode not in ("legacy_full", "cached_streamed"):
+            raise ValueError(
+                "reconstruction_execution_mode must be 'legacy_full' or 'cached_streamed'."
+            )
 
         bsz = coords.shape[0]
         x = self.sample_source(coords)
@@ -2057,6 +2412,29 @@ class PointCloudFFM(nn.Module):
         ts = torch.linspace(
             0.0, 1.0, n_steps + 1, device=coords.device, dtype=coords.dtype
         )
+
+        if reconstruction_execution_mode == "cached_streamed":
+            return self._sample_cached_streamed(
+                x=x,
+                coords=coords,
+                obs_coords=obs_coords,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_field_ids=obs_field_ids,
+                clamp_indices=clamp_indices,
+                ts=ts,
+                ode_solver=ode_solver,
+                obs_consistency_mode=obs_consistency_mode,
+                obs_consistency_strength=obs_consistency_strength,
+                obs_consistency_schedule_power=obs_consistency_schedule_power,
+                obs_consistency_final_clamp=obs_consistency_final_clamp,
+                value_map=value_map,
+                mask_map=mask_map,
+                reconstruction_query_chunk_size=reconstruction_query_chunk_size,
+                reconstruction_cache_level=reconstruction_cache_level,
+            )
+        self._last_reconstruction_condition_bytes = 0
+        self._last_reconstruction_cache_bytes = 0
 
         for i in range(n_steps):
             t0 = ts[i].expand(bsz)

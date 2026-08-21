@@ -14,7 +14,7 @@ architecture experiments are excluded.
 | 1. Matched evaluation and order control | Passed | Fixed manifest, 192 paired GPU-0 evaluations, 12+12 epoch reversed-order control |
 | 2. Data-path polish | Passed | Selected normalization equivalence, append diagnostics, real-data A/B benchmark |
 | 3. Million-point scaling | Passed | 27 data-path rows + 9 current-model GPU rows through 1M/65,536 queries |
-| 4. Cached/streamed reconstruction | Not started | Pending |
+| 4. Cached/streamed reconstruction | Passed | Tight equivalence matrix + real checkpoint + 1M-query stress |
 | 5. Query-microbatch training | Not started | Pending |
 | Limited validation package | Not started | Pending |
 
@@ -176,3 +176,56 @@ architecture experiments are excluded.
   streaming and Stage 5 microbatching.
 - The optional HDF5 layout experiment was not performed because it would require
   large temporary storage and does not affect the measured execution bottleneck.
+
+## Stage 4 log
+
+### Implementation
+
+- Added differentiable `prepare_condition_context`, cache-aware
+  `prepare_query_context`, and complete `forward_query_chunk` APIs to the existing
+  GL-RBF backbone without changing its public legacy `forward` function.
+- Condition context includes the same sensor tokens, latent encoding/re-injection,
+  global summary, sensor readback/refinement, and GL-residual importance bias.
+- Cache levels are `none`, `geometry`, and inference-only FP32
+  `static_features`. Geometry caches exact top-k indices/distances; static cache
+  stores coordinate features, local RBF condition, and coordinate-based latent
+  readout.
+- Added `legacy_full` and `cached_streamed` sample modes. Cached streaming runs
+  point encoding, global/local fusion, coarse scaffold, residual head, and
+  Euler/Heun updates entirely inside each query chunk.
+- Endpoint maps remain full pointwise maps and are sliced per query chunk;
+  default hard and final clamping retain the existing scatter semantics.
+- Static and geometry caches are preallocated and filled by chunk, avoiding
+  list-concatenate duplication during million-point cache construction.
+- The trainer/helper/YAML path exposes execution mode, query chunk size, and
+  cache level; the old sample defaults remain legacy-compatible.
+
+### Evidence
+
+- Focused equivalence suite: **21 passed in 10.15 s**.
+- Complete regression suite on physical GPU 0: **45 passed in 11.35 s**.
+- Both requested gather modes, both solvers, NFE/step counts 1/2/4, every
+  observation-consistency mode, and all cache levels match within tight FP32
+  tolerance.
+- A four-step Heun test asserts observation encoding happens exactly once.
+- Real checkpoint/snapshot, Heun-2, endpoint-smooth: maximum absolute difference
+  `3.09944e-6`, mean `2.48932e-7`, and identical relative L2
+  (`0.7297682166`).
+- At 250k queries and Euler-2, cached streaming is **6.70x faster** (`0.671 s`
+  vs `4.494 s`) and peak allocation is **69.4% lower** (`852.4 MB` vs
+  `2,782.0 MB`).
+- One million queries complete in `2.675 s`, or `1.34 s` per million points per
+  NFE, at `2,958.4 MB` peak. The explicit FP32 static query cache is
+  `2,197.3 MB`; dynamic execution remains bounded by the 8,192-query chunk plus
+  state/model workspace.
+- Raw CSV/JSON, exact command, limitations, and interpretation are under
+  `_CheckNotes/Stage4_reconstruction/`.
+
+### Stage-4 gate decision: PASSED
+
+- Cached-streamed reconstruction is tightly equivalent across the specified
+  solver/gather/consistency matrix and on one real checkpoint snapshot.
+- Static condition encoding is reused across the full ODE trajectory.
+- The 1M-query path is memory-safe and allocates no full dynamic hidden head
+  fields; peak scaling is explained by the explicit selected cache level.
+- Legacy reconstruction remains callable for A/B validation.
