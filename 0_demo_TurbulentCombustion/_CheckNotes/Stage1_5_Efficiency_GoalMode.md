@@ -13,7 +13,7 @@ architecture experiments are excluded.
 |---|---|---|
 | 1. Matched evaluation and order control | Passed | Fixed manifest, 192 paired GPU-0 evaluations, 12+12 epoch reversed-order control |
 | 2. Data-path polish | Passed | Selected normalization equivalence, append diagnostics, real-data A/B benchmark |
-| 3. Million-point scaling | Not started | Pending |
+| 3. Million-point scaling | Passed | 27 data-path rows + 9 current-model GPU rows through 1M/65,536 queries |
 | 4. Cached/streamed reconstruction | Not started | Pending |
 | 5. Query-microbatch training | Not started | Pending |
 | Limited validation package | Not started | Pending |
@@ -131,3 +131,48 @@ architecture experiments are excluded.
 - Standard training passes and asserts gradients are cleared before forward.
 - No model, checkpoint, GL-RBF, top-k, KeOps, RFF, or RF objective mathematics
   changed.
+
+## Stage 3 log
+
+### Implementation and evidence
+
+- Added `src/benchmark_pointcloud_scaling.py` with separate `data` and `model`
+  benchmark classes and a stable CSV/JSON schema for all required phases,
+  throughput metrics, host RSS, and CUDA allocation/reservation.
+- The data sweep uses the real 40,300-point HDF5 dataset. Because no formal
+  250k/1M HDF5 dataset exists locally, those rows use an explicitly labeled
+  in-memory expansion of one real snapshot; their host-clone time is not claimed
+  as HDF5 I/O time.
+- The model sweep uses the active GL_rbf_ENH, topk_rbf_glres, KeOps, dimensions,
+  and query chunk setting on synthetic GPU-resident 3-D tensors. It changes no
+  architecture or mathematics.
+- Focused benchmark/schema tests: **15 passed in 10.50 s**.
+- Complete regression suite on physical GPU 0: **24 passed in 10.66 s**.
+- Data sweep: 27 rows across `N_full={40,300, 250k, 1M}`,
+  `N_query={4,096, 16,384, 65,536/full}`, and `M={256,512,1024}`.
+- Model sweep: 9 rows across `N_query={4,096,16,384,65,536}` and
+  `M={256,512,1024}`; every row completed without OOM.
+- At fixed 4,096 queries, mean pre-model time changes from `17.99 ms` at 40.3k
+  full points to `24.44 ms` at 1M, while selected GPU inputs stay `0.582 MB`.
+- Model step time is `61.15–64.53 ms` at 4,096 queries and
+  `709.39–801.20 ms` at 65,536. Model peak allocation grows from `255–271 MB`
+  to `3.02–3.04 GB`.
+- At the largest measured combination, the 1M-point data path averages
+  `45.73 ms`, while the 65,536-query model costs `0.71–0.80 s`; query execution
+  is decisively dominant.
+- Raising observations from 256 to 1,024 adds 5.5% step time at 4,096 queries
+  and 12.4% at 65,536. KeOps controls pairwise memory, but exact neighbor work
+  remains measurable.
+- Full tables, raw CSV/JSON, analyzer, interpretation, limitations, and exact
+  commands are under `_CheckNotes/Stage3_scaling/`.
+
+### Stage-3 gate decision: PASSED
+
+- Full-mesh and selected-query costs are independently measured through the
+  requested scales.
+- The crossover is unambiguous: current per-query model work dominates before
+  million-point data handling becomes the main constraint.
+- The near-linear query-activation memory curve directly motivates Stage 4
+  streaming and Stage 5 microbatching.
+- The optional HDF5 layout experiment was not performed because it would require
+  large temporary storage and does not affect the measured execution bottleneck.
