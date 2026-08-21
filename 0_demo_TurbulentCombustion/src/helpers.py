@@ -1058,7 +1058,11 @@ def visualize_reconstruction(
     cond_fields = _to_int_list(cond_fields)
     n_obs = _broadcast_per_field(n_obs, cond_fields, "n_obs")
 
-    sample = dataset[snapshot_index]
+    sample = (
+        dataset.get_full_snapshot(snapshot_index)
+        if hasattr(dataset, "get_full_snapshot")
+        else dataset[snapshot_index]
+    )
 
     # Normalized coordinates go into the model.
     coords = sample["coords"].unsqueeze(0).to(device)   # [1, N, D]

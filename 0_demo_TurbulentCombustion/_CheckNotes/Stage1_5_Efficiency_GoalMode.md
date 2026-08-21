@@ -16,7 +16,7 @@ architecture experiments are excluded.
 | 3. Million-point scaling | Passed | 27 data-path rows + 9 current-model GPU rows through 1M/65,536 queries |
 | 4. Cached/streamed reconstruction | Passed | Tight equivalence matrix + real checkpoint + 1M-query stress |
 | 5. Query-microbatch training | Passed | Full RF bridge once, all-gradient/Adam equivalence, 65,536-query GPU steps |
-| Limited validation package | Not started | Pending |
+| Limited validation package | Passed | 8-epoch control + 5-epoch 16k/4k run + fixed manifest + 1M stress |
 
 ## Stage 1 log
 
@@ -279,3 +279,108 @@ architecture experiments are excluded.
 - One physical batch still produces one clipped optimizer step.
 - 65,536 effective queries train successfully, and peak activation memory is
   controlled by microbatch size.
+
+## Limited validation log
+
+- Package: `_CheckNotes/Stage1_5_limited_run/` with two configs, launcher,
+  checkpoint-reconstruction recovery utility, analyzer, compact evidence, and
+  README.
+- Control A: 8 completed epochs, 4,096 monolithic queries, final train/validation
+  `1.044623 / 1.038733`, fixed-manifest mean `0.948706`, sampled peak
+  `20,745.5 MB`, steady logged epoch time `58.72 s`.
+- Large-effective-query B: 5 completed epochs, 16,384 effective / 4,096 execution
+  queries, final train/validation `1.188536 / 1.197108`, fixed-manifest mean
+  `1.053499`, sampled peak `26,267.3 MB`, steady epoch time `108.69 s`.
+- A/B losses are nearly identical through epoch 4. B is 3.9% higher at epoch 5
+  but remains stable; the fixed-manifest values are not a same-epoch accuracy
+  comparison (A checkpoint epoch 8, B epoch 5).
+- Both final checkpoints completed cached Euler NFE 1/2 reconstruction with 256
+  hard observations and zero sensor-consistency error.
+- The Stage-4 one-million-query Euler-2 stress is integrated into the package
+  summary: `2.675 s`, `2,958.4 MB` peak, `2,197.3 MB` explicit static cache.
+- GPU 0 started with a 10,636 MiB/100%-utilization co-tenant, so times remain
+  relative diagnostics; process-local CUDA peaks are valid.
+- Control exposed one deferred-read boundary bug only after its epoch-8
+  checkpoint was saved. `visualize_reconstruction()` now uses
+  `get_full_snapshot()` when provided. Its final reconstruction was recovered
+  from the saved checkpoint without retraining; B completed normally afterward.
+
+### Limited validation decision: PASSED
+
+- Revised standard training, microbatched training, validation, checkpointing,
+  cached reconstruction, fixed-manifest evaluation, and million-query stress all
+  complete within the intended limited scope.
+- No long formal training or Stage-6 experiment was launched.
+
+## Final audit and Stage-6 readiness
+
+### New execution/configuration controls
+
+- `field_normalization_mode`: `legacy_full_after_read` or
+  `selected_after_full_read`.
+- `data_path_diag_storage_mode`: `legacy_rewrite` or `append`.
+- `reconstruction_execution_mode`: `legacy_full` or `cached_streamed`.
+- `reconstruction_query_chunk_size`: positive query execution chunk.
+- `reconstruction_cache_level`: `none`, `geometry`, or `static_features`.
+- `train_query_microbatch_size`: null/large for monolithic, or a smaller positive
+  execution chunk for effective-query microbatching.
+- `reuse_condition_context_across_query_microbatches`: boolean differentiable
+  context reuse.
+
+### Legacy/reference paths retained
+
+- Complete legacy data-path profile and its component overrides.
+- Full-after-read normalization and diagnostic history rewrite.
+- Indexed-union HDF5 experiment (not default).
+- Original GL-RBF `forward()` and `PointCloudFFM.training_loss()`.
+- `legacy_full` reconstruction with original Euler/Heun loop.
+- Null/no training query microbatching.
+
+### Main changed areas
+
+- Core execution: `src/pointcloud_data_path.py`, `src/Model.py`,
+  `src/train_pointcloud_ffm.py`, and `src/helpers.py`.
+- Reproducibility/benchmarks: fixed-manifest generator/evaluator plus data-path,
+  scaling, reconstruction, and query-microbatch benchmark utilities under
+  `src/`.
+- Regression coverage: data-path, manifest, scaling schema, reconstruction
+  equivalence, and all-gradient query-microbatch tests under `tests/`.
+- Evidence/configuration: `Save_config/config_pointcloud_ffm.yaml` and staged
+  reports/configs/raw compact results under `_CheckNotes/`.
+
+### Remaining bottlenecks and limitations
+
+- Per-query model execution and activation memory are the dominant scaling cost;
+  exact top-k work rises with observation count even under KeOps.
+- FP32 `static_features` reconstruction cache is linear in query count
+  (`2,197.3 MB` at 1M). `geometry`/`none` trade cache memory for repeated work.
+- Microbatching trades 11–27% wall time for much lower activation memory in the
+  tested range.
+- The repository has no formal 250k/1M 3-D HDF5 dataset. Large data-path rows use
+  a labeled in-memory expansion, so future storage-layout/I/O conclusions need
+  the formal dataset.
+- GPU wall times were collected with a documented co-tenant and should be rerun
+  exclusively before publication-grade claims.
+- The limited 5/8-epoch runs validate execution and short-horizon stability, not
+  final scientific accuracy.
+
+### Invariant confirmation
+
+- No GL-RBF parameterization, learned weight shape, or architecture was changed.
+- No top-k/KeOps neighbor or gather mathematics was changed.
+- No Rectified-Flow convention, RFF distribution, `x1-x0` target, or mean-MSE
+  objective was changed.
+- No Euler/Heun formula, observation meaning, or sensor-consistency rule was
+  changed.
+- Existing checkpoint parameters load strictly and are not reinterpreted.
+- No Stage-6 architecture experiment was started.
+
+### Recommendation
+
+**Ready to proceed to a separately approved Stage 6.** All readiness criteria
+are met: the data path is validated, matched evaluation shows no material
+regression, cached-streamed reconstruction is equivalent and 1M-query safe,
+microbatch gradients/updates are equivalent, and 65,536-query supervision is
+practical. Profiling now identifies genuine per-query model architecture as the
+dominant remaining cost. Before making publication-grade performance claims,
+repeat key timings on an exclusive GPU and on the formal large 3-D HDF5 layout.
