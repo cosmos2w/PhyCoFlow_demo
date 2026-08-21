@@ -270,10 +270,19 @@ def _coherence_objective(
 
 
 def _component_scalars(result: FamilyResult) -> dict[str, float]:
-    return {
+    values = {
         path: float(component.scalar_loss.detach().cpu())
         for path, component in result.component_results.items()
     }
+    families = result.diagnostics.get("families", {})
+    if isinstance(families, Mapping):
+        for name, diagnostics in families.items():
+            if isinstance(diagnostics, Mapping) and "scalar_loss" in diagnostics:
+                value = diagnostics["scalar_loss"]
+                if isinstance(value, torch.Tensor):
+                    value = value.detach().cpu().item()
+                values[f"{name}.total"] = float(value)
+    return values
 
 
 def _coherence_weight(config: Mapping[str, Any], epoch: int) -> float:

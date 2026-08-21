@@ -406,6 +406,7 @@ A native run is stored under `Cases/<case>/runs/<experiment>/<run-id>/`. Importa
 - `artifacts/`: sensor manifests, reference banks, coherence family states, geometry bases, and provenance;
 - `evaluation/`: before/after or named checkpoint reports, query indices, physical arrays, and plotting payloads;
 - `evaluation/training_preview/`: optional fixed-sample qualitative monitoring.
+- `loss_history.png` and `coherence_history.png`: live aggregate losses and detailed per-family coherence components with gradient/ConFIG diagnostics, refreshed at `runtime.plot_every_steps`.
 
 Post-training directories identify their parent and record source hashes before and after work. This lineage is the basis for confirming that a refinement run did not mutate its source.
 

@@ -15,6 +15,14 @@ from typing import Any
 from tqdm.auto import tqdm
 
 _LOSS_KEYS = ("total", "data_loss", "coherence_loss", "physics_loss")
+_COHERENCE_PREFIXES = ("global_distribution.", "cross_spectrum.", "topology.")
+_GRADIENT_KEYS = (
+    "data_grad_norm",
+    "coherence_grad_norm",
+    "combined_grad_norm",
+    "gradient_cosine",
+)
+_STATE_KEYS = ("gradient_conflict", "config_fallback_used")
 
 
 def _format_duration(seconds: float) -> str:
@@ -50,6 +58,7 @@ class TrainingMonitor:
         self.run_dir = Path(run_dir)
         self.history_path = self.run_dir / "metrics" / "history.jsonl"
         self.plot_path = self.run_dir / "loss_history.png"
+        self.coherence_plot_path = self.run_dir / "coherence_history.png"
         self.final_step = int(final_step)
         self.configured_steps = int(configured_steps)
         self.steps_per_epoch = max(1, int(steps_per_epoch))
@@ -71,6 +80,7 @@ class TrainingMonitor:
         if enabled:
             tqdm.write(f"Run directory: {self.run_dir}")
             tqdm.write(f"Live loss figure: {self.plot_path}")
+            tqdm.write(f"Live coherence figure: {self.coherence_plot_path}")
 
     def _epoch_batch_count(self, epoch: int) -> int:
         epoch_start = (epoch - 1) * self.steps_per_epoch
@@ -98,7 +108,13 @@ class TrainingMonitor:
 
     def _capture(self, row: Mapping[str, Any]) -> None:
         step = int(row.get("step", 0))
-        for key in _LOSS_KEYS:
+        tracked = set(_LOSS_KEYS) | set(_GRADIENT_KEYS) | set(_STATE_KEYS)
+        tracked.update(
+            key
+            for key in row
+            if isinstance(key, str) and key.startswith(_COHERENCE_PREFIXES)
+        )
+        for key in tracked:
             value = row.get(key)
             if isinstance(value, (int, float)) and math.isfinite(float(value)):
                 self._steps[key].append(step)
@@ -155,7 +171,7 @@ class TrainingMonitor:
         except ImportError:
             warnings.warn(
                 "matplotlib is unavailable; terminal progress and JSONL history remain enabled, "
-                "but loss_history.png cannot be generated. Install the project plot extra.",
+                "but live history figures cannot be generated. Install the project plot extra.",
                 stacklevel=2,
             )
             self._plot_available = False
@@ -187,6 +203,103 @@ class TrainingMonitor:
         figure.savefig(temporary, dpi=150, format="png")
         plt.close(figure)
         os.replace(temporary, self.plot_path)
+        self._plot_coherence(plt)
+
+    def _plot_coherence(self, plt) -> None:
+        family_keys = {
+            prefix.removesuffix("."): sorted(
+                key for key in self._values if key.startswith(prefix)
+            )
+            for prefix in _COHERENCE_PREFIXES
+        }
+        if not any(family_keys.values()):
+            return
+
+        figure, axes = plt.subplots(2, 2, figsize=(15, 10), constrained_layout=True)
+        family_axes = zip(family_keys.items(), axes.flat[:3], strict=True)
+        for (family, keys), axis in family_axes:
+            plotted_values: list[float] = []
+            for key in keys:
+                values = self._values[key]
+                steps = self._steps[key]
+                stride = max(1, math.ceil(len(values) / 4000))
+                shown_values = values[::stride]
+                plotted_values.extend(shown_values)
+                axis.plot(
+                    self._epoch_coordinates(steps[::stride]),
+                    shown_values,
+                    linewidth=1.35,
+                    label=key.removeprefix(f"{family}."),
+                )
+            axis.set_title(family.replace("_", " ").title())
+            axis.set_xlabel("Training epoch")
+            axis.set_ylabel("Coherence error")
+            axis.set_xlim(left=0)
+            if plotted_values and all(value > 0.0 for value in plotted_values):
+                axis.set_yscale("log")
+            axis.grid(True, which="both", linestyle="--", alpha=0.35)
+            if keys:
+                axis.legend(frameon=False, fontsize=8)
+
+        diagnostics_axis = axes.flat[3]
+        positive_values: list[float] = []
+        for key in ("coherence_loss", *_GRADIENT_KEYS[:-1]):
+            values = self._values.get(key, [])
+            if not values:
+                continue
+            steps = self._steps[key]
+            stride = max(1, math.ceil(len(values) / 4000))
+            shown_values = values[::stride]
+            positive_values.extend(shown_values)
+            diagnostics_axis.plot(
+                self._epoch_coordinates(steps[::stride]),
+                shown_values,
+                linewidth=1.35,
+                label=key,
+            )
+        diagnostics_axis.set_title("Aggregate and gradient diagnostics")
+        diagnostics_axis.set_xlabel("Training epoch")
+        diagnostics_axis.set_ylabel("Loss / gradient norm")
+        diagnostics_axis.set_xlim(left=0)
+        if positive_values and all(value > 0.0 for value in positive_values):
+            diagnostics_axis.set_yscale("log")
+        diagnostics_axis.grid(True, which="both", linestyle="--", alpha=0.35)
+
+        state_axis = diagnostics_axis.twinx()
+        for key in ("gradient_cosine", *_STATE_KEYS):
+            values = self._values.get(key, [])
+            if not values:
+                continue
+            steps = self._steps[key]
+            stride = max(1, math.ceil(len(values) / 4000))
+            state_axis.plot(
+                self._epoch_coordinates(steps[::stride]),
+                values[::stride],
+                linewidth=1.0,
+                linestyle="--",
+                alpha=0.8,
+                label=key,
+            )
+        state_axis.axhline(0.0, color="black", linewidth=0.7, alpha=0.35)
+        state_axis.set_ylabel("Cosine / indicator")
+        handles, labels = diagnostics_axis.get_legend_handles_labels()
+        state_handles, state_labels = state_axis.get_legend_handles_labels()
+        if handles or state_handles:
+            diagnostics_axis.legend(
+                handles + state_handles,
+                labels + state_labels,
+                frameon=False,
+                fontsize=7,
+                loc="best",
+            )
+
+        figure.suptitle(f"{self.description} detailed coherence history")
+        temporary = self.coherence_plot_path.with_name(
+            f".{self.coherence_plot_path.name}.tmp"
+        )
+        figure.savefig(temporary, dpi=150, format="png")
+        plt.close(figure)
+        os.replace(temporary, self.coherence_plot_path)
 
     def close(self) -> None:
         """Write the latest figure and leave a completed terminal progress line."""
