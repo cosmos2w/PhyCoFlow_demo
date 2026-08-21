@@ -1,0 +1,27 @@
+{
+  "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_formal_baseline/runs/F0_frozen_current_DemoN9300_20260821_075633/best.pt",
+  "checkpoint_epoch": 180,
+  "stored_val_loss": 0.5202732086181641,
+  "snapshot_index": 0,
+  "condition_seed": 42,
+  "sample_seed": 1042,
+  "condition_checksum_sha256": "ae09f6172a11c8c284cee496bb2103e2ec7cde81faff071143b0b7fae20b3918",
+  "n_obs": 256,
+  "nfe": 4,
+  "ode_solver": "euler",
+  "field_names": [
+    "CO",
+    "T",
+    "U_0",
+    "U_1",
+    "p"
+  ],
+  "relative_l2": {
+    "CO": 0.43902620673179626,
+    "T": 0.17044517397880554,
+    "U_0": 0.21848556399345398,
+    "U_1": 0.9392993450164795,
+    "p": 0.03485078364610672
+  },
+  "mean_field_relative_l2": 0.3604214146733284
+}
