@@ -1,6 +1,6 @@
 
 
-import math, os, torch
+import math, os, time, torch
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple, Sequence
 
@@ -2222,6 +2222,137 @@ class PointCloudFFM(nn.Module):
             "loss": float(loss.detach().cpu()),
             "target_rms": float(target.pow(2).mean().sqrt().detach().cpu()),
         }
+
+    def prepare_training_bridge(
+        self,
+        x1: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Sample one coherent RF stochastic bridge for all effective queries."""
+        x0 = self.sample_source(coords)
+        t = torch.rand(x1.shape[0], device=x1.device, dtype=x1.dtype)
+        return {
+            "x0": x0,
+            "t": t,
+            "x_t": self.simulate(t, x0, x1),
+            "target": self.target_vector_field(x0, x1),
+        }
+
+    def training_loss_microbatched(
+        self,
+        *,
+        x1: torch.Tensor,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+        obs_indices: Optional[torch.Tensor] = None,
+        query_microbatch_size: int,
+        backward: bool = False,
+        reuse_condition_context: bool = True,
+        synchronize_timing: bool = False,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Evaluate one unchanged RF objective with bounded query activations."""
+        del obs_indices  # Point-cloud GL-RBF uses coordinates/field IDs directly.
+        n_query = int(coords.shape[1])
+        chunk_size = max(1, int(query_microbatch_size))
+        if chunk_size >= n_query:
+            loss, metrics = self.training_loss(
+                x1=x1, coords=coords, obs_coords=obs_coords,
+                obs_values=obs_values, obs_mask=obs_mask,
+                obs_field_ids=obs_field_ids,
+            )
+            if backward:
+                loss.backward()
+            metrics.update({
+                "rf_bridge_ms": 0.0,
+                "condition_context_ms": 0.0,
+                "query_chunk_forward_ms": 0.0,
+                "query_chunk_backward_ms": 0.0,
+                "query_microbatches": 1.0,
+            })
+            return loss.detach() if backward else loss, metrics
+
+        def sync() -> None:
+            if synchronize_timing and x1.device.type == "cuda":
+                torch.cuda.synchronize(x1.device)
+
+        sync()
+        start = time.perf_counter()
+        bridge = self.prepare_training_bridge(x1, coords)
+        sync()
+        bridge_ms = (time.perf_counter() - start) * 1000.0
+
+        condition_context = None
+        sync()
+        start = time.perf_counter()
+        if reuse_condition_context:
+            if not hasattr(self.model, "prepare_condition_context"):
+                raise ValueError("Condition-context reuse is unavailable for this backbone.")
+            condition_context = self.model.prepare_condition_context(
+                obs_coords, obs_values, obs_mask, obs_field_ids,
+            )
+        sync()
+        condition_ms = (time.perf_counter() - start) * 1000.0
+
+        total_elements = int(bridge["target"].numel())
+        total_loss = x1.new_zeros(())
+        forward_ms = 0.0
+        backward_ms = 0.0
+        chunks = 0
+        for start_index in range(0, n_query, chunk_size):
+            end_index = min(start_index + chunk_size, n_query)
+            query_slice = slice(start_index, end_index)
+            sync()
+            start = time.perf_counter()
+            if condition_context is not None:
+                pred = self.model.forward_query_chunk(
+                    t=bridge["t"],
+                    x_t_chunk=bridge["x_t"][:, query_slice],
+                    coords_chunk=coords[:, query_slice],
+                    condition_context=condition_context,
+                )
+            else:
+                pred = self.model(
+                    bridge["t"],
+                    bridge["x_t"][:, query_slice],
+                    coords[:, query_slice],
+                    obs_coords,
+                    obs_values,
+                    obs_mask,
+                    obs_field_ids,
+                )
+            chunk_loss = F.mse_loss(
+                pred, bridge["target"][:, query_slice], reduction="sum",
+            ) / total_elements
+            sync()
+            forward_ms += (time.perf_counter() - start) * 1000.0
+            if backward:
+                sync()
+                start = time.perf_counter()
+                chunk_loss.backward(
+                    retain_graph=condition_context is not None and end_index < n_query,
+                )
+                sync()
+                backward_ms += (time.perf_counter() - start) * 1000.0
+                total_loss = total_loss + chunk_loss.detach()
+            else:
+                total_loss = total_loss + chunk_loss
+            chunks += 1
+            del pred, chunk_loss
+
+        target = bridge["target"]
+        metrics = {
+            "loss": float(total_loss.detach().cpu()),
+            "target_rms": float(target.pow(2).mean().sqrt().detach().cpu()),
+            "rf_bridge_ms": bridge_ms,
+            "condition_context_ms": condition_ms,
+            "query_chunk_forward_ms": forward_ms,
+            "query_chunk_backward_ms": backward_ms,
+            "query_microbatches": float(chunks),
+        }
+        return total_loss, metrics
 
     def _sample_cached_streamed(
         self,

@@ -15,7 +15,7 @@ architecture experiments are excluded.
 | 2. Data-path polish | Passed | Selected normalization equivalence, append diagnostics, real-data A/B benchmark |
 | 3. Million-point scaling | Passed | 27 data-path rows + 9 current-model GPU rows through 1M/65,536 queries |
 | 4. Cached/streamed reconstruction | Passed | Tight equivalence matrix + real checkpoint + 1M-query stress |
-| 5. Query-microbatch training | Not started | Pending |
+| 5. Query-microbatch training | Passed | Full RF bridge once, all-gradient/Adam equivalence, 65,536-query GPU steps |
 | Limited validation package | Not started | Pending |
 
 ## Stage 1 log
@@ -229,3 +229,53 @@ architecture experiments are excluded.
 - The 1M-query path is memory-safe and allocates no full dynamic hidden head
   fields; peak scaling is explained by the explicit selected cache level.
 - Legacy reconstruction remains callable for A/B validation.
+
+## Stage 5 log
+
+### Implementation
+
+- Added RF bridge primitives that sample one full coherent RFF source field and
+  one time per physical sample for the whole effective query set.
+- Added query-microbatched loss execution with exact scalar-element weighting.
+  The differentiable Stage-4 condition context is built once, retained only as
+  needed across chunk backward calls, and never detached.
+- Standard training clears gradients once, accumulates every weighted query
+  chunk, clips once, and performs one optimizer step per physical DataLoader
+  batch. Validation uses the same weighted path under `no_grad`.
+- `n_query_points` remains the effective supervision count. New execution keys
+  are `train_query_microbatch_size` and
+  `reuse_condition_context_across_query_microbatches`.
+- The historical monolithic `training_loss()` is unchanged and remains the path
+  when the microbatch is null or not smaller than the effective query count.
+- Added diagnostic phases for RF bridge, condition context, chunk forward,
+  chunk backward, and chunk count.
+
+### Equivalence and scaling evidence
+
+- Complete regression suite on physical GPU 0: **47 passed in 11.69 s**.
+- Mandatory effective-31/microbatch-7 test confirms the last 3-point chunk,
+  total loss, every gradient, learnable RBF sigma gradient, one clipped Adam
+  update, and validation loss. The recording RFF prior is called exactly once
+  with all 31 coordinates.
+- Raw gradients pass `rtol=8e-5, atol=2e-7`; the largest one-step Adam parameter
+  delta is `5.8e-6`, caused by Adam amplification of ~1e-9 FP32 cancellation in
+  near-zero attention-bias gradients.
+- At 65,536 effective queries, microbatch 4,096 reduces peak allocation from
+  `3,025.9 MB` to `323.7 MB` (**89.3%**) for a 26.5% time cost. Microbatch 8,192
+  uses `513.0 MB` (**83.0% lower**) for an 11.5% cost.
+- A 4,096-query chunk uses `320.9 MB` at 16,384 effective queries and
+  `323.7 MB` at 65,536, demonstrating that activation peak follows chunk size,
+  not total supervision.
+- Matched benchmark mean loss at 65,536 is `2.069149295` monolithic,
+  `2.069149295` micro-4k, and `2.069149335` micro-8k.
+- Raw CSV/JSON, exact command, phase timings, and interpretation are under
+  `_CheckNotes/Stage5_query_microbatch/`.
+
+### Stage-5 gate decision: PASSED
+
+- RF stochastic coherence and the unchanged mean-MSE objective are preserved.
+- Losses, all gradients, learnable sigma, and one optimizer update are
+  FP32-equivalent.
+- One physical batch still produces one clipped optimizer step.
+- 65,536 effective queries train successfully, and peak activation memory is
+  controlled by microbatch size.

@@ -160,6 +160,8 @@ condition_blur_sigma: 2.5
 # These are hyperparameters for the training process
 # ----------------------------------------------------------
 n_query_points : 4096       # Number of query points to be evaluated in training process
+train_query_microbatch_size: null  # null or >= n_query_points keeps monolithic query execution
+reuse_condition_context_across_query_microbatches: true
 
 # Reconstruction execution reference:
 # reconstruction_execution_mode: "legacy_full"

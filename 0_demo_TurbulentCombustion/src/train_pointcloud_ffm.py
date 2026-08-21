@@ -297,6 +297,9 @@ def parse_args():
     # These are hyperparameters for training process
     # ------------------------------
     p.add_argument("--n-query-points", type=int, default=4096)
+    p.add_argument("--train-query-microbatch-size", type=int, default=None)
+    p.add_argument("--reuse-condition-context-across-query-microbatches",
+                   action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--reconstruction-execution-mode", type=str, default="legacy_full",
                    choices=["legacy_full", "cached_streamed"])
     p.add_argument("--reconstruction-query-chunk-size", type=int, default=8192)
@@ -749,6 +752,8 @@ def run_epoch(
     epoch: int = 0,
     data_path_config: Optional[ResolvedDataPathConfig] = None,
     diagnostics: Optional[DataPathDiagnostics] = None,
+    train_query_microbatch_size: Optional[int] = None,
+    reuse_condition_context_across_query_microbatches: bool = True,
 ) -> float:
     training = optimizer is not None
     model.train(training)
@@ -797,17 +802,41 @@ def run_epoch(
         allocated_before_model_mb = (
             torch.cuda.memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0
         )
+        microbatch_active = (
+            train_query_microbatch_size is not None
+            and int(train_query_microbatch_size) > 0
+            and int(train_query_microbatch_size) < int(tensors["coords_q"].shape[1])
+            and hasattr(model, "training_loss_microbatched")
+        )
         _sync_cuda_for_diagnostic(device, diagnostic_step)
         start = time.perf_counter()
-        loss, _ = model.training_loss(
-            x1=tensors["fields_q"],
-            coords=tensors["coords_q"],
-            obs_coords=tensors["obs_coords"],
-            obs_values=tensors["obs_values"],
-            obs_mask=tensors["obs_mask"],
-            obs_field_ids=tensors["obs_field_ids"],
-            obs_indices=tensors["obs_indices"],
-        )
+        if microbatch_active:
+            grad_context = torch.enable_grad() if training else torch.no_grad()
+            with grad_context:
+                loss, microbatch_metrics = model.training_loss_microbatched(
+                    x1=tensors["fields_q"],
+                    coords=tensors["coords_q"],
+                    obs_coords=tensors["obs_coords"],
+                    obs_values=tensors["obs_values"],
+                    obs_mask=tensors["obs_mask"],
+                    obs_field_ids=tensors["obs_field_ids"],
+                    obs_indices=tensors["obs_indices"],
+                    query_microbatch_size=int(train_query_microbatch_size),
+                    backward=training,
+                    reuse_condition_context=reuse_condition_context_across_query_microbatches,
+                    synchronize_timing=diagnostic_step,
+                )
+        else:
+            microbatch_metrics = {}
+            loss, _ = model.training_loss(
+                x1=tensors["fields_q"],
+                coords=tensors["coords_q"],
+                obs_coords=tensors["obs_coords"],
+                obs_values=tensors["obs_values"],
+                obs_mask=tensors["obs_mask"],
+                obs_field_ids=tensors["obs_field_ids"],
+                obs_indices=tensors["obs_indices"],
+            )
         _sync_cuda_for_diagnostic(device, diagnostic_step)
         forward_ms = (time.perf_counter() - start) * 1000.0
 
@@ -815,7 +844,8 @@ def run_epoch(
         optimizer_ms = 0.0
         if training:
             start = time.perf_counter()
-            loss.backward()
+            if not microbatch_active:
+                loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             _sync_cuda_for_diagnostic(device, diagnostic_step)
             backward_ms = (time.perf_counter() - start) * 1000.0
@@ -862,6 +892,15 @@ def run_epoch(
                 "pre_model_total_ms": pre_model_ms,
                 "model_forward_ms": forward_ms,
                 "backward_ms": backward_ms,
+                "query_microbatch_active": int(microbatch_active),
+                "train_query_microbatch_size": (
+                    int(train_query_microbatch_size) if microbatch_active else 0
+                ),
+                "rf_bridge_ms": float(microbatch_metrics.get("rf_bridge_ms", 0.0)),
+                "condition_context_ms": float(microbatch_metrics.get("condition_context_ms", 0.0)),
+                "query_chunk_forward_ms": float(microbatch_metrics.get("query_chunk_forward_ms", 0.0)),
+                "query_chunk_backward_ms": float(microbatch_metrics.get("query_chunk_backward_ms", 0.0)),
+                "query_microbatches": int(microbatch_metrics.get("query_microbatches", 1)),
                 "optimizer_ms": optimizer_ms,
                 "total_training_step_ms": (time.perf_counter() - total_step_start) * 1000.0,
                 "allocated_after_materialization_mb": allocated_after_materialization_mb,
@@ -2221,6 +2260,10 @@ def main():
                 epoch=epoch,
                 data_path_config=data_path_config,
                 diagnostics=data_path_diagnostics,
+                train_query_microbatch_size=args.train_query_microbatch_size,
+                reuse_condition_context_across_query_microbatches=(
+                    args.reuse_condition_context_across_query_microbatches
+                ),
             )
             global_step += len(train_loader)
         train_seconds = time.perf_counter() - train_wall_start
@@ -2264,6 +2307,10 @@ def main():
                     epoch=epoch,
                     data_path_config=data_path_config,
                     diagnostics=data_path_diagnostics,
+                    train_query_microbatch_size=args.train_query_microbatch_size,
+                    reuse_condition_context_across_query_microbatches=(
+                        args.reuse_condition_context_across_query_microbatches
+                    ),
                 )
             validation_seconds = time.perf_counter() - validation_wall_start
             print(f"[valid] epoch={epoch:04d} loss={val_loss:.6e}")
