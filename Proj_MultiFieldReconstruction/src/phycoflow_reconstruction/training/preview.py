@@ -148,12 +148,31 @@ def _plot_preview(
                 points = axes[field_index, column].scatter(x, y, c=values, s=8, cmap=cmap)
                 axes[field_index, column].set_title(title)
                 figure.colorbar(points, ax=axes[field_index, column], fraction=0.046, pad=0.03)
+            if field_sensor_mask.any():
+                sensor_y = (
+                    obs_coords[field_sensor_mask, 1]
+                    if obs_coords.shape[1] > 1
+                    else np.zeros(int(field_sensor_mask.sum()), dtype=obs_coords.dtype)
+                )
+                axes[field_index, 1].scatter(
+                    obs_coords[field_sensor_mask, 0],
+                    sensor_y,
+                    s=18,
+                    facecolors="none",
+                    edgecolors="white",
+                    linewidths=0.7,
+                    label="sensors",
+                    zorder=3,
+                )
 
         axes[field_index, 0].set_ylabel(field_name)
         for axis in axes[field_index]:
             axis.tick_params(labelsize=8)
-        if field_sensor_mask.any():
-            axes[field_index, 1].legend(loc="best", frameon=False, fontsize=7)
+        handles, labels = axes[field_index, 1].get_legend_handles_labels()
+        if handles:
+            axes[field_index, 1].legend(
+                handles, labels, loc="best", frameon=False, fontsize=7
+            )
 
     figure.suptitle(f"Sparse reconstruction preview — epoch {epoch:.3f}")
     outputs = tuple(path_stem.with_suffix(suffix) for suffix in (".png", ".svg", ".pdf"))
