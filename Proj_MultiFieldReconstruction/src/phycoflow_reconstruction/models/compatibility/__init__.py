@@ -7,14 +7,22 @@ first post-training migration checks.
 
 from .legacy_tc_demo50 import (
     DEMO50_DATASET_FIELDS,
+    DEMO51_CHECKPOINT_FIELDS,
     Demo50CompatibilityManifest,
     LegacyDemo50Model,
+    LegacyTCCompatibilityManifest,
+    LegacyTCPointCloudModel,
     load_legacy_demo50,
+    load_legacy_tc_pointcloud,
 )
 
 __all__ = [
     "DEMO50_DATASET_FIELDS",
+    "DEMO51_CHECKPOINT_FIELDS",
     "Demo50CompatibilityManifest",
     "LegacyDemo50Model",
+    "LegacyTCCompatibilityManifest",
+    "LegacyTCPointCloudModel",
     "load_legacy_demo50",
+    "load_legacy_tc_pointcloud",
 ]

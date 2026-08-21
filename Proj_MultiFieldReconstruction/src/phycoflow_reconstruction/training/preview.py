@@ -14,6 +14,7 @@ import torch
 
 from ..contracts import ObservationBatch
 from ..data.factory import open_field_dataset
+from ..data.normalization import FieldNormalizer
 from ..data.sensor_protocols import build_observation_batch
 from ..evaluation import reconstruction_metrics
 from .common import sensor_protocol_from_config
@@ -196,6 +197,7 @@ class TrainingReconstructionPreview:
         store: RunStore,
         steps_per_epoch: int,
         device: torch.device,
+        normalizer: FieldNormalizer | None = None,
     ) -> None:
         settings = config.get("evaluation", {}).get("preview", {})
         self.enabled = bool(settings.get("enabled", False))
@@ -210,7 +212,9 @@ class TrainingReconstructionPreview:
             return
 
         split = str(settings.get("split", "validation"))
-        self.dataset = open_field_dataset(config["dataset"], split=split)
+        self.dataset = open_field_dataset(
+            config["dataset"], split=split, normalizer=normalizer
+        )
         sample_index = int(settings.get("sample_index", 0))
         if not 0 <= sample_index < len(self.dataset):
             raise IndexError(

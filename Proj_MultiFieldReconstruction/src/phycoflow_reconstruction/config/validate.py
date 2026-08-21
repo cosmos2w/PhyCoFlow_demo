@@ -64,6 +64,9 @@ def _validate_common_sections(config: Mapping[str, Any]) -> None:
             "grid_mapping_verified",
             "coordinate_reorder",
             "include_temporal_derivative",
+            "split_policy",
+            "split_seed",
+            "train_ratio",
         },
         "dataset",
     )
@@ -76,6 +79,11 @@ def _validate_common_sections(config: Mapping[str, Any]) -> None:
         raise ValueError("dataset.reconstruction_unit is invalid")
     if int(dataset.get("time_stride", 1)) < 1:
         raise ValueError("dataset.time_stride must be positive")
+    split_policy = dataset.get("split_policy", "canonical")
+    if split_policy not in {"canonical", "legacy_seeded_random_frames"}:
+        raise ValueError("dataset.split_policy is invalid")
+    if not 0.0 < float(dataset.get("train_ratio", 0.9)) < 1.0:
+        raise ValueError("dataset.train_ratio must be strictly between zero and one")
     names = dataset.get("field_names")
     units = dataset.get("field_units")
     if names is not None and (not names or len(set(names)) != len(names)):
@@ -248,10 +256,19 @@ def _validate_post_training(config: Mapping[str, Any]) -> None:
         "source",
     )
     source_kind = source.get("kind", "native_run")
-    if source_kind not in {"native_run", "legacy_demo50"}:
-        raise ValueError("source.kind must be native_run or legacy_demo50")
+    if source_kind not in {"native_run", "legacy_demo50", "legacy_tc_pointcloud"}:
+        raise ValueError(
+            "source.kind must be native_run, legacy_demo50, or legacy_tc_pointcloud"
+        )
     if source_kind == "legacy_demo50" and config["model"].get("name") != "legacy_demo50":
         raise ValueError("legacy_demo50 source requires model.name=legacy_demo50")
+    if (
+        source_kind == "legacy_tc_pointcloud"
+        and config["model"].get("name") != "legacy_tc_pointcloud"
+    ):
+        raise ValueError(
+            "legacy_tc_pointcloud source requires model.name=legacy_tc_pointcloud"
+        )
     if "coherence" not in config:
         _validate_physics_settings(config["physics"])
         required = {"objectives", "rollout", "observation_consistency", "trainable"}

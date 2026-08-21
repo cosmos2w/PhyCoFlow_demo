@@ -1,8 +1,8 @@
-"""Strict, isolated compatibility adapter for turbulent-combustion DemoN50.
+"""Strict, isolated compatibility adapter for verified turbulent-combustion legacy runs.
 
-DemoN50 predates the narrowed PointCloudFFM API and used the historical
+DemoN50 and DemoN51 predate the narrowed PointCloudFFM API and used the historical
 ``GL_rbf_ENH/topk_rbf_glres`` velocity network. This module preserves only the
-architecture and Euler/RFF behavior needed by that one run. It is deliberately
+architecture and Euler/RFF behavior needed by those verified runs. It is deliberately
 not registered as a model or gather mode for new training, and it never imports
 the old demo package at runtime.
 
@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover - exercised only in minimal CPU environm
 
 DEMO50_DATASET_FIELDS = ("CO", "T", "U_0", "U_1", "p")
 DEMO50_STALE_CHECKPOINT_FIELDS = ("CH4", "CO", "T", "U_1", "p")
+DEMO51_CHECKPOINT_FIELDS = DEMO50_DATASET_FIELDS
+SUPPORTED_DEMO_NUMBERS = frozenset({50, 51})
 
 
 def _make_mlp(in_dim: int, hidden_dim: int, out_dim: int, depth: int) -> nn.Sequential:
@@ -318,7 +320,10 @@ class _LegacyDemo50Velocity(nn.Module):
         k = min(self.gather_topk, sensor_coordinates.shape[1])
         if self.neighbor_backend == "keops":
             if LazyTensor is None:
-                raise ImportError("DemoN50 requires pykeops for neighbor_backend='keops'")
+                raise ImportError(
+                    "legacy turbulent-combustion PointCloudFFM requires pykeops "
+                    "for neighbor_backend='keops'"
+                )
             query = LazyTensor(query_coordinates.contiguous()[:, :, None, :])
             sensors = LazyTensor(sensor_coordinates.contiguous()[:, None, :, :])
             distances = ((query - sensors) ** 2).sum(-1)
@@ -426,12 +431,18 @@ class _LegacyRFFGaussianPrior(nn.Module):
 
 
 class LegacyDemo50Model(nn.Module):
-    """Version-locked RF wrapper whose state dictionary matches DemoN50."""
+    """Version-locked RF wrapper whose state dictionary matches DemoN50 and DemoN51."""
 
     capabilities = ModelCapabilities("point", True, True, False, True, ("post_training",))
 
-    def __init__(self, config: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        config: Mapping[str, Any],
+        *,
+        compatibility_version: str = "legacy-tc-pointcloud-v1",
+    ) -> None:
         super().__init__()
+        self.compatibility_version = str(compatibility_version)
         self.model = _LegacyDemo50Velocity(config)
         self.prior = _LegacyRFFGaussianPrior(
             3, int(config["rff_features"]), float(config["rff_lengthscale"])
@@ -551,13 +562,17 @@ class LegacyDemo50Model(nn.Module):
                 )
         return ReconstructionBatch(
             prediction,
-            diagnostics={"compatibility_version": "demo50-v1", "sampling_steps": steps},
+            diagnostics={
+                "compatibility_version": self.compatibility_version,
+                "sampling_steps": steps,
+            },
         )
 
 
 @dataclass(frozen=True)
 class Demo50CompatibilityManifest:
     compatibility_version: str
+    source_demo_num: int
     source_run_directory: str
     source_checkpoint: str
     source_dataset_path: str
@@ -625,7 +640,8 @@ def _validate_channel_mapping(
     )
     if normalized != expected:
         raise ValueError(
-            "DemoN50 has stale checkpoint field labels; provide the exact verified positional "
+            "legacy checkpoints may have stale checkpoint field labels; provide the exact "
+            "verified positional "
             f"mapping {expected}, received {normalized}"
         )
     return normalized
@@ -648,7 +664,7 @@ def _strict_load(model: nn.Module, state: Mapping[str, torch.Tensor]) -> None:
     model.load_state_dict(state, strict=True)
 
 
-def load_legacy_demo50(
+def load_legacy_tc_pointcloud(
     run_directory: str | Path,
     dataset_path: str | Path,
     channel_mapping: Sequence[Mapping[str, Any]],
@@ -656,9 +672,9 @@ def load_legacy_demo50(
     checkpoint: str = "best.pt",
     map_location: str | torch.device = "cpu",
 ) -> tuple[LegacyDemo50Model, Demo50CompatibilityManifest]:
-    """Load DemoN50 only after validating provenance, fields, and every state key."""
+    """Load a verified legacy source after validating provenance, fields, and state keys."""
     if checkpoint not in {"best.pt", "last.pt"}:
-        raise ValueError("DemoN50 checkpoint must be best.pt or last.pt")
+        raise ValueError("legacy checkpoint must be best.pt or last.pt")
     run_directory = Path(run_directory).resolve()
     dataset_path = Path(dataset_path).resolve()
     required = {
@@ -669,26 +685,34 @@ def load_legacy_demo50(
     }
     missing_files = [str(path) for path in required.values() if not path.is_file()]
     if missing_files:
-        raise FileNotFoundError(f"DemoN50 compatibility inputs are missing: {missing_files}")
+        raise FileNotFoundError(f"legacy compatibility inputs are missing: {missing_files}")
 
     args = json.loads(required["args"].read_text())
     run_config = yaml.safe_load(required["config"].read_text())
     payload = torch.load(required["checkpoint"], map_location=map_location, weights_only=False)
     normalization = torch.load(required["normalization"], map_location="cpu", weights_only=False)
-    if args.get("Demo_Num") != 50 or run_config.get("Demo_Num") != 50:
-        raise ValueError("compatibility adapter accepts only Demo_Num=50")
+    demo_num = int(args.get("Demo_Num", -1))
+    if demo_num != int(run_config.get("Demo_Num", -2)) or demo_num not in SUPPORTED_DEMO_NUMBERS:
+        raise ValueError(
+            "compatibility adapter accepts only matching verified Demo_Num values "
+            f"{sorted(SUPPORTED_DEMO_NUMBERS)}"
+        )
     if args.get("backbone") != "GL_rbf_ENH" or args.get("gather_mode") != "topk_rbf_glres":
-        raise ValueError("DemoN50 source architecture does not match the version-locked adapter")
+        raise ValueError("legacy source architecture does not match the version-locked adapter")
 
     actual_fields = _read_h5_fields(dataset_path)
     if actual_fields != DEMO50_DATASET_FIELDS:
         raise ValueError(f"expected source fields {DEMO50_DATASET_FIELDS}, found {actual_fields}")
     checkpoint_labels = tuple(payload["field_names"])
-    if checkpoint_labels != DEMO50_STALE_CHECKPOINT_FIELDS:
+    expected_checkpoint_labels = (
+        DEMO50_STALE_CHECKPOINT_FIELDS if demo_num == 50 else DEMO51_CHECKPOINT_FIELDS
+    )
+    if checkpoint_labels != expected_checkpoint_labels:
         raise ValueError(f"unexpected checkpoint labels {checkpoint_labels}")
     verified_mapping = _validate_channel_mapping(channel_mapping, checkpoint_labels, actual_fields)
 
-    model = LegacyDemo50Model(args)
+    compatibility_version = f"legacy-tc-demo{demo_num}-v1"
+    model = LegacyDemo50Model(args, compatibility_version=compatibility_version)
     _strict_load(model, payload["model"])
     checkpoint_mean = tuple(float(value) for value in payload["mean"].cpu())
     checkpoint_std = tuple(float(value) for value in payload["std"].cpu())
@@ -698,7 +722,8 @@ def load_legacy_demo50(
         raise ValueError("checkpoint normalization and dataset_stats.pt disagree")
 
     manifest = Demo50CompatibilityManifest(
-        compatibility_version="demo50-v1",
+        compatibility_version=compatibility_version,
+        source_demo_num=demo_num,
         source_run_directory=str(run_directory),
         source_checkpoint=checkpoint,
         source_dataset_path=str(dataset_path),
@@ -725,3 +750,25 @@ def load_legacy_demo50(
         },
     )
     return model, manifest
+
+
+def load_legacy_demo50(
+    run_directory: str | Path,
+    dataset_path: str | Path,
+    channel_mapping: Sequence[Mapping[str, Any]],
+    *,
+    checkpoint: str = "best.pt",
+    map_location: str | torch.device = "cpu",
+) -> tuple[LegacyDemo50Model, Demo50CompatibilityManifest]:
+    """Backward-compatible entry point for existing DemoN50 configurations and tests."""
+    return load_legacy_tc_pointcloud(
+        run_directory,
+        dataset_path,
+        channel_mapping,
+        checkpoint=checkpoint,
+        map_location=map_location,
+    )
+
+
+LegacyTCPointCloudModel = LegacyDemo50Model
+LegacyTCCompatibilityManifest = Demo50CompatibilityManifest

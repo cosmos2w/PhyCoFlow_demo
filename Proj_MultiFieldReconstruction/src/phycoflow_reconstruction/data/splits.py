@@ -1,4 +1,4 @@
-"""Deterministic trajectory and chronological-frame split helpers."""
+"""Deterministic trajectory and frame split helpers."""
 
 from __future__ import annotations
 
@@ -38,6 +38,32 @@ def chronological_frame_indices(num_frames: int, split: str, stride: int = 1) ->
     }
     start, stop = bounds[split]
     return np.arange(start, stop, stride, dtype=np.int64)
+
+
+def legacy_seeded_random_frame_indices(
+    num_frames: int,
+    split: str,
+    *,
+    train_ratio: float = 0.9,
+    seed: int = 42,
+    stride: int = 1,
+) -> np.ndarray:
+    """Reproduce the historical point-cloud demo's seeded 90/10 frame split.
+
+    The legacy loader shuffled all eligible frame indices with NumPy's default
+    generator, assigned the leading ``int(N * train_ratio)`` frames to training,
+    used the complement for both validation and test, then sorted each selection.
+    """
+    split = normalize_split(split)
+    if stride < 1:
+        raise ValueError("time stride must be positive")
+    if not 0.0 < train_ratio < 1.0:
+        raise ValueError("train_ratio must be strictly between zero and one")
+    indices = np.arange(0, num_frames, stride, dtype=np.int64)
+    np.random.default_rng(seed).shuffle(indices)
+    train_count = int(indices.size * train_ratio)
+    selected = indices[:train_count] if split == "train" else indices[train_count:]
+    return np.sort(selected)
 
 
 def resolve_split(handle: h5py.File, split: str, time_stride: int = 1) -> SplitSelection:

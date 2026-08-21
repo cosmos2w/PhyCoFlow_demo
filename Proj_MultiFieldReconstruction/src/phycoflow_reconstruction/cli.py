@@ -66,7 +66,10 @@ def _load_case_config(
                         "observations": "source_run.resolved_config.yaml",
                         "post_training": "child_config",
                     }
-                elif config.get("source", {}).get("kind") == "legacy_demo50":
+                elif config.get("source", {}).get("kind") in {
+                    "legacy_demo50",
+                    "legacy_tc_pointcloud",
+                }:
                     source = config.setdefault("source", {})
                     source["inherited_base_keys"] = [
                         "model_architecture",

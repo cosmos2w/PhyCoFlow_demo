@@ -23,6 +23,7 @@ from ..models import build_model
 from ..physics import build_case_diagnostics, build_case_physics
 from ..training.common import sensor_protocol_from_config
 from ..training.run_store import file_sha256, load_model_state_strict, load_project_checkpoint
+from ..training.source import load_source_model
 from .metrics import reconstruction_metrics
 
 
@@ -96,7 +97,20 @@ def evaluate_run(
         # Case diagnostics may require paired finite-difference context even
         # when the source was trained only with data loss.
         dataset_config["include_temporal_derivative"] = True
-    dataset = open_field_dataset(dataset_config, split=split)
+    source_kind = config.get("source", {}).get("kind", "native_run")
+    legacy_source = source_kind in {"legacy_demo50", "legacy_tc_pointcloud"}
+    model = None
+    source_dataset = None
+    if legacy_source:
+        model, source_dataset, _ = load_source_model(config, device)
+        dataset = open_field_dataset(
+            dataset_config,
+            split=split,
+            normalizer=source_dataset.normalizer,
+        )
+        source_dataset.close()
+    else:
+        dataset = open_field_dataset(dataset_config, split=split)
     sample_count = min(int(max_samples), len(dataset))
     if sample_count < 1:
         raise ValueError(f"split {split!r} contains no samples")
@@ -118,7 +132,8 @@ def evaluate_run(
         physics = build_case_physics(
             config["case"], config["physics"], dataset.data_spec, dataset.normalizer
         )
-    model = build_model(config["model"], dataset.data_spec, physics_provider=physics).to(device)
+    if model is None:
+        model = build_model(config["model"], dataset.data_spec, physics_provider=physics).to(device)
     checkpoint_path = _checkpoint_path(run_dir, checkpoint)
     payload = load_project_checkpoint(checkpoint_path)
     load_model_state_strict(model, payload["model"])

@@ -1,0 +1,13 @@
+legacy:
+  run_directory: runs/legacy_sources/ffm_tc_pointcloud_DemoN51_20260718_083538
+  checkpoint: last.pt
+  dataset_path: ../../Dataset/turbulent_combustion/Merged_COTU0U1P.h5
+  channel_mapping:
+    - {channel: 0, checkpoint_label: CO, dataset_field: CO}
+    - {channel: 1, checkpoint_label: T, dataset_field: T}
+    - {channel: 2, checkpoint_label: U_0, dataset_field: U_0}
+    - {channel: 3, checkpoint_label: U_1, dataset_field: U_1}
+    - {channel: 4, checkpoint_label: p, dataset_field: p}
+
+output:
+  manifest: manifests/demo51_compatibility.json

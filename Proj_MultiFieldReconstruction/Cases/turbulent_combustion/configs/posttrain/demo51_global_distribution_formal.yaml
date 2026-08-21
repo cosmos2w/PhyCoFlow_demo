@@ -1,0 +1,178 @@
+stage: post_training
+case: turbulent_combustion
+
+# Copy the complete historical run directory here; do not copy only the checkpoint.
+source_run: runs/legacy_sources/ffm_tc_pointcloud_DemoN51_20260718_083538
+source_checkpoint: last.pt
+inherit_base_config: true
+source:
+  kind: legacy_tc_pointcloud
+  allow_integration_source: false
+  channel_mapping:
+    - {channel: 0, checkpoint_label: CO, dataset_field: CO}
+    - {channel: 1, checkpoint_label: T, dataset_field: T}
+    - {channel: 2, checkpoint_label: U_0, dataset_field: U_0}
+    - {channel: 3, checkpoint_label: U_1, dataset_field: U_1}
+    - {channel: 4, checkpoint_label: p, dataset_field: p}
+
+dataset:
+  path: ../../Dataset/turbulent_combustion/Merged_COTU0U1P.h5
+  split: train
+  reconstruction_unit: snapshot
+  field_names: [CO, T, U_0, U_1, p]
+  field_units: [unknown, unknown, unknown, unknown, unknown]
+  normalization: none
+  coordinate_dim: 3
+  grid_shape: [100, 403]
+  grid_mapping_verified: true
+  coordinate_reorder: stored
+  time_stride: 1
+  benchmark_eligible: true
+  # Exact DemoN51/DemoN511 semantics: NumPy default_rng(42), shuffled 90/10 frames,
+  # sorted within each subset; validation and test both use the held-out complement.
+  split_policy: legacy_seeded_random_frames
+  split_seed: 42
+  train_ratio: 0.9
+
+# Architecture and training normalizer are reconstructed strictly from source args.json.
+model:
+  name: legacy_tc_pointcloud
+  query_points: 4096
+
+# Match DemoN51: condition on 192--384 T sensors at random locations.
+observations:
+  protocol: random_uniform
+  seed: 42
+  fields:
+    T: {count_min: 192, count_max: 384}
+
+objectives:
+  data_retention: {enabled: true, weight: 0.1}
+  coherence: {enabled: true, weight: 1.0}
+
+coherence:
+  schedule:
+    start_epoch: 1
+    every_n_steps: 1
+    weight_warmup_epochs: 0
+    interval_rescale: false
+  compute_budget:
+    batch_size: 16
+    point_count: 4096
+    query_policy: fixed_shared
+    query_seed: 100045
+  families:
+    global_distribution:
+      enabled: true
+      weight: 1.0
+      target_use: paired_supervised
+      units: model_units
+      fields: [CO, T, U_0, U_1, p]
+      reference_bank: {enabled: false}
+      components:
+        self: {enabled: true, weight: 1.0}
+        mutual: {enabled: true, weight: 1.0, directions: 16, seed: 1234}
+        cross: {enabled: true, weight: 1.0, directions: 32, top_fraction: 0.1, seed: 1234, include_axes: true, qmc: true}
+    cross_spectrum:
+      enabled: true
+      weight: 1.0
+      target_use: paired_supervised
+      units: model_units
+      fields: [CO, T, U_0, U_1, p]
+      pairs: [[CO, T], [T, U_0], [T, U_1], [U_0, U_1]]
+      reference_bank: {enabled: false}
+      graph:
+        k_neighbors: 16
+        sigma: null
+        num_modes: 48
+        exclude_zero: true
+        bands: [low, mid, high]
+      eps: 1.0e-8
+      components:
+        same_frequency: {enabled: true, weight: 1.0}
+        cross_frequency: {enabled: true, weight: 1.0}
+        band_energy: {enabled: false, weight: 0.0}
+    topology:
+      enabled: true
+      weight: 1.0
+      target_use: paired_supervised
+      units: model_units
+      fields: [CO, T]
+      reference_bank: {enabled: false}
+      geometry:
+        grid_shape: [32, 128]
+        axes: [0, 1]
+        neighbors: 4
+        power: 2.0
+        periodic: false
+      filtration:
+        quantiles: [0.10, 0.25, 0.40, 0.50, 0.60, 0.75, 0.90]
+        dimensions: [0, 1]
+        directions: [superlevel, sublevel]
+        sharpness: 12.0
+        smoothing_sigma: 0.8
+      components:
+        self: {enabled: true, weight: 1.0}
+        mutual:
+          enabled: true
+          weight: 1.0
+          pairs: [[CO, T]]
+          lines: 3
+          theta_min_degrees: 15.0
+
+rollout: {steps: 4, solver: euler}
+
+observation_consistency:
+  mode: endpoint_smooth
+  strength: 1.0
+  sigma: 0.05
+  schedule_power: 2.0
+  final_clamp: true
+  chunk_size: 2048
+
+trainable: {scope: full_model}
+
+# The legacy training split contains 9,000 frames. A 25% epoch budget corresponds
+# to 2,250 frames and rounds up to 16 batches (80,000 optimizer steps total).
+optimization:
+  epochs: 5000
+  batch_size: 32
+  train_fraction: 0.20
+  lr: 5.0e-5
+  weight_decay: 1.0e-6
+  grad_clip: 1.0
+  gradient_balance: config
+  config_missing_behavior: error
+  config_data_grad_scale: 1.0
+  config_coherence_grad_scale: 1.0
+
+runtime:
+  seed: 42
+  device: cuda:1
+  deterministic: true
+  num_workers: 4
+  data_strategy: async_cpu
+  vram_dataset_threshold_gb: 20
+  progress: true
+  plot_every_steps: 10
+
+evaluation:
+  split: test
+  max_samples: 4
+  query_points: 4096
+  generation_steps: 4
+  seed: 2027
+  preview:
+    enabled: true
+    every_epochs: 5
+    split: test
+    sample_index: 0
+    query_points: 4096
+    generation_steps: 4
+    seed: 2027
+    keep_history: false
+
+checkpointing: {enabled: true, every_epochs: 500, save_epoch_one: true}
+
+output:
+  experiment_name: demo51_all_coherence_formal_5k

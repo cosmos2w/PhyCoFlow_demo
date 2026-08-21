@@ -1,7 +1,8 @@
 """Lazy canonical HDF5 loader for snapshots and complete space-time states.
 
 The loader respects stored trajectory splits and uses chronological 80/10/10
-frames only for a single long trajectory without canonical split datasets.
+frames only for a single long trajectory without canonical split datasets,
+unless a documented compatibility split is explicitly selected.
 It never writes statistics beside a shared HDF5 payload.
 """
 
@@ -19,7 +20,12 @@ from torch.utils.data import Dataset
 
 from ..contracts import DataSpec, FieldSample
 from .normalization import FieldNormalizer
-from .splits import SplitSelection, resolve_split
+from .splits import (
+    SplitSelection,
+    legacy_seeded_random_frame_indices,
+    normalize_split,
+    resolve_split,
+)
 
 
 def _json_attr(handle: h5py.File, name: str, default: Any) -> Any:
@@ -76,6 +82,9 @@ class H5FieldDataset(Dataset[FieldSample]):
         grid_shape: Sequence[int] | None = None,
         coordinate_reorder: str = "stored",
         include_temporal_derivative: bool = False,
+        split_policy: str = "canonical",
+        split_seed: int = 42,
+        train_ratio: float = 0.9,
     ) -> None:
         self.path = Path(path).resolve()
         self.split_name = split
@@ -104,7 +113,31 @@ class H5FieldDataset(Dataset[FieldSample]):
             self.field_names = _field_names(handle, field_names)
             raw_units = tuple(_json_attr(handle, "field_units", []))
             self.field_units = tuple(field_units or raw_units or ("unknown",) * self.channel_count)
-            self.selection: SplitSelection = resolve_split(handle, split, self.time_stride)
+            if split_policy == "canonical":
+                self.selection = resolve_split(handle, split, self.time_stride)
+            elif split_policy == "legacy_seeded_random_frames":
+                if self.batch_count != 1 or reconstruction_unit != "snapshot":
+                    raise ValueError(
+                        "legacy_seeded_random_frames requires one snapshot trajectory"
+                    )
+                normalized_split = normalize_split(split)
+                frames = legacy_seeded_random_frame_indices(
+                    self.time_count,
+                    normalized_split,
+                    train_ratio=float(train_ratio),
+                    seed=int(split_seed),
+                    stride=self.time_stride,
+                )
+                self.selection = SplitSelection(
+                    normalized_split,
+                    (0,),
+                    tuple(int(value) for value in frames),
+                    "legacy_seeded_random_frames",
+                )
+            else:
+                raise ValueError(
+                    "split_policy must be canonical or legacy_seeded_random_frames"
+                )
             stored_grid_shape = tuple(int(v) for v in _json_attr(handle, "grid_shape", []))
             if not stored_grid_shape:
                 stored_grid_shape = tuple(v for v in shape[2:5] if v > 1) or (shape[2],)

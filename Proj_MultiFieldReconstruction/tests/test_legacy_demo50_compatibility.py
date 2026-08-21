@@ -22,7 +22,9 @@ from phycoflow_reconstruction.data.normalization import FieldNormalizer
 from phycoflow_reconstruction.models.compatibility.legacy_tc_demo50 import (
     DEMO50_DATASET_FIELDS,
     DEMO50_STALE_CHECKPOINT_FIELDS,
+    DEMO51_CHECKPOINT_FIELDS,
     load_legacy_demo50,
+    load_legacy_tc_pointcloud,
 )
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -37,6 +39,14 @@ MAPPING = [
         zip(DEMO50_STALE_CHECKPOINT_FIELDS, DEMO50_DATASET_FIELDS)
     )
 ]
+RUN51_DIR = (
+    REPOSITORY
+    / "0_demo_TurbulentCombustion/Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538"
+)
+MAPPING51 = [
+    {"channel": index, "checkpoint_label": name, "dataset_field": name}
+    for index, name in enumerate(DEMO51_CHECKPOINT_FIELDS)
+]
 
 
 def test_demo50_requires_the_verified_field_mapping() -> None:
@@ -44,6 +54,19 @@ def test_demo50_requires_the_verified_field_mapping() -> None:
     wrong[0]["dataset_field"] = "CH4"
     with pytest.raises(ValueError, match="stale checkpoint field labels"):
         load_legacy_demo50(RUN_DIR, DATASET, wrong)
+
+
+def test_demo51_loads_with_identity_field_mapping() -> None:
+    model, manifest = load_legacy_tc_pointcloud(
+        RUN51_DIR,
+        DATASET,
+        MAPPING51,
+        checkpoint="last.pt",
+    )
+    assert manifest.source_demo_num == 51
+    assert manifest.compatibility_version == "legacy-tc-demo51-v1"
+    assert manifest.checkpoint_field_labels == DEMO51_CHECKPOINT_FIELDS
+    assert len(model.state_dict()) == 144
 
 
 def test_global_distribution_components_match_historical_demo_math() -> None:

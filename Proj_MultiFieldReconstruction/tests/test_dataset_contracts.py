@@ -12,7 +12,10 @@ from phycoflow_reconstruction.data.factory import open_field_dataset
 from phycoflow_reconstruction.data.h5_dataset import H5FieldDataset
 from phycoflow_reconstruction.data.pt_dataset import PTFieldDataset
 from phycoflow_reconstruction.data.sensor_protocols import SensorProtocol, build_observation_batch
-from phycoflow_reconstruction.data.splits import chronological_frame_indices
+from phycoflow_reconstruction.data.splits import (
+    chronological_frame_indices,
+    legacy_seeded_random_frame_indices,
+)
 from phycoflow_reconstruction.data.validation import validate_h5_dataset, validate_pt_dataset
 
 
@@ -161,6 +164,30 @@ def test_ordered_frame_split_boundaries():
     assert chronological_frame_indices(10, "train").tolist() == list(range(8))
     assert chronological_frame_indices(10, "validation").tolist() == [8]
     assert chronological_frame_indices(10, "test").tolist() == [9]
+
+
+def test_legacy_seeded_random_split_matches_historical_loader(tmp_path):
+    expected = np.arange(20, dtype=np.int64)
+    np.random.default_rng(42).shuffle(expected)
+    expected_train = np.sort(expected[:18])
+    expected_held_out = np.sort(expected[18:])
+    assert legacy_seeded_random_frame_indices(20, "train").tolist() == expected_train.tolist()
+    assert legacy_seeded_random_frame_indices(20, "validation").tolist() == (
+        expected_held_out.tolist()
+    )
+    assert legacy_seeded_random_frame_indices(20, "test").tolist() == (
+        expected_held_out.tolist()
+    )
+
+    path = tmp_path / "legacy_single_trajectory.h5"
+    _write_fixture(path, trajectories=1, times=20)
+    with h5py.File(path, "a") as handle:
+        del handle["splits"]
+    train = H5FieldDataset(path, split="train", split_policy="legacy_seeded_random_frames")
+    test = H5FieldDataset(path, split="test", split_policy="legacy_seeded_random_frames")
+    assert train.selection.strategy == "legacy_seeded_random_frames"
+    assert train.selection.frame_indices == tuple(expected_train)
+    assert test.selection.frame_indices == tuple(expected_held_out)
 
 
 def test_trusted_pt_uses_the_same_trajectory_contract(tmp_path):

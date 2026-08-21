@@ -13,7 +13,7 @@ import torch
 from ..data.factory import FieldDataset, open_field_dataset
 from ..data.normalization import FieldNormalizer
 from ..models import build_model
-from ..models.compatibility import load_legacy_demo50
+from ..models.compatibility import load_legacy_demo50, load_legacy_tc_pointcloud
 from .run_store import file_sha256, load_model_state_strict, load_project_checkpoint
 
 
@@ -23,7 +23,10 @@ def source_checkpoint_path(config: Mapping[str, Any]) -> Path:
     if checkpoint.is_absolute():
         return checkpoint
     name = checkpoint.name if checkpoint.suffix == ".pt" else f"{checkpoint.name}.pt"
-    if config.get("source", {}).get("kind", "native_run") == "legacy_demo50":
+    if config.get("source", {}).get("kind", "native_run") in {
+        "legacy_demo50",
+        "legacy_tc_pointcloud",
+    }:
         return source_run / name
     return source_run / "checkpoints" / name
 
@@ -62,12 +65,17 @@ def _validate_native_source_status(config: Mapping[str, Any]) -> None:
 def load_source_model(
     config: Mapping[str, Any], device: torch.device
 ) -> tuple[torch.nn.Module, FieldDataset, dict[str, Any]]:
-    """Load a native or Demo50 source with strict identity and normalization checks."""
+    """Load a native or verified legacy source with strict identity and normalization checks."""
     source_kind = config.get("source", {}).get("kind", "native_run")
     checkpoint_path = source_checkpoint_path(config)
-    if source_kind == "legacy_demo50":
+    if source_kind in {"legacy_demo50", "legacy_tc_pointcloud"}:
         source = config["source"]
-        model, compatibility = load_legacy_demo50(
+        loader = (
+            load_legacy_demo50
+            if source_kind == "legacy_demo50"
+            else load_legacy_tc_pointcloud
+        )
+        model, compatibility = loader(
             config["source_run"],
             config["dataset"]["path"],
             source["channel_mapping"],

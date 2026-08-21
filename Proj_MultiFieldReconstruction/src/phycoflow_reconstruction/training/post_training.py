@@ -774,6 +774,7 @@ def run_post_training(
         store=store,
         steps_per_epoch=steps_per_epoch,
         device=device,
+        normalizer=train_dataset.normalizer,
     )
     checkpoint_manager = PeriodicCheckpointManager(
         config,

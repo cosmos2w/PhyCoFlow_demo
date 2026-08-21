@@ -1,9 +1,30 @@
 # Multi-Field Reconstruction
 
-This project reconstructs complete physical fields from partial, sparse
-measurements. It provides a common data/model/training pipeline while keeping
-field definitions, sensor layouts, physical diagnostics, equation losses, and
-working configs inside each case.
+This project reconstructs complete physical fields from partial, sparse measurements. It provides a common data/model/training pipeline while keeping field definitions, sensor layouts, physical diagnostics, equation losses, and working configs inside each case.
+
+## Table of contents
+
+- [Setup](#setup)
+- [Code and configuration organization](#code-and-configuration-organization)
+  - [Reusable package](#reusable-package)
+  - [Case-owned layer](#case-owned-layer)
+- [Configuration composition](#configuration-composition)
+- [Supported model families](#supported-model-families)
+- [End-to-end working procedure](#end-to-end-working-procedure)
+  - [1. Validate the dataset](#1-validate-the-dataset)
+  - [2. Select a sensor protocol](#2-select-a-sensor-protocol)
+  - [3. Train a base model](#3-train-a-base-model)
+    - [Latent flow](#latent-flow)
+  - [4. Monitor, checkpoint, and resume](#4-monitor-checkpoint-and-resume)
+  - [5. Evaluate the base checkpoint](#5-evaluate-the-base-checkpoint)
+  - [6. Run data-driven coherence post-training](#6-run-data-driven-coherence-post-training)
+  - [7. Run physics-informed training](#7-run-physics-informed-training)
+    - [Direct physics-informed training](#direct-physics-informed-training)
+    - [Physics post-training](#physics-post-training)
+  - [8. Evaluate and compare refined checkpoints](#8-evaluate-and-compare-refined-checkpoints)
+- [Case-specific entry points](#case-specific-entry-points)
+- [Run artifacts](#run-artifacts)
+- [Practical rules for trustworthy comparisons](#practical-rules-for-trustworthy-comparisons)
 
 The main operational routes are:
 
@@ -35,8 +56,7 @@ validated dataset + case PhysicsProvider
        checkpoint evaluation
 ```
 
-Data-driven coherence and physics post-training are separate child-run modes.
-The source checkpoint remains unchanged.
+Data-driven coherence and physics post-training are separate child-run modes. The source checkpoint remains unchanged.
 
 ## Setup
 
@@ -64,9 +84,7 @@ An existing compatible environment can use:
 python -m pip install -e . --no-deps
 ```
 
-GeoFNO and the FNO PointCloudFFM backbone require the optional maintained
-`neuraloperator` dependency. ConFIG gradient balancing requires the optional
-`conflictfree` package.
+GeoFNO and the FNO PointCloudFFM backbone require the optional maintained `neuraloperator` dependency. ConFIG gradient balancing requires the optional `conflictfree` package. The historical Demo50 compatibility route requires `pykeops` when its configured neighbor backend is `keops`; all three dependencies are included by `environment.yml` and the `all` optional dependency group.
 
 ## Code and configuration organization
 
@@ -74,50 +92,32 @@ GeoFNO and the FNO PointCloudFFM backbone require the optional maintained
 
 `src/phycoflow_reconstruction/` contains the case-independent implementation:
 
-- `contracts.py`: dataset, sparse observation, reconstruction, loss, model
-  capability, coherence, and physics interfaces;
-- `data/`: HDF5/data adapters, normalization, sensor protocols, manifests,
-  rasterization, and training-batch sources;
-- `models/`: deterministic point models, GeoFNO, diffusion, latent flow, and
-  PointCloudFFM;
-- `coherence/`: reference banks, family composition, observation consistency,
-  global distribution, cross-spectrum, and topology;
-- `training/`: base, coherence post-training, physics post-training, direct
-  physics training, checkpointing, previews, and gradient balancing;
-- `evaluation/`: common reconstruction metrics, case diagnostics, traceable
-  checkpoint evaluation, and post-training comparison utilities;
-- `config/` and `cli.py`: recursive YAML composition, validation, dotted
-  overrides, and the command dispatcher used by every case.
+- `contracts.py`: dataset, sparse observation, reconstruction, loss, model capability, coherence, and physics interfaces;
+- `data/`: HDF5/data adapters, normalization, sensor protocols, manifests, rasterization, and training-batch sources;
+- `models/`: deterministic point models, GeoFNO, diffusion, latent flow, and PointCloudFFM;
+- `coherence/`: reference banks, family composition, observation consistency, global distribution, cross-spectrum, and topology;
+- `training/`: base, coherence post-training, physics post-training, direct physics training, checkpointing, previews, and gradient balancing;
+- `evaluation/`: common reconstruction metrics, case diagnostics, traceable checkpoint evaluation, and post-training comparison utilities;
+- `config/` and `cli.py`: recursive YAML composition, validation, dotted overrides, and the command dispatcher used by every case.
 
-The top-level `configs/defaults/` directory contains reusable runtime, logging,
-and evaluation fragments. `configs/schema/` documents the three training
-contracts: `base_training`, `post_training`, and `direct_physics`.
+The top-level `configs/defaults/` directory contains flat reference fragments, but the shipped runnable configs do not include them directly; active defaults are declared in case-local configs such as `configs/base/plain_defaults.yaml`. `configs/schema/` documents the three training contracts: `base_training`, `post_training`, and `direct_physics`, while `config/validate.py` performs runtime validation.
 
 ### Case-owned layer
 
 Each `Cases/<case>/` directory contains:
 
-- `case.py`: registered field order, units, mesh, logical shape, reconstruction
-  unit, and optional physics/diagnostics factories;
+- `case.py`: registered field order, units, mesh, logical shape, reconstruction unit, and optional physics/diagnostics factories;
 - `run.py`: a thin launcher that binds the shared CLI to that case;
-- `configs/dataset.yaml`: dataset path, split policy, normalization, coordinate
-  interpretation, and field metadata;
-- `configs/sensors/*.yaml`: observed fields, counts or count ranges, sharing,
-  stride, and seed;
+- `configs/dataset.yaml`: dataset path, split policy, normalization, coordinate interpretation, and field metadata;
+- `configs/sensors/*.yaml`: observed fields, counts or count ranges, sharing, stride, and seed;
 - `configs/base/*.yaml`: one model definition layered over common base defaults;
-- `configs/coherence/*.yaml`: scientific definitions and weights for individual
-  coherence families;
-- `configs/posttrain/*.yaml`: child-run objectives, rollout, trainable scope,
-  evaluation, and source checkpoint settings;
-- `configs/direct_physics/*.yaml`: direct equation-informed training when the
-  case supplies a differentiable `PhysicsProvider`;
-- `diagnostics.py` or `physics.py`: physical calculations that belong to the
-  case rather than the reusable package;
-- ignored `runs/`: resolved configs, manifests, checkpoints, histories,
-  evaluation reports, and figures.
+- `configs/coherence/*.yaml`: scientific definitions and weights for individual coherence families;
+- `configs/posttrain/*.yaml`: child-run objectives, rollout, trainable scope, evaluation, and source checkpoint settings;
+- `configs/direct_physics/*.yaml`: direct equation-informed training when the case supplies a differentiable `PhysicsProvider`;
+- `diagnostics.py` or `physics.py`: physical calculations that belong to the case rather than the reusable package;
+- ignored `runs/`: resolved configs, manifests, checkpoints, histories, evaluation reports, and figures.
 
-All commands should be launched from the selected case directory. Relative
-dataset, reference-bank, and source paths are resolved there.
+All case-launcher commands should be run from the selected case directory. Relative dataset, reference-bank, and source paths are resolved there; project-level setup and utility scripts are run from the project root as shown above.
 
 ## Configuration composition
 
@@ -135,8 +135,7 @@ source_run: null
 source_checkpoint: last.pt
 ```
 
-Files are merged in order, then the current file overrides inherited values.
-CLI overrides use dotted keys and YAML value parsing:
+Files are merged in order, then the current file overrides inherited values. CLI overrides use dotted keys and YAML value parsing:
 
 ```bash
 python run.py train-base \
@@ -145,13 +144,7 @@ python run.py train-base \
   --override runtime.device=cuda:1
 ```
 
-For a native post-training run, `inherit_base_config: true` reloads `dataset`,
-`model`, and `observations` from the source run's `resolved_config.yaml`. The
-child config therefore controls only refinement-specific settings while the
-source architecture and data contract remain exact. Config validation rejects
-unknown keys, incompatible stages, invalid geometry requirements, missing
-source checkpoints, and a post-training config that mixes coherence with
-physics.
+For a native post-training run, `inherit_base_config: true` reloads `dataset`, `model`, and `observations` from the source run's `resolved_config.yaml`. The child config therefore controls only refinement-specific settings while the source architecture and data contract remain exact. Config validation rejects unknown keys, incompatible stages, invalid geometry requirements, missing source checkpoints, and a post-training config that mixes coherence with physics.
 
 ## Supported model families
 
@@ -167,8 +160,7 @@ physics.
 | `pointcloud_ffm` | point or FNO flow | rectified-flow velocity MSE | differentiable sampling; complete grid for FNO |
 | `pinn` | query points | dense data MSE plus case PDE loss | `direct_physics` and active case provider |
 
-See [ModelExplain.md](ModelExplain.md) for the complete equations, conditioning
-paths, post-training objectives, and current limitations.
+See [ModelExplain.md](ModelExplain.md) for the complete equations, conditioning paths, post-training objectives, and current limitations.
 
 ## End-to-end working procedure
 
@@ -181,15 +173,11 @@ cd Cases/brusselator
 python run.py validate --config configs/dataset.yaml
 ```
 
-Validation should precede training because field order, logical shape,
-coordinates, split availability, and stored statistics determine every later
-checkpoint and physics calculation.
+Validation should precede training because field order, logical shape, coordinates, split availability, and stored statistics determine every later checkpoint and physics calculation.
 
 ### 2. Select a sensor protocol
 
-Choose a file under `configs/sensors/`. A sensor config determines which fields
-are visible and how many positions are measured. Training offsets the protocol
-seed by optimizer step; evaluation uses a fixed seed or a saved manifest.
+Choose a file under `configs/sensors/`. A sensor config determines which fields are visible and how many positions are measured. Training offsets the protocol seed by optimizer step; evaluation uses a fixed seed or a saved manifest.
 
 For an auditable fixed evaluation set, build a manifest:
 
@@ -211,15 +199,11 @@ Every normal model starts with `stage: base_training`:
 python run.py train-base --config configs/base/pointcloud_ffm.yaml
 ```
 
-Available Brusselator and Kolmogorov templates cover coordinate MLP, MLP-RBF,
-DeepONet, Senseiver, GeoFNO, DiffusionPDE, latent flow, and both PointCloudFFM
-backbones. KS and the other cases provide the compatible subset under their
-own `configs/base/` directories.
+Available Brusselator and Kolmogorov templates cover coordinate MLP, MLP-RBF, DeepONet, Senseiver, GeoFNO, DiffusionPDE, latent flow, and both PointCloudFFM backbones. KS and the other cases provide the compatible subset under their own `configs/base/` directories.
 
-Point models may train on `model.query_points` sampled target locations. Grid
-models require the complete logical grid. The trainer calls the adapter's
-native loss, so diffusion and flow models retain their noise/velocity
-objectives rather than being converted to direct endpoint regression.
+Point models may train on `model.query_points` sampled target locations. Grid models require the complete logical grid. The trainer calls the adapter's native loss, so diffusion and flow models retain their noise/velocity objectives rather than being converted to direct endpoint regression.
+
+Training data placement is controlled by `runtime.data_strategy`: `auto` uses resident VRAM only for supported random-snapshot HDF5 workloads below `runtime.vram_dataset_threshold_gb`, otherwise it selects compact asynchronous HDF5 loading when supported and falls back to the compatibility loader for other protocols or dataset formats. `vram` and `async_cpu` request those paths explicitly, and `runtime.num_workers` controls the CPU-loading paths.
 
 #### Latent flow
 
@@ -233,13 +217,11 @@ python run.py train-base \
   --override model.stage1_checkpoint=runs/<stage1-experiment>/<run-id>/checkpoints/best.pt
 ```
 
-Stage 2 verifies that the source checkpoint is `latent_fm` Stage 1, loads only
-the autoencoder, freezes it, and trains the sparse-conditioned latent velocity.
-Stage 1 alone is not a sparse-reconstruction source for post-training.
+Stage 2 verifies that the source checkpoint is `latent_fm` Stage 1, loads only the autoencoder, freezes it, and trains the sparse-conditioned latent velocity. Stage 1 alone is not a sparse-reconstruction source for post-training.
 
 ### 4. Monitor, checkpoint, and resume
 
-The common checkpoint policy saves complete epoch-boundary states:
+The common checkpoint policy saves complete states at configured epoch boundaries and always writes a terminal state, including when `--max-steps` stops between epoch boundaries:
 
 ```yaml
 checkpointing:
@@ -248,10 +230,7 @@ checkpointing:
   save_epoch_one: true
 ```
 
-Each due save atomically refreshes `checkpoints/last.pt`; `latest.pt` is a
-relative symlink to it. `best.pt` follows fixed validation-preview MSE when the
-preview is enabled and training loss otherwise. Base and data-driven coherence
-training can resume only with the same resolved config:
+Each due save atomically refreshes `checkpoints/last.pt`; `latest.pt` is a relative symlink to it. `best.pt` follows fixed validation-preview MSE when the preview is enabled and training loss otherwise. Base and data-driven coherence training can resume only with the same resolved config:
 
 ```bash
 python run.py train-base \
@@ -259,8 +238,7 @@ python run.py train-base \
   --resume runs/<experiment>/<run-id>
 ```
 
-For data-driven post-training, use the same `post-train` command and its
-original child config with `--resume`.
+For data-driven post-training, use the same `post-train` command and its original child config with `--resume`.
 
 An optional fixed-sample reconstruction preview is configured independently:
 
@@ -278,9 +256,7 @@ evaluation:
     keep_history: false
 ```
 
-The latest PNG, SVG, PDF, metrics, figure contract, and portable physical-field
-arrays are written under `evaluation/training_preview/`. Re-render the portable
-payload without loading a model or dataset:
+The latest PNG, SVG, PDF, metrics, figure contract, and portable physical-field arrays are written under `evaluation/training_preview/`. Re-render the portable payload without loading a model or dataset:
 
 ```bash
 python figures/scripts/training_reconstruction_preview.py \
@@ -301,11 +277,7 @@ python run.py evaluate-run \
   --report-name base_validation
 ```
 
-For matched comparisons, keep checkpoint choice, dataset split, sample count,
-sensor manifest, query count, generation steps, seed, and device consistent.
-The report contains normalized and physical-unit errors, observed/unobserved
-errors, timing, peak CUDA memory, available uncertainty summaries, case
-diagnostics, hashes, sample IDs, and plotting payloads.
+For matched comparisons, keep checkpoint choice, dataset split, sample count, sensor manifest, query count, generation steps, seed, and device consistent. The report contains normalized and physical-unit errors, observed/unobserved errors, timing, peak CUDA memory, available uncertainty summaries, case diagnostics, hashes, sample IDs, and plotting payloads.
 
 ### 6. Run data-driven coherence post-training
 
@@ -317,21 +289,15 @@ python run.py post-train \
   --override source_run=runs/<base-experiment>/<run-id>
 ```
 
-The child inherits the source dataset, model, and observation settings. It
-loads `source_checkpoint`, selects the configured trainable scope, and combines
-the adapter's native base loss with scheduled coherence loss.
+The child inherits the source dataset, model, and observation settings. It loads `source_checkpoint`, selects the configured trainable scope, and combines the adapter's native base loss with scheduled coherence loss.
 
 The available families are:
 
-- `global_distribution`: marginal Wasserstein, pairwise sliced Wasserstein,
-  and joint top-tail sliced Wasserstein descriptors;
-- `cross_spectrum`: graph same-frequency coherence, cross-band energy coupling,
-  and optional band-power matching;
-- `topology`: self and mutual fibered Betti-curve matching on a declared
-  two-dimensional raster.
+- `global_distribution`: marginal Wasserstein, pairwise sliced Wasserstein, and joint top-tail sliced Wasserstein descriptors;
+- `cross_spectrum`: graph same-frequency coherence, cross-band energy coupling, and optional band-power matching;
+- `topology`: self and mutual fibered Betti-curve matching on a declared two-dimensional raster.
 
-Families can run separately or share one differentiable reconstruction. For
-cross-spectrum and topology, set:
+Families can run separately or share one differentiable reconstruction. For cross-spectrum and topology, set:
 
 ```yaml
 coherence:
@@ -339,27 +305,18 @@ coherence:
     query_policy: fixed_shared
 ```
 
-The fixed point set and ordering define the graph basis or raster map.
-Cross-frequency statistics require a coherence batch size of at least three;
-larger ensembles give more stable covariance estimates.
+The fixed point set and ordering define the graph basis or raster map. Cross-frequency statistics require a coherence batch size of at least three; larger ensembles give more stable covariance estimates.
 
 Each family must declare one reference policy:
 
 - `training_reference` loads or fits a versioned bank from the training split;
-- `paired_supervised` compares against the current training target and is
-  supervised structural regularization.
+- `paired_supervised` compares against the current training target and is supervised structural regularization.
 
-In both modes the dense target is removed from the model rollout. It enters
-only the declared post-reconstruction comparison. Family settings, geometry,
-reference provenance, field mapping, units, hashes, and state are stored with
-the child run.
+In both modes the dense target is removed from the model rollout. It enters only the declared post-reconstruction comparison. Family settings, geometry, reference provenance, field mapping, units, hashes, and state are stored with the child run.
 
 ### 7. Run physics-informed training
 
-Brusselator provides the active differentiable physics implementation. It
-decodes predictions to physical units and evaluates periodic reaction-diffusion
-residuals using a spectral Laplacian and explicitly labeled paired
-finite-difference temporal derivatives.
+Brusselator provides the active differentiable physics implementation. It decodes predictions to physical units and evaluates periodic reaction-diffusion residuals using a spectral Laplacian and explicitly labeled paired finite-difference temporal derivatives.
 
 #### Direct physics-informed training
 
@@ -369,8 +326,7 @@ Train a coordinate PINN from initialization with dense data and PDE objectives:
 python run.py train-direct --config configs/direct_physics/pinn.yaml
 ```
 
-This route uses `stage: direct_physics`, requires `model.name: pinn`, and does
-not start from a base checkpoint.
+This route uses `stage: direct_physics`, requires `model.name: pinn`, and does not start from a base checkpoint.
 
 #### Physics post-training
 
@@ -382,14 +338,9 @@ python run.py post-train \
   --override source_run=runs/<base-experiment>/<run-id>
 ```
 
-The objective combines endpoint MSE and the same case-owned physics loss.
-Physics post-training and direct-physics resume are not currently supported;
-start a new immutable run if those configurations change.
+The objective combines endpoint MSE and the same case-owned physics loss. Physics post-training and direct-physics resume are not currently supported; start a new immutable run if those configurations change.
 
-Kolmogorov, KS, turbulent combustion, and mass transport currently contribute
-physical diagnostics during evaluation, but they do not expose a trainable
-`PhysicsProvider`. Their configs should therefore use base training and
-data-driven coherence, followed by `evaluate-run` for case diagnostics.
+Kolmogorov, KS, turbulent combustion, and mass transport currently contribute physical diagnostics during evaluation, but they do not expose a trainable `PhysicsProvider`. Their configs should therefore use base training and data-driven coherence, followed by `evaluate-run` for case diagnostics.
 
 ### 8. Evaluate and compare refined checkpoints
 
@@ -405,9 +356,7 @@ python run.py evaluate-run \
   --report-name refined_validation
 ```
 
-Interpret coherence, reconstruction, and physics metrics together. A lower
-coherence loss does not by itself imply lower pointwise error or satisfaction
-of unmeasured governing equations.
+Interpret coherence, reconstruction, and physics metrics together. A lower coherence loss does not by itself imply lower pointwise error or satisfaction of unmeasured governing equations.
 
 ## Case-specific entry points
 
@@ -417,62 +366,58 @@ of unmeasured governing equations.
 | `kolmogorov` | $u,v,p$ | periodic $256\times256$ snapshots | diagnostics only |
 | `ks` | $u$ | periodic $401\times256$ space-time trajectories | diagnostics only |
 | `turbulent_combustion` | `CH4`, `CO`, `T`, `U_1`, `p` | reordered $100\times403$ snapshots | diagnostics only |
-| `mass_transport_fluid` | $u_x,u_y,c$ | nonperiodic $32\times32$ fixture | diagnostics only |
+| `mass_transport_fluid` | $u_x,u_y,\mathrm{concentration}$ | nonperiodic $32\times32$ fixture | diagnostics only |
 
-The historical turbulent-combustion Demo50 checkpoint is isolated behind a
-compatibility adapter and cannot be selected for new base training. To import
-and verify it without changing the original files:
+The verified historical turbulent-combustion Demo50 and Demo51 checkpoints are isolated behind compatibility adapters and cannot be selected for new base training. Demo50 retains its original version-locked import path; Demo51 uses the generalized legacy PointCloudFFM importer:
 
 ```bash
 cd Cases/turbulent_combustion
 python import_demo50.py --config configs/compatibility/demo50.yaml
+python import_legacy_pointcloud.py --config configs/compatibility/demo51.yaml
 ```
 
-It can then serve as the immutable source for the provided Demo50 post-training
-configs, including the all-family coherence workflow:
+They can then serve as immutable sources for the provided compatibility post-training configs. Demo50 and Demo51 both include all-family coherence workflows. The formal 5,000-epoch Demo51 refinement enables global-distribution, graph cross-spectrum, and topology coherence and is modeled on DemoN51-to-DemoN511: it reproduces NumPy `default_rng(42)` shuffling, assigns the first 90% of shuffled frames to training, uses the held-out 10% for both the legacy validation and test aliases, and sorts frame indices within each subset. With 10,000 source frames, `train_fraction: 0.25`, and `batch_size: 144`, the epoch budget corresponds to 2,250 of the 9,000 training frames and rounds up to 16 optimizer steps, for 80,000 steps over 5,000 epochs. The source directory must be copied intact because the importer verifies `args.json`, normalization files, architecture metadata, and the checkpoint together.
 
 ```bash
 python run.py post-train \
   --config configs/posttrain/demo50_all_coherence.yaml
+
+python run.py post-train \
+  --config configs/posttrain/demo51_global_distribution_formal.yaml
+```
+
+To retain the historical 10,000-epoch duration instead, override only the duration and experiment name:
+
+```bash
+python run.py post-train \
+  --config configs/posttrain/demo51_global_distribution_formal.yaml \
+  --override optimization.epochs=10000 \
+  --override output.experiment_name=demo51_all_coherence_formal_10k
 ```
 
 ## Run artifacts
 
-A native run is stored under
-`Cases/<case>/runs/<experiment>/<run-id>/`. Important contents are:
+A native run is stored under `Cases/<case>/runs/<experiment>/<run-id>/`. Important contents are:
 
 - `resolved_config.yaml`: fully merged, path-resolved run contract;
-- `run_manifest.json` and `status.json`: lineage, hashes, data strategy, and
-  completion status;
-- `history.jsonl`: per-step losses and gradient diagnostics;
+- `run_manifest.json` and `status.json`: lineage, hashes, data strategy, and completion status;
+- `metrics/history.jsonl`: per-step losses and gradient diagnostics;
 - `checkpoints/{last,latest,best}.pt`: formal model/optimizer states;
-- `artifacts/`: sensor manifests, reference banks, coherence family states,
-  geometry bases, and provenance;
-- `evaluation/`: before/after or named checkpoint reports, query indices,
-  physical arrays, and plotting payloads;
+- `artifacts/`: sensor manifests, reference banks, coherence family states, geometry bases, and provenance;
+- `evaluation/`: before/after or named checkpoint reports, query indices, physical arrays, and plotting payloads;
 - `evaluation/training_preview/`: optional fixed-sample qualitative monitoring.
 
-Post-training directories identify their parent and record source hashes before
-and after work. This lineage is the basis for confirming that a refinement run
-did not mutate its source.
+Post-training directories identify their parent and record source hashes before and after work. This lineage is the basis for confirming that a refinement run did not mutate its source.
 
 ## Practical rules for trustworthy comparisons
 
-- Split by the declared sample/trajectory unit and fit normalization or
-  reference banks only on training data.
-- Preserve field order and units from the dataset through sensors, checkpoints,
-  coherence artifacts, physics providers, and plots.
+- Split by the declared sample/trajectory unit and fit normalization or reference banks only on training data.
+- Preserve field order and units from the dataset through sensors, checkpoints, coherence artifacts, physics providers, and plots.
 - Compare runs with a shared sensor manifest and query-index set.
-- Use full-grid queries for grid models and for physics providers that require
-  differential operators.
-- Treat `paired_supervised` coherence as supervised training, not target-free
-  refinement.
+- Use full-grid queries for grid models and for physics providers that require differential operators.
+- Treat `paired_supervised` coherence as supervised training, not target-free refinement.
 - Report generation steps and random seed for diffusion and flow models.
-- Inspect both observed and unobserved errors; final sensor clamping can make
-  observed error small without improving the unobserved field.
-- Use `--max-steps` only when intentionally truncating a command; a truncated
-  run is not a completed training result.
+- Inspect both observed and unobserved errors; final sensor clamping can make observed error small without improving the unobserved field.
+- Use `--max-steps` only when intentionally truncating a command; a truncated run is not a completed training result.
 
-See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for artifact and environment
-requirements and [UPSTREAM.md](UPSTREAM.md) for dependency and clean-room
-reference decisions.
+See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for artifact and environment requirements and [UPSTREAM.md](UPSTREAM.md) for dependency and clean-room reference decisions.

@@ -43,8 +43,13 @@ def open_field_dataset(
             grid_shape=config.get("grid_shape"),
             coordinate_reorder=config.get("coordinate_reorder", "stored"),
             include_temporal_derivative=bool(config.get("include_temporal_derivative", False)),
+            split_policy=config.get("split_policy", "canonical"),
+            split_seed=int(config.get("split_seed", 42)),
+            train_ratio=float(config.get("train_ratio", 0.9)),
         )
     if suffix.endswith((".pt", ".pth")):
+        if config.get("split_policy", "canonical") != "canonical":
+            raise ValueError("PT datasets do not support compatibility split policies")
         if config.get("coordinate_reorder", "stored") != "stored":
             raise ValueError("PT datasets do not support coordinate_reorder")
         if bool(config.get("include_temporal_derivative", False)):

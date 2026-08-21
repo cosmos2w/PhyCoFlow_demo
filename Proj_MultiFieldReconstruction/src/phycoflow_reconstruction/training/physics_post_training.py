@@ -146,6 +146,7 @@ def run_physics_post_training(
         store=store,
         steps_per_epoch=steps_per_epoch,
         device=device,
+        normalizer=dataset.normalizer,
     )
     checkpoint_manager = PeriodicCheckpointManager(
         config,
