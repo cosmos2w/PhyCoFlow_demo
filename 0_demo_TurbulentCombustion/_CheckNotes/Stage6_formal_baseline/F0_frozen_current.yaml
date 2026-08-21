@@ -5,7 +5,7 @@ dataset_stats_path: "Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538
 save_dir: "_CheckNotes/Stage6_formal_baseline/runs/F0_frozen_current"
 seed: 42
 epochs: 200
-batch_size: 144
+batch_size: 96
 lr: 1.0e-4
 weight_decay: 1.0e-6
 train_ratio: 0.9
@@ -89,4 +89,3 @@ benchmark_n_steps: [1, 2, 4]
 eval_every: 5
 save_every: 200
 n_steps_generation: 32
-

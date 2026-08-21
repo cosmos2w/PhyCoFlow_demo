@@ -96,7 +96,7 @@ def main() -> None:
     expected_common = {
         "seed": 42,
         "epochs": 200,
-        "batch_size": 144,
+        "batch_size": 96,
         "backbone": "GL_rbf_ENH",
         "gather_mode": "topk_rbf_glres",
         "gather_topk": 32,
@@ -134,4 +134,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
