@@ -1,0 +1,23 @@
+	Command being timed: "conda run --no-capture-output -n phycoflow_env python src/train_pointcloud_ffm.py --config _CheckNotes/config_stage1_order_optimized_12.yaml"
+	User time (seconds): 287.14
+	System time (seconds): 660.53
+	Percent of CPU this job got: 125%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 12:34.29
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1660676
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 22
+	Minor (reclaiming a frame) page faults: 10087751
+	Voluntary context switches: 147239
+	Involuntary context switches: 3793
+	Swaps: 0
+	File system inputs: 10816
+	File system outputs: 115824
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
