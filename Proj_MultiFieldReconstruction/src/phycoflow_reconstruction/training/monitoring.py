@@ -73,28 +73,26 @@ class TrainingMonitor:
         self.active_epoch = int(start_step) // self.steps_per_epoch + 1
         self._epoch_started = perf_counter()
         self._epoch_observed_batches = 0
-        self.progress = self._new_epoch_bar(
-            self.active_epoch,
-            initial=int(start_step) % self.steps_per_epoch,
-        )
         if enabled:
             tqdm.write(f"Run directory: {self.run_dir}")
             tqdm.write(f"Live loss figure: {self.plot_path}")
             tqdm.write(f"Live coherence figure: {self.coherence_plot_path}")
+        self.progress = self._new_progress(initial=int(start_step))
 
     def _epoch_batch_count(self, epoch: int) -> int:
         epoch_start = (epoch - 1) * self.steps_per_epoch
         return min(self.steps_per_epoch, self.configured_steps - epoch_start)
 
-    def _new_epoch_bar(self, epoch: int, *, initial: int):
+    def _new_progress(self, *, initial: int):
         self._epoch_started = perf_counter()
         self._epoch_observed_batches = 0
         return tqdm(
-            total=self._epoch_batch_count(epoch),
+            total=self.final_step,
             initial=initial,
-            desc=f"{self.description} epoch {epoch}/{self.total_epochs}",
+            desc=f"{self.description} epoch {self.active_epoch}/{self.total_epochs}",
             unit="batch",
             dynamic_ncols=True,
+            leave=True,
             disable=not self.enabled,
         )
 
@@ -130,35 +128,44 @@ class TrainingMonitor:
         step = int(row["step"])
         epoch = (max(step, 1) - 1) // self.steps_per_epoch + 1
         if epoch != self.active_epoch:
-            self.progress.close()
             self.active_epoch = epoch
-            self.progress = self._new_epoch_bar(epoch, initial=0)
+            self._epoch_started = perf_counter()
+            self._epoch_observed_batches = 0
+            self.progress.set_description(
+                f"{self.description} epoch {epoch}/{self.total_epochs}", refresh=False
+            )
         batch_in_epoch = (step - 1) % self.steps_per_epoch + 1
-        increment = max(0, batch_in_epoch - self.progress.n)
-        self._epoch_observed_batches += increment
+        increment = max(0, step - self.progress.n)
+        self._epoch_observed_batches += 1 if increment else 0
         elapsed = perf_counter() - self._epoch_started
         epoch_estimate = (
             elapsed * self._epoch_batch_count(epoch) / self._epoch_observed_batches
             if self._epoch_observed_batches
             else 0.0
         )
-        primary_key = next((key for key in _LOSS_KEYS if key in row), None)
-        postfix: dict[str, str | int] = {
-            "epochs_left": max(0, self.total_epochs - epoch),
-            "epoch_est": _format_duration(epoch_estimate),
+        postfix: dict[str, str] = {
+            "epoch_batch": f"{batch_in_epoch}/{self._epoch_batch_count(epoch)}",
+            "epoch_time": _format_duration(epoch_estimate),
         }
-        if primary_key is not None:
-            postfix[primary_key] = f"{float(row[primary_key]):.4e}"
+        display_metrics = (
+            ("total", "loss"),
+            ("data_loss", "data"),
+            ("coherence_loss", "coh"),
+            ("global_distribution.total", "global"),
+            ("cross_spectrum.total", "spectrum"),
+            ("topology.total", "topology"),
+            ("gradient_cosine", "grad_cos"),
+        )
+        for key, label in display_metrics:
+            value = row.get(key)
+            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                postfix[label] = f"{float(value):.3e}"
         if lr is not None:
-            postfix["lr"] = f"{float(lr):.3e}"
+            postfix["lr"] = f"{float(lr):.2e}"
         self.progress.set_postfix(postfix, refresh=False)
         self.progress.update(increment)
         if step == 1 or step % self.plot_every_steps == 0 or step == self.final_step:
             self._plot()
-        if batch_in_epoch == self._epoch_batch_count(epoch) and step < self.final_step:
-            self.progress.close()
-            self.active_epoch = epoch + 1
-            self.progress = self._new_epoch_bar(self.active_epoch, initial=0)
 
     def _plot(self) -> None:
         if not self._plot_available or not any(self._values.values()):

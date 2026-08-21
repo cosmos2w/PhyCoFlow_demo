@@ -77,7 +77,7 @@ def test_monitor_updates_detailed_coherence_figure_with_all_families(tmp_path):
     monitor.close()
 
 
-def test_monitor_resets_progress_at_each_epoch(tmp_path):
+def test_monitor_keeps_one_progress_bar_across_epochs(tmp_path):
     (tmp_path / "metrics").mkdir()
     monitor = TrainingMonitor(
         tmp_path,
@@ -92,13 +92,17 @@ def test_monitor_resets_progress_at_each_epoch(tmp_path):
 
     monitor.record({"step": 1, "total": 2.0})
     assert monitor.active_epoch == 1
-    assert monitor.progress.total == 3
+    assert monitor.progress.total == 6
     assert monitor.progress.n == 1
+    progress = monitor.progress
 
     monitor.record({"step": 2, "total": 1.5})
     monitor.record({"step": 3, "total": 1.0})
     monitor.record({"step": 4, "total": 0.8})
     assert monitor.active_epoch == 2
-    assert monitor.progress.total == 3
-    assert monitor.progress.n == 1
+    assert monitor.progress is progress
+    assert monitor.progress.total == 6
+    assert monitor.progress.n == 4
+    assert "loss=8.000e-01" in monitor.progress.postfix
+    assert "epoch_batch=1/3" in monitor.progress.postfix
     monitor.close()
