@@ -35,14 +35,14 @@ new_log="$package/logs/CQ_LR_${timestamp}.log"
 echo "Launching F0-ENH on physical GPU $old_gpu -> $old_log"
 CUDA_VISIBLE_DEVICES="$old_gpu" KEOPS_CACHE_FOLDER="/tmp/keops_stage6_clean_ab_old_gpu${old_gpu}" \
   conda run --no-capture-output -n phycoflow_env \
-  python src/train_pointcloud_ffm.py --config "$package/F0_ENH_60ep.yaml" \
+  python src/train_pointcloud_ffm.py --config "$package/F0_ENH_1000ep_b128.yaml" \
   > "$old_log" 2>&1 &
 old_pid=$!
 
 echo "Launching CQ-LR on physical GPU $new_gpu -> $new_log"
 CUDA_VISIBLE_DEVICES="$new_gpu" KEOPS_CACHE_FOLDER="/tmp/keops_stage6_clean_ab_new_gpu${new_gpu}" \
   conda run --no-capture-output -n phycoflow_env \
-  python src/train_pointcloud_ffm.py --config "$package/CQ_LR_60ep.yaml" \
+  python src/train_pointcloud_ffm.py --config "$package/CQ_LR_1000ep_b128.yaml" \
   > "$new_log" 2>&1 &
 new_pid=$!
 
@@ -65,8 +65,8 @@ if [[ "$old_status" -ne 0 || "$new_status" -ne 0 ]]; then
   exit 4
 fi
 
-old_run="$(ls -dt "$package/runs/F0_ENH_DemoN9500_"* | head -1)"
-new_run="$(ls -dt "$package/runs/CQ_LR_DemoN9501_"* | head -1)"
+old_run="$(ls -dt "$package/runs/F0_ENH_1K_B128_DemoN9510_"* | head -1)"
+new_run="$(ls -dt "$package/runs/CQ_LR_1K_B128_DemoN9511_"* | head -1)"
 echo "Training complete. Running controlled fixed-manifest evaluation."
 OLD_GPU="$old_gpu" NEW_GPU="$new_gpu" \
   bash "$package/evaluate_pair.sh" "$old_run" "$new_run"

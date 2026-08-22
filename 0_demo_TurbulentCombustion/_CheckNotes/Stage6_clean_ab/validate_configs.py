@@ -7,8 +7,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent
 F0_REFERENCE = ROOT.parent / "Stage6_formal_baseline/F0_frozen_current.yaml"
-BASELINE = ROOT / "F0_ENH_60ep.yaml"
-NEW = ROOT / "CQ_LR_60ep.yaml"
+BASELINE = ROOT / "F0_ENH_1000ep_b128.yaml"
+NEW = ROOT / "CQ_LR_1000ep_b128.yaml"
+MILESTONES = [1, 20, 40, 60, 100, 200, 400, 600, 800, 1000]
 
 
 def load(path: Path) -> dict:
@@ -35,13 +36,14 @@ def main() -> None:
         ("CQ-LR", new, "GL_rbf_ENH_CQ"),
     ):
         assert config["backbone"] == backbone
-        assert config["epochs"] == 60
-        assert config["scheduler_t_max"] == reference["epochs"] == 200
+        assert config["epochs"] == 1000
+        assert config["scheduler_t_max"] == 1000
         assert config["seed"] == reference["seed"] == 42
-        assert config["batch_size"] == reference["batch_size"] == 64
+        assert config["batch_size"] == 128
         assert config["n_query_points"] == reference["n_query_points"] == 4096
         assert config["train_query_microbatch_size"] is None
-        assert config["checkpoint_epochs"] == [1, 20, 40, 60]
+        assert config["save_every"] == 1000
+        assert config["checkpoint_epochs"] == MILESTONES
         assert config["gather_mode"] == "topk_rbf_glres"
         assert config["gather_topk"] == 32
         assert config["cq_query_dim"] == 128
@@ -50,6 +52,7 @@ def main() -> None:
 
     allowed_reference_differences = {
         "Demo_Num", "save_dir", "backbone", "epochs", "scheduler_t_max",
+        "batch_size", "save_every",
         "checkpoint_epochs", "cq_query_dim", "cq_readout_mode",
         "cq_readout_rank", "cq_readout_heads", "cq_global_scale_init",
         "cq_local_scale_init", "cq_readout_scale_init",
@@ -62,7 +65,10 @@ def main() -> None:
         unexpected = differences - allowed_reference_differences
         assert not unexpected, f"{path.name} changes F0 protocol: {sorted(unexpected)}"
 
-    print("Pair differs only in run identity and backbone; F0 protocol is preserved.")
+    print(
+        "Pair differs only in run identity and backbone; both use the same "
+        "extended 1,000-epoch, batch-128 protocol."
+    )
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def summarize(label: str, run: Path, evaluation: Path) -> dict:
     threshold_times = {}
     for row in history:
         cumulative += float(row["epoch_seconds"])
-        for threshold in (1.0, 0.8, 0.7):
+        for threshold in (1.0, 0.8, 0.7, 0.6, 0.55):
             key = f"train_loss_le_{threshold:.1f}"
             if key not in threshold_times and float(row["train_loss"]) <= threshold:
                 threshold_times[key] = {
@@ -92,8 +92,8 @@ def main() -> None:
     parser.add_argument("--new-run", type=Path)
     args = parser.parse_args()
 
-    baseline_run = args.baseline_run or latest("runs/F0_ENH_DemoN9500_*")
-    new_run = args.new_run or latest("runs/CQ_LR_DemoN9501_*")
+    baseline_run = args.baseline_run or latest("runs/F0_ENH_1K_B128_DemoN9510_*")
+    new_run = args.new_run or latest("runs/CQ_LR_1K_B128_DemoN9511_*")
     baseline = summarize(
         "F0-ENH", baseline_run, ROOT / "evaluation/F0_ENH/milestones.json"
     )
@@ -103,9 +103,9 @@ def main() -> None:
     comparison = {
         "protocol": {
             "seed": 42,
-            "epochs": 60,
-            "scheduler_t_max": 200,
-            "batch_size": 64,
+            "epochs": 1000,
+            "scheduler_t_max": 1000,
+            "batch_size": 128,
             "n_query_points": 4096,
             "query_microbatch": None,
             "only_model_difference": "GL_rbf_ENH versus GL_rbf_ENH_CQ/CQ-LR",
@@ -142,11 +142,11 @@ def main() -> None:
     delta = comparison["cq_lr_relative_to_f0_enh"]
     results = f"""# Clean F0-ENH versus CQ-LR comparison
 
-Both runs use the same F0 protocol and differ only in run identity and backbone.
+Both runs use the same extended batch-128 protocol and differ only in run identity and backbone.
 
 | Metric | F0-ENH | CQ-LR | CQ-LR change |
 |---|---:|---:|---:|
-| Mean epoch time, epochs 2–60 (s) | {baseline['mean_epoch_seconds_2_to_end']:.3f} | {new['mean_epoch_seconds_2_to_end']:.3f} | {delta['mean_epoch_time_fraction']:+.2%} |
+| Mean epoch time, epochs 2–1000 (s) | {baseline['mean_epoch_seconds_2_to_end']:.3f} | {new['mean_epoch_seconds_2_to_end']:.3f} | {delta['mean_epoch_time_fraction']:+.2%} |
 | Diagnostic train step (ms) | {baseline['mean_diagnostic_training_step_ms']:.3f} | {new['mean_diagnostic_training_step_ms']:.3f} | {delta['diagnostic_step_time_fraction']:+.2%} |
 | Peak allocated (MiB) | {baseline['max_diagnostic_peak_allocated_mb']:.1f} | {new['max_diagnostic_peak_allocated_mb']:.1f} | {delta['peak_allocated_fraction']:+.2%} |
 | Peak reserved (MiB) | {baseline['max_diagnostic_peak_reserved_mb']:.1f} | {new['max_diagnostic_peak_reserved_mb']:.1f} | {delta['peak_reserved_fraction']:+.2%} |
