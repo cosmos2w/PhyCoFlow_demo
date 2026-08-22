@@ -1,0 +1,74 @@
+{
+  "selected_candidate": "CQ-LR",
+  "formal_candidate_status": "prepared_not_recommended_rescue_failed",
+  "rule": {
+    "lr_rf_within_fraction": 0.03,
+    "lr_reconstruction_within_fraction": 0.03,
+    "lr_additional_speedup_at_least_fraction": 0.15
+  },
+  "measurements": {
+    "cq_full_epoch60_rf_loss": 0.6185210961848497,
+    "cq_lr_epoch60_rf_loss": 0.6254441329122832,
+    "cq_lr_rf_relative_to_full": 0.011192886984996875,
+    "cq_full_reconstruction_mean_by_nfe": {
+      "1": 0.32374944239854814,
+      "2": 0.3575700044631958,
+      "4": 0.3982026845216751
+    },
+    "cq_lr_reconstruction_mean_by_nfe": {
+      "1": 0.3355349101126194,
+      "2": 0.36760653778910635,
+      "4": 0.4071155317127705
+    },
+    "cq_lr_reconstruction_average_relative_to_full": 0.02847079030393762,
+    "cq_lr_reconstruction_relative_by_nfe": {
+      "1": 0.03640305177595593,
+      "2": 0.028068722769343912,
+      "4": 0.022382689865091177
+    },
+    "cq_full_forward_ms_65536": 90.85714519023895,
+    "cq_lr_forward_ms_65536": 70.43382320553064,
+    "cq_lr_additional_speedup_fraction": 0.28996469388168356,
+    "f0_best_fixed_manifest_rf_loss": 0.47535701740222674,
+    "f0_best_reconstruction_mean_by_nfe": {
+      "1": 0.2950120158493519,
+      "2": 0.3250335570424795,
+      "4": 0.3604214146733284
+    },
+    "primary_variants_relative_to_f0": {
+      "CQ-Full": {
+        "fixed_rf": 0.3011716952554919,
+        "reconstruction_average": 0.10102853545762702
+      },
+      "CQ-LR": {
+        "fixed_rf": 0.3157355629885634,
+        "reconstruction_average": 0.13237568800929256
+      }
+    },
+    "cq_rescue160_epoch60_rf_loss": 0.597152499637256,
+    "cq_rescue160_reconstruction_mean_by_nfe": {
+      "1": 0.31674503684043886,
+      "2": 0.35438035652041433,
+      "4": 0.39597339779138563
+    },
+    "cq_rescue160_relative_to_f0": {
+      "fixed_rf": 0.25621896338172956,
+      "reconstruction_average": 0.0883576955530303
+    }
+  },
+  "cq_lr_passes_all_criteria": true,
+  "rescue_rule": {
+    "threshold_fraction": 0.05,
+    "requires_both_variants_worse_on_fixed_rf_and_reconstruction": true,
+    "rescue_required": true,
+    "rescue_completed": true,
+    "rescue_failed_materially": true,
+    "allowed_configuration": {
+      "cq_query_dim": 160,
+      "cq_readout_mode": "full"
+    }
+  },
+  "formal_config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_compact_query/formal_candidate/selected_200ep.yaml",
+  "formal_launch_permitted": false,
+  "replacement_recommendation": "do_not_replace_f0"
+}

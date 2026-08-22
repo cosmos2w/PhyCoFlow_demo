@@ -53,6 +53,7 @@ from Model import (
     ConditionalPointMLPRBF, 
     ConditionalPointPerceiver,
     ConditionalPointHybridLocalGlobalRBF,
+    ConditionalPointHybridLocalGlobalRBFCQ,
     PointCloudFFM,
     FNO,
     FNOFFM,
@@ -116,7 +117,7 @@ def parse_args():
     # Backbone selection
     # ------------------------------
     p.add_argument(
-        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"], 
+        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH", "GL_rbf_ENH_CQ"],
         help="Backbone type. point-cloud MLP+RBF, point-cloud Perceiver, or grid-based FNO baseline.")
 
     p.add_argument("--seed", type=int, default=42)
@@ -124,6 +125,8 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--weight-decay", type=float, default=1e-6)
+    p.add_argument("--scheduler-t-max", type=int, default=None,
+                   help="Optional cosine schedule horizon; defaults to epochs for legacy behavior.")
     p.add_argument("--train-ratio", type=float, default=0.9)
     p.add_argument("--train-ratio-downsample", dest="train_ratio_downsample", type=float, default=1.0)
     p.add_argument("--time-stride", type=int, default=1)
@@ -260,6 +263,17 @@ def parse_args():
                    help="Initial scale for topk_rbf_glres residual terms: sensor importance and coarse scaffold.")
 
     # ----------------------------------------------------------
+    # Compact Query Decoder — GL_rbf_ENH_CQ
+    # ----------------------------------------------------------
+    p.add_argument("--cq-query-dim", type=int, default=128)
+    p.add_argument("--cq-readout-mode", choices=["full", "lowrank"], default="lowrank")
+    p.add_argument("--cq-readout-rank", type=int, default=64)
+    p.add_argument("--cq-readout-heads", type=int, default=4)
+    p.add_argument("--cq-global-scale-init", type=float, default=1.0)
+    p.add_argument("--cq-local-scale-init", type=float, default=1.0)
+    p.add_argument("--cq-readout-scale-init", type=float, default=1.0e-2)
+
+    # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
     # Num_x / Num_y must be supplied for the FNO baseline.
     # ----------------------------------------------------------
@@ -342,6 +356,13 @@ def parse_args():
 
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--save-every", type=int, default=10)
+    p.add_argument(
+        "--checkpoint-epochs",
+        type=int,
+        nargs="*",
+        default=[],
+        help="Optional epochs whose checkpoints are retained as epoch_XXXX.pt.",
+    )
     p.add_argument("--n-steps-generation", type=int, default=32)
 
     # ----------------------------------------------------------
@@ -1771,6 +1792,13 @@ def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str
         "query_readout_scale_init",
         "enhanced_head_norm",
         "glres_scale_init",
+        "cq_query_dim",
+        "cq_readout_mode",
+        "cq_readout_rank",
+        "cq_readout_heads",
+        "cq_global_scale_init",
+        "cq_local_scale_init",
+        "cq_readout_scale_init",
     ]
     current = vars(args)
     lines = ["\nArchitecture keys that commonly affect checkpoint compatibility:"]
@@ -2036,6 +2064,62 @@ def main():
             fourier_pe_max_freq=args.fourier_pe_max_freq,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
+    elif args.backbone == "GL_rbf_ENH_CQ":
+        sensor_coord_encoding = args.sensor_coord_encoding or "fourier"
+        latent_sensor_reinject = (
+            True if args.latent_sensor_reinject is None else args.latent_sensor_reinject
+        )
+        glres_scale_init = (
+            1.0e-2 if args.glres_scale_init is None else args.glres_scale_init
+        )
+        print(
+            "[*] GL_rbf_ENH_CQ settings: "
+            f"query_dim={args.cq_query_dim}, "
+            f"readout_mode={args.cq_readout_mode}, "
+            f"readout_rank={args.cq_readout_rank}, "
+            f"readout_heads={args.cq_readout_heads}, "
+            f"sensor_coord_encoding={sensor_coord_encoding}, "
+            f"latent_sensor_reinject={latent_sensor_reinject}, "
+            f"glres_scale_init={glres_scale_init}"
+        )
+        backbone = ConditionalPointHybridLocalGlobalRBFCQ(
+            n_fields=train_set.num_fields,
+            coord_dim=3,
+            hidden_dim=args.hidden_dim,
+            cond_dim=args.cond_dim,
+            field_embed_dim=args.field_embed_dim,
+            latent_dim=args.latent_dim,
+            num_latents=args.num_latents,
+            num_heads=args.num_heads,
+            num_latent_blocks=args.num_latent_blocks,
+            ff_mult=args.ff_mult,
+            attn_dropout=args.attn_dropout,
+            mlp_dropout=args.mlp_dropout,
+            rbf_sigma=args.rbf_sigma,
+            summary_type=args.summary_type,
+            gather_mode=args.gather_mode,
+            gather_topk=args.gather_topk,
+            gather_query_chunk_size=args.gather_query_chunk_size,
+            learnable_rbf_sigma=args.learnable_rbf_sigma,
+            neighbor_backend=args.neighbor_backend,
+            sensor_local_topk=args.sensor_local_topk,
+            sensor_local_dropout=args.sensor_local_dropout,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
+            sensor_coord_encoding=sensor_coord_encoding,
+            latent_sensor_reinject=latent_sensor_reinject,
+            latent_reinject_every=args.latent_reinject_every,
+            glres_scale_init=glres_scale_init,
+            cq_query_dim=args.cq_query_dim,
+            cq_readout_mode=args.cq_readout_mode,
+            cq_readout_rank=args.cq_readout_rank,
+            cq_readout_heads=args.cq_readout_heads,
+            cq_global_scale_init=args.cq_global_scale_init,
+            cq_local_scale_init=args.cq_local_scale_init,
+            cq_readout_scale_init=args.cq_readout_scale_init,
+        )
+        model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:
         enhanced = args.backbone == "GL_rbf_ENH"
 
@@ -2186,7 +2270,7 @@ def main():
     print(f'\nSelected Backbone: {args.backbone}\n')
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=(args.scheduler_t_max or args.epochs))
 
     if reload_ckpt is not None:
         model.load_state_dict(checkpoint_model_state(reload_ckpt))
@@ -2331,8 +2415,20 @@ def main():
                 "Num_x": args.Num_x,
                 "Num_y": args.Num_y,
             }
+            if args.backbone == "GL_rbf_ENH_CQ":
+                ckpt.update({
+                    "cq_query_dim": args.cq_query_dim,
+                    "cq_readout_mode": args.cq_readout_mode,
+                    "cq_readout_rank": args.cq_readout_rank,
+                    "cq_readout_heads": args.cq_readout_heads,
+                    "cq_global_scale_init": args.cq_global_scale_init,
+                    "cq_local_scale_init": args.cq_local_scale_init,
+                    "cq_readout_scale_init": args.cq_readout_scale_init,
+                })
             ckpt.update(checkpoint_metadata(args, direct_cfg, source_run_dir, source_checkpoint))
             torch.save(ckpt, save_dir / "last.pt")
+            if epoch in set(args.checkpoint_epochs or []):
+                torch.save(ckpt, save_dir / f"epoch_{epoch:04d}.pt")
             if val_loss < best_val:
                 best_val = val_loss
                 torch.save(ckpt, save_dir / "best.pt")

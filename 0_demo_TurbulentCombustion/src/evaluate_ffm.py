@@ -46,6 +46,7 @@ from Model import (
     ConditionalPointMLPRBF,
     ConditionalPointPerceiver,
     ConditionalPointHybridLocalGlobalRBF,
+    ConditionalPointHybridLocalGlobalRBFCQ,
     PointCloudFFM,
 )
 try:
@@ -334,6 +335,52 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
         )
         model = FNOFFM(backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4))
         return model
+
+    if backbone_name == "GL_rbf_ENH_CQ":
+        backbone = ConditionalPointHybridLocalGlobalRBFCQ(
+            n_fields=dataset.num_fields,
+            coord_dim=3,
+            hidden_dim=cfg.get("hidden_dim", 256),
+            cond_dim=cfg.get("cond_dim", 128),
+            field_embed_dim=cfg.get("field_embed_dim", 128),
+            latent_dim=cfg.get("latent_dim", 256),
+            num_latents=cfg.get("num_latents", 128),
+            num_heads=cfg.get("num_heads", 8),
+            num_latent_blocks=cfg.get("num_latent_blocks", 4),
+            ff_mult=cfg.get("ff_mult", 4),
+            attn_dropout=cfg.get("attn_dropout", 0),
+            mlp_dropout=cfg.get("mlp_dropout", 0),
+            rbf_sigma=cfg.get("rbf_sigma", 0.05),
+            summary_type=cfg.get("summary_type", "cls"),
+            gather_mode=cfg.get("gather_mode", "topk_rbf_glres"),
+            gather_topk=cfg.get("gather_topk", 32),
+            gather_query_chunk_size=cfg.get("gather_query_chunk_size", None),
+            learnable_rbf_sigma=cfg.get("learnable_rbf_sigma", False),
+            neighbor_backend=cfg.get("neighbor_backend", "torch"),
+            sensor_local_topk=cfg.get("sensor_local_topk", 32),
+            sensor_local_dropout=cfg.get("sensor_local_dropout", 0.0),
+            use_fourier_pe=cfg.get("USE_FOURIER_PE", False),
+            fourier_pe_num_bands=cfg.get("fourier_pe_num_bands", 32),
+            fourier_pe_max_freq=cfg.get("fourier_pe_max_freq", 64.0),
+            sensor_coord_encoding=_cfg_get_not_none(
+                cfg, "sensor_coord_encoding", "fourier"
+            ),
+            latent_sensor_reinject=_cfg_get_not_none(
+                cfg, "latent_sensor_reinject", True
+            ),
+            latent_reinject_every=cfg.get("latent_reinject_every", 1),
+            glres_scale_init=_cfg_get_not_none(cfg, "glres_scale_init", 1e-2),
+            cq_query_dim=cfg.get("cq_query_dim", 128),
+            cq_readout_mode=cfg.get("cq_readout_mode", "lowrank"),
+            cq_readout_rank=cfg.get("cq_readout_rank", 64),
+            cq_readout_heads=cfg.get("cq_readout_heads", 4),
+            cq_global_scale_init=cfg.get("cq_global_scale_init", 1.0),
+            cq_local_scale_init=cfg.get("cq_local_scale_init", 1.0),
+            cq_readout_scale_init=cfg.get("cq_readout_scale_init", 1e-2),
+        )
+        return PointCloudFFM(
+            backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4)
+        )
 
     if backbone_name in ["GL_rbf", "GL_rbf_ENH"]:
         enhanced = backbone_name == "GL_rbf_ENH"

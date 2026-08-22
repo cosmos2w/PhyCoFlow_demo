@@ -1,0 +1,145 @@
+{
+  "dtype": "float32",
+  "device": "cpu",
+  "gather_mode": "topk_rbf_glres",
+  "nondivisible_training_query_count": 31,
+  "variants": {
+    "full": {
+      "reconstruction": [
+        {
+          "solver": "euler",
+          "nfe": 1,
+          "obs_consistency_mode": "none",
+          "max_abs_difference": 1.1920928955078125e-07,
+          "mean_abs_difference": 4.58497284583359e-09,
+          "relative_l2_difference": 1.8638752763422417e-08
+        },
+        {
+          "solver": "euler",
+          "nfe": 2,
+          "obs_consistency_mode": "default_hard",
+          "max_abs_difference": 2.9802322387695312e-08,
+          "mean_abs_difference": 1.1462432114583976e-09,
+          "relative_l2_difference": 7.518605293910241e-09
+        },
+        {
+          "solver": "euler",
+          "nfe": 4,
+          "obs_consistency_mode": "endpoint_smooth",
+          "max_abs_difference": 0.0,
+          "mean_abs_difference": 0.0,
+          "relative_l2_difference": 0.0
+        },
+        {
+          "solver": "heun",
+          "nfe": 2,
+          "obs_consistency_mode": "endpoint_smooth",
+          "max_abs_difference": 7.450580596923828e-09,
+          "mean_abs_difference": 2.865608028645994e-10,
+          "relative_l2_difference": 1.419944939407003e-09
+        }
+      ],
+      "training": {
+        "n_query": 31,
+        "query_microbatch_size": 7,
+        "query_microbatches": 5,
+        "prior_calls_monolithic": [
+          31
+        ],
+        "prior_calls_microbatched": [
+          31
+        ],
+        "loss_monolithic": 1.9938243627548218,
+        "loss_microbatched": 1.9938242435455322,
+        "loss_abs_difference": 1.1920928955078125e-07,
+        "max_gradient_abs_difference": 2.2351741790771484e-08,
+        "max_gradient_relative_difference": 1.9554694890975952,
+        "max_gradient_abs_parameter": "model.cq_head.6.weight",
+        "max_update_abs_difference": 6.505232704512309e-06,
+        "max_update_relative_difference": 1.9555941820144653,
+        "max_update_abs_parameter": "model.latent_blocks.0.attn.in_proj_bias",
+        "rbf_sigma_gradient_present": true
+      }
+    },
+    "lowrank": {
+      "reconstruction": [
+        {
+          "solver": "euler",
+          "nfe": 1,
+          "obs_consistency_mode": "none",
+          "max_abs_difference": 0.0,
+          "mean_abs_difference": 0.0,
+          "relative_l2_difference": 0.0
+        },
+        {
+          "solver": "euler",
+          "nfe": 2,
+          "obs_consistency_mode": "default_hard",
+          "max_abs_difference": 2.9802322387695312e-08,
+          "mean_abs_difference": 1.1462432114583976e-09,
+          "relative_l2_difference": 7.512493738204284e-09
+        },
+        {
+          "solver": "euler",
+          "nfe": 4,
+          "obs_consistency_mode": "endpoint_smooth",
+          "max_abs_difference": 5.960464477539063e-08,
+          "mean_abs_difference": 2.292486422916795e-09,
+          "relative_l2_difference": 1.6064152674744037e-08
+        },
+        {
+          "solver": "heun",
+          "nfe": 2,
+          "obs_consistency_mode": "endpoint_smooth",
+          "max_abs_difference": 7.450580596923828e-09,
+          "mean_abs_difference": 2.865608028645994e-10,
+          "relative_l2_difference": 1.4201159137527952e-09
+        }
+      ],
+      "training": {
+        "n_query": 31,
+        "query_microbatch_size": 7,
+        "query_microbatches": 5,
+        "prior_calls_monolithic": [
+          31
+        ],
+        "prior_calls_microbatched": [
+          31
+        ],
+        "loss_monolithic": 1.9932891130447388,
+        "loss_microbatched": 1.9932891130447388,
+        "loss_abs_difference": 0.0,
+        "max_gradient_abs_difference": 2.9802322387695312e-08,
+        "max_gradient_relative_difference": 1.8345588445663452,
+        "max_gradient_abs_parameter": "model.cq_head.6.bias",
+        "max_update_abs_difference": 3.5180610211682506e-06,
+        "max_update_relative_difference": 1.8437589406967163,
+        "max_update_abs_parameter": "model.sensor_back_attn.attn.in_proj_bias",
+        "rbf_sigma_gradient_present": true
+      }
+    }
+  },
+  "condition_context_reuse": {
+    "full": {
+      "solver": "heun",
+      "nfe": 4,
+      "query_chunk_size": 5,
+      "condition_encoding_calls": 1,
+      "expected_calls": 1
+    },
+    "lowrank": {
+      "solver": "heun",
+      "nfe": 4,
+      "query_chunk_size": 5,
+      "condition_encoding_calls": 1,
+      "expected_calls": 1
+    }
+  },
+  "cq_lr_cache_reuse": {
+    "solver": "heun",
+    "nfe": 4,
+    "query_chunk_size": 5,
+    "latent_kv_projection_calls": 1,
+    "expected_calls": 1
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "source_branch": "perf/pointcloud-ffm-field-reconstruction",
+  "source_sha_verified_against_github": "169d7c545b9f980aed0fbaff0252e6d4114f3566",
+  "working_branch_base_head": "e2c5fa43f1c526b248a480f71683bc4b85f63390",
+  "immutable_f0_checkpoint": "_CheckNotes/Stage6_formal_baseline/runs/F0_frozen_current_DemoN9300_20260821_075633/best.pt",
+  "immutable_f0_sha256": "e93198bc2cba3f001024bbc9c1b197b2b56ecd52d8967bb38592ee5090e95569",
+  "f0_strict_load": "all keys matched successfully",
+  "full_regression_suite": {
+    "command": "conda run -n phycoflow_env pytest -q",
+    "passed": 78,
+    "failed": 0,
+    "elapsed_seconds": 11.26
+  },
+  "cq_focused_suite": {
+    "command": "conda run -n phycoflow_env pytest -q tests/test_pointcloud_cq.py",
+    "passed": 31,
+    "failed": 0,
+    "elapsed_seconds": 4.93
+  },
+  "parameter_summary": {
+    "F0": {
+      "total": 2267407,
+      "condition_core": 1430147,
+      "query_decoder": 837260,
+      "query_width": 256,
+      "fusion_width": 640,
+      "readout_heads": 4
+    },
+    "CQ-Full": {
+      "total": 1796113,
+      "condition_core": 1430147,
+      "query_decoder": 365966,
+      "query_width": 128,
+      "fusion_width": 128,
+      "readout_heads": 4
+    },
+    "CQ-LR": {
+      "total": 1643665,
+      "condition_core": 1430147,
+      "query_decoder": 213518,
+      "query_width": 128,
+      "fusion_width": 128,
+      "readout_heads": 4,
+      "readout_rank": 64
+    }
+  },
+  "condition_core_parameter_count_identical": true,
+  "legacy_concat_absent_from_cq": true,
+  "cq_lr_condition_context_caches_projected_latent_kv": true
+,
+  "cq_variants_share_seeded_common_initialization": true
+}

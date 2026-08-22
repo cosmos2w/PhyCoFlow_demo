@@ -1,0 +1,77 @@
+{
+  "status": "pass",
+  "meaningful_lr_additional_speedup_threshold": 0.05,
+  "measurements_at_65536": {
+    "cq_full_forward_speedup_vs_f0": 1.0590035723564968,
+    "cq_lr_forward_speedup_vs_f0": 1.3660772190344574,
+    "cq_lr_additional_forward_speedup_vs_cq_full": 0.28996469388168356,
+    "cq_full_training_step_speedup_vs_f0": 1.0674940293522883,
+    "cq_lr_training_step_speedup_vs_f0": 1.4517015331422303,
+    "cq_full_peak_allocation_reduction_vs_f0": 0.2606236402957791,
+    "cq_lr_peak_allocation_reduction_vs_f0": 0.3131036861896611
+  },
+  "suggested_target_flags": {
+    "cq_full_step_speedup_at_least_1p4": false,
+    "cq_lr_step_speedup_at_least_1p7": false,
+    "cq_full_peak_reduction_at_least_25pct": true,
+    "cq_lr_peak_reduction_at_least_35pct": false
+  },
+  "component_timings_ms_at_65536": {
+    "F0": {
+      "condition_encoding_ms": 3.1756041571497917,
+      "coordinate_encoding_ms": 0.18812809139490128,
+      "point_encoder_ms": 1.2396227568387985,
+      "latent_readout_ms": 15.239491872489452,
+      "local_gather_ms": 42.18566846102476,
+      "fusion_head_ms": 2.0584573969244957,
+      "glres_coarse_ms": 0.9253865107893944
+    },
+    "CQ-Full": {
+      "condition_encoding_ms": 3.3231116831302643,
+      "coordinate_encoding_ms": 0.18997211009263992,
+      "point_encoder_ms": 0.6872514262795448,
+      "latent_readout_ms": 12.581170164048672,
+      "local_gather_ms": 42.84369722008705,
+      "fusion_head_ms": 0.8500682190060616,
+      "glres_coarse_ms": 0.4740355536341667
+    },
+    "CQ-LR": {
+      "condition_encoding_ms": 3.163423389196396,
+      "coordinate_encoding_ms": 0.18511079251766205,
+      "point_encoder_ms": 0.6892073899507523,
+      "latent_readout_ms": 5.191541276872158,
+      "local_gather_ms": 42.105600610375404,
+      "fusion_head_ms": 0.8472749963402748,
+      "glres_coarse_ms": 0.585896335542202
+    }
+  },
+  "million_query": {
+    "F0": {
+      "wall_s": 0.4042820446193218,
+      "seconds_per_million_queries_per_nfe": 0.2021410223096609,
+      "peak_allocated_mb": 3021.400390625,
+      "peak_reserved_mb": 3068.0,
+      "condition_context_mb": 0.193359375,
+      "static_query_cache_mb": 2197.265625,
+      "dynamic_peak_above_static_cache_mb": 824.134765625
+    },
+    "CQ-Full": {
+      "wall_s": 0.38823258349051076,
+      "seconds_per_million_queries_per_nfe": 0.19411629174525538,
+      "peak_allocated_mb": 3021.400390625,
+      "peak_reserved_mb": 3068.0,
+      "condition_context_mb": 0.19384765625,
+      "static_query_cache_mb": 1708.984375,
+      "dynamic_peak_above_static_cache_mb": 1312.416015625
+    },
+    "CQ-LR": {
+      "wall_s": 0.35577075835317373,
+      "seconds_per_million_queries_per_nfe": 0.17788537917658687,
+      "peak_allocated_mb": 3021.400390625,
+      "peak_reserved_mb": 3068.0,
+      "condition_context_mb": 0.28759765625,
+      "static_query_cache_mb": 1708.984375,
+      "dynamic_peak_above_static_cache_mb": 1312.416015625
+    }
+  }
+}

@@ -15,7 +15,11 @@ import torch
 import yaml
 
 from helpers import TurbulentCombustionH5Dataset
-from Model import ConditionalPointHybridLocalGlobalRBF, PointCloudFFM
+from Model import (
+    ConditionalPointHybridLocalGlobalRBF,
+    ConditionalPointHybridLocalGlobalRBFCQ,
+    PointCloudFFM,
+)
 from pointcloud_data_path import materialize_selected_batch
 from pointcloud_eval_manifest import load_validation_manifest, slice_manifest_layout
 from train_pointcloud_ffm import IIDGaussianPrior, RFFGaussianPrior, checkpoint_model_state
@@ -45,24 +49,17 @@ def _get(config: Mapping[str, Any], key: str, default: Any) -> Any:
 
 
 def build_gl_rbf_ffm(config: Mapping[str, Any], n_fields: int, device: torch.device) -> PointCloudFFM:
-    """Build the current GL-RBF execution exactly from its saved configuration."""
+    """Build a legacy or compact GL-RBF execution from its saved configuration."""
     backbone_name = str(_get(config, "backbone", "GL_rbf_ENH"))
-    if backbone_name not in {"GL_rbf", "GL_rbf_ENH"}:
+    allowed = {"GL_rbf", "GL_rbf_ENH", "GL_rbf_ENH_CQ"}
+    if backbone_name not in allowed:
         raise ValueError(
-            "The fixed-manifest evaluator currently targets GL_rbf/GL_rbf_ENH checkpoints, "
-            f"got {backbone_name!r}."
+            f"The fixed-manifest evaluator targets {sorted(allowed)}, got {backbone_name!r}."
         )
-    enhanced = backbone_name == "GL_rbf_ENH"
+    is_cq = backbone_name == "GL_rbf_ENH_CQ"
+    enhanced = backbone_name in {"GL_rbf_ENH", "GL_rbf_ENH_CQ"}
     sensor_coord_encoding = _get(config, "sensor_coord_encoding", "fourier" if enhanced else "raw")
-    latent_sensor_reinject = bool(
-        _get(config, "latent_sensor_reinject", enhanced)
-    )
-    query_latent_readout = bool(_get(config, "query_latent_readout", enhanced))
-    enhanced_head_norm = bool(_get(config, "enhanced_head_norm", enhanced))
-    query_readout_type = _get(config, "query_readout_type", "coord" if enhanced else "point")
-    query_readout_scale_init = float(
-        _get(config, "query_readout_scale_init", 1.0e-2 if enhanced else 0.0)
-    )
+    latent_sensor_reinject = bool(_get(config, "latent_sensor_reinject", enhanced))
     glres_scale_init = float(_get(config, "glres_scale_init", 1.0e-2 if enhanced else 0.0))
 
     prior_name = str(_get(config, "prior", "rff"))
@@ -75,7 +72,7 @@ def build_gl_rbf_ffm(config: Mapping[str, Any], n_fields: int, device: torch.dev
             lengthscale=float(_get(config, "rff_lengthscale", 0.15)),
         )
     )
-    backbone = ConditionalPointHybridLocalGlobalRBF(
+    common = dict(
         n_fields=n_fields,
         coord_dim=3,
         hidden_dim=int(_get(config, "hidden_dim", 256)),
@@ -100,16 +97,37 @@ def build_gl_rbf_ffm(config: Mapping[str, Any], n_fields: int, device: torch.dev
         use_fourier_pe=bool(_get(config, "USE_FOURIER_PE", False)),
         fourier_pe_num_bands=int(_get(config, "fourier_pe_num_bands", 32)),
         fourier_pe_max_freq=float(_get(config, "fourier_pe_max_freq", 64.0)),
-        enhanced_backbone=enhanced,
         sensor_coord_encoding=str(sensor_coord_encoding),
         latent_sensor_reinject=latent_sensor_reinject,
         latent_reinject_every=int(_get(config, "latent_reinject_every", 1)),
-        query_latent_readout=query_latent_readout,
-        query_readout_type=str(query_readout_type),
-        query_readout_scale_init=query_readout_scale_init,
-        enhanced_head_norm=enhanced_head_norm,
         glres_scale_init=glres_scale_init,
     )
+    if is_cq:
+        backbone = ConditionalPointHybridLocalGlobalRBFCQ(
+            **common,
+            cq_query_dim=int(_get(config, "cq_query_dim", 128)),
+            cq_readout_mode=str(_get(config, "cq_readout_mode", "lowrank")),
+            cq_readout_rank=int(_get(config, "cq_readout_rank", 64)),
+            cq_readout_heads=int(_get(config, "cq_readout_heads", 4)),
+            cq_global_scale_init=float(_get(config, "cq_global_scale_init", 1.0)),
+            cq_local_scale_init=float(_get(config, "cq_local_scale_init", 1.0)),
+            cq_readout_scale_init=float(_get(config, "cq_readout_scale_init", 1.0e-2)),
+        )
+    else:
+        query_latent_readout = bool(_get(config, "query_latent_readout", enhanced))
+        backbone = ConditionalPointHybridLocalGlobalRBF(
+            **common,
+            enhanced_backbone=enhanced,
+            query_latent_readout=query_latent_readout,
+            query_readout_type=str(_get(
+                config, "query_readout_type",
+                "coord" if enhanced or query_latent_readout else "point",
+            )),
+            query_readout_scale_init=float(_get(
+                config, "query_readout_scale_init", 1.0e-2 if enhanced else 0.0,
+            )),
+            enhanced_head_norm=bool(_get(config, "enhanced_head_norm", enhanced)),
+        )
     return PointCloudFFM(
         backbone, prior, sigma_min=float(_get(config, "sigma_min", 1.0e-4))
     ).to(device)

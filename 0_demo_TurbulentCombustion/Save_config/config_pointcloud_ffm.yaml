@@ -79,7 +79,7 @@ training_log_every_n_steps: 20
 #   2) repeated sensor-to-latent re-injection,
 #   3) lightweight query-to-latent global readout,
 #   4) LayerNorm before the fusion head.
-backbone: "GL_rbf_ENH" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
+backbone: "GL_rbf_ENH" # Selection also supports "GL_rbf_ENH_CQ".
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -135,6 +135,16 @@ query_readout_scale_init: 1.0e-2     # Small positive gate for query-to-latent r
 
 enhanced_head_norm: true             # Apply LayerNorm before the [query, global, local] fusion head.
 glres_scale_init: 1.0e-2             # Initial scale for topk_rbf_glres scaffold and sensor-importance terms.
+
+# GL_rbf_ENH_CQ query-execution settings. These do not alter hidden_dim,
+# latent_dim, cond_dim, latent count/blocks/heads, K, or Fourier bands.
+cq_query_dim: 128
+cq_readout_mode: "lowrank"            # choices: ["full", "lowrank"]
+cq_readout_rank: 64
+cq_readout_heads: 4
+cq_global_scale_init: 1.0
+cq_local_scale_init: 1.0
+cq_readout_scale_init: 1.0e-2
 
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline

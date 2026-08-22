@@ -60,6 +60,7 @@ The `backbone` argument in `train_pointcloud_ffm.py` selects the model family:
 - `perceiver`: latent cross-attention backbone for global interaction
 - `GL_rbf`: hybrid local-global point-cloud backbone
 - `GL_rbf_ENH`: enhanced hybrid local-global point-cloud backbone. It keeps the same RBF/top-K local gather choices as GL_rbf, but adds Senseiver-inspired coordinate tokenization, optional sensor-to-latent re-injection, query-to-latent readout, and normalized fusion.
+- `GL_rbf_ENH_CQ`: Stage-6 compact-query sibling. It keeps the complete GL_rbf_ENH condition/global/local core while using a 128-wide point-state path, additive fusion, compact residual/coarse heads, and either the full latent readout (`cq_readout_mode=full`) or cached rank-64 lightweight readout (`lowrank`).
 - `fno`: grid-based FNO baseline wrapped in the same flow-matching interface
 
 So although the folder also has a separate "baseline pipeline", the main point-cloud workflow itself already supports several backbone variants through one training script.
