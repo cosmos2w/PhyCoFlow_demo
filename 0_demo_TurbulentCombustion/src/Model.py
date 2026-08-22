@@ -17,6 +17,11 @@ from obs_consistency import (
     normalize_obs_consistency_mode,
     scatter_observed_values,
 )
+from persistent_topk_geometry_cache import (
+    build_persistent_topk_geometry_cache,
+    cache_tensors,
+    validate_persistent_topk_geometry_cache,
+)
 
 FIELD_NAMES = ("CH4", "CO", "T", "U_1", "p")
 
@@ -1571,6 +1576,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         condition_context: Mapping[str, torch.Tensor],
         cache_level: str = "none",
         chunk_size: Optional[int] = None,
+        precomputed_geometry: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Cache geometry or inference-only static query features in FP32."""
         if cache_level not in ("none", "geometry", "static_features"):
@@ -1582,9 +1588,19 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             "chunk_size": chunk_size,
         }
         if cache_level == "none":
+            if precomputed_geometry is not None:
+                raise ValueError("Persistent geometry requires geometry or static_features cache level.")
             return context
         if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
             raise ValueError("Query caching supports topk_rbf and topk_rbf_glres.")
+        persistent_topk = None
+        if precomputed_geometry is not None:
+            validate_persistent_topk_geometry_cache(
+                precomputed_geometry, self, coords=coords,
+                obs_coords=condition_context["obs_coords"],
+                obs_mask=condition_context["obs_mask"],
+            )
+            persistent_topk = cache_tensors(precomputed_geometry)
         if self.pos_enc is None:
             context["coord_feat"] = coords
         else:
@@ -1594,6 +1610,10 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 coord_feat[:, start:end] = self.pos_enc(coords[:, start:end])
             context["coord_feat"] = coord_feat
         if cache_level == "geometry":
+            if persistent_topk is not None:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                context.update(topk_d2=topk_d2, topk_idx=topk_idx, topk_valid=topk_valid)
+                return context
             k = min(self.gather_topk, condition_context["obs_coords"].shape[1])
             topk_d2 = coords.new_empty(coords.shape[0], coords.shape[1], k)
             topk_idx = torch.empty(
@@ -1638,14 +1658,23 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             end = min(start + chunk_size, coords.shape[1])
             coords_c = coords[:, start:end]
             empty_feat = coords_c.new_empty(coords_c.shape[0], coords_c.shape[1], 0)
-            local_cache[:, start:end] = self._aggregate_chunk(
-                coords_c,
-                empty_feat,
-                condition_context["obs_coords"],
-                condition_context["refined_sensor_feat"],
-                condition_context["obs_mask"],
-                condition_context.get("sensor_importance_bias"),
-            )
+            if persistent_topk is None:
+                local_cache[:, start:end] = self._aggregate_chunk(
+                    coords_c,
+                    empty_feat,
+                    condition_context["obs_coords"],
+                    condition_context["refined_sensor_feat"],
+                    condition_context["obs_mask"],
+                    condition_context.get("sensor_importance_bias"),
+                )
+            else:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                local_cache[:, start:end] = self._aggregate_topk_from_geometry(
+                    topk_d2[:, start:end],
+                    topk_idx[:, start:end],
+                    topk_valid[:, start:end],
+                    condition_context,
+                )
             if self.use_query_latent_readout:
                 q = self._build_query_readout_tokens(empty_feat, coords_c)
                 readout = self.query_latent_readout(
@@ -2099,6 +2128,7 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
         condition_context: Mapping[str, torch.Tensor],
         cache_level: str = "none",
         chunk_size: Optional[int] = None,
+        precomputed_geometry: Optional[Any] = None,
     ) -> Dict[str, Any]:
         if cache_level not in ("none", "geometry", "static_features"):
             raise ValueError("Unknown reconstruction cache level.")
@@ -2109,9 +2139,19 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             "chunk_size": chunk_size,
         }
         if cache_level == "none":
+            if precomputed_geometry is not None:
+                raise ValueError("Persistent geometry requires geometry or static_features cache level.")
             return context
         if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
             raise ValueError("Query caching supports topk_rbf and topk_rbf_glres.")
+        persistent_topk = None
+        if precomputed_geometry is not None:
+            validate_persistent_topk_geometry_cache(
+                precomputed_geometry, self, coords=coords,
+                obs_coords=condition_context["obs_coords"],
+                obs_mask=condition_context["obs_mask"],
+            )
+            persistent_topk = cache_tensors(precomputed_geometry)
 
         coord_feat = coords.new_empty(
             coords.shape[0], coords.shape[1], self.coord_feat_dim,
@@ -2125,6 +2165,10 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
         context["coord_feat"] = coord_feat
 
         if cache_level == "geometry":
+            if persistent_topk is not None:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                context.update(topk_d2=topk_d2, topk_idx=topk_idx, topk_valid=topk_valid)
+                return context
             k = min(self.gather_topk, condition_context["obs_coords"].shape[1])
             topk_d2 = coords.new_empty(coords.shape[0], coords.shape[1], k)
             topk_idx = torch.empty(
@@ -2163,14 +2207,23 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             end = min(start + chunk_size, coords.shape[1])
             coords_c = coords[:, start:end]
             empty_feat = coords_c.new_empty(coords_c.shape[0], coords_c.shape[1], 0)
-            local_cache[:, start:end] = self._aggregate_chunk(
-                coords_c,
-                empty_feat,
-                condition_context["obs_coords"],
-                condition_context["refined_sensor_feat"],
-                condition_context["obs_mask"],
-                condition_context.get("sensor_importance_bias"),
-            )
+            if persistent_topk is None:
+                local_cache[:, start:end] = self._aggregate_chunk(
+                    coords_c,
+                    empty_feat,
+                    condition_context["obs_coords"],
+                    condition_context["refined_sensor_feat"],
+                    condition_context["obs_mask"],
+                    condition_context.get("sensor_importance_bias"),
+                )
+            else:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                local_cache[:, start:end] = self._aggregate_topk_from_geometry(
+                    topk_d2[:, start:end],
+                    topk_idx[:, start:end],
+                    topk_valid[:, start:end],
+                    condition_context,
+                )
             readout_cache[:, start:end] = self._cq_readout(
                 coord_feat[:, start:end], condition_context,
             )
@@ -2712,6 +2765,21 @@ class PointCloudFFM(nn.Module):
         """
         return self.prior(coords, self.model.n_fields)
 
+    @torch.no_grad()
+    def prepare_reconstruction_geometry_cache(
+        self,
+        *,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_mask: torch.Tensor,
+        chunk_size: int = 8192,
+    ) -> Any:
+        """Build reusable Top-K geometry without condition-dependent features."""
+        return build_persistent_topk_geometry_cache(
+            self.model, coords=coords, obs_coords=obs_coords,
+            obs_mask=obs_mask, chunk_size=chunk_size,
+        )
+
     def simulate(self, t: torch.Tensor, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
         """
         Straight-line interpolation between source x0 and target x1.
@@ -2915,26 +2983,43 @@ class PointCloudFFM(nn.Module):
         mask_map: Optional[torch.Tensor],
         reconstruction_query_chunk_size: int,
         reconstruction_cache_level: str,
+        reconstruction_geometry_cache: Optional[Any],
     ) -> torch.Tensor:
         if not hasattr(self.model, "prepare_condition_context"):
             raise ValueError(
                 "cached_streamed reconstruction requires a backbone with the context API."
             )
         chunk_size = max(1, int(reconstruction_query_chunk_size))
+        profile = bool(getattr(self, "_reconstruction_profile_enabled", False))
+
+        def profile_sync() -> None:
+            if profile and coords.device.type == "cuda":
+                torch.cuda.synchronize(coords.device)
+
+        profile_sync()
+        condition_start = time.perf_counter()
         condition_context = self.model.prepare_condition_context(
             obs_coords=obs_coords,
             obs_values=obs_values,
             obs_mask=obs_mask,
             obs_field_ids=obs_field_ids,
         )
+        profile_sync()
+        condition_seconds = time.perf_counter() - condition_start
+        query_start = time.perf_counter()
         query_context = self.model.prepare_query_context(
             coords=coords,
             condition_context=condition_context,
             cache_level=reconstruction_cache_level,
             chunk_size=chunk_size,
+            precomputed_geometry=reconstruction_geometry_cache,
         )
         self._last_reconstruction_condition_bytes = self.model.context_nbytes(condition_context)
         self._last_reconstruction_cache_bytes = self.model.context_nbytes(query_context)
+        profile_sync()
+        self._last_reconstruction_condition_seconds = condition_seconds
+        self._last_reconstruction_query_seconds = time.perf_counter() - query_start
+        ode_start = time.perf_counter()
         bsz = coords.shape[0]
         for i in range(len(ts) - 1):
             t0 = ts[i].expand(bsz)
@@ -3013,6 +3098,8 @@ class PointCloudFFM(nn.Module):
                 obs_field_ids=obs_field_ids,
                 strength=1.0,
             )
+        profile_sync()
+        self._last_reconstruction_ode_seconds = time.perf_counter() - ode_start
         return x
 
     @torch.no_grad()
@@ -3035,6 +3122,7 @@ class PointCloudFFM(nn.Module):
         reconstruction_execution_mode: str = "legacy_full",
         reconstruction_query_chunk_size: int = 8192,
         reconstruction_cache_level: str = "static_features",
+        reconstruction_geometry_cache: Optional[Any] = None,
     ) -> torch.Tensor:
         """
         Integrate the learned rectified-flow ODE from x0 ~ prior to x1.
@@ -3047,6 +3135,10 @@ class PointCloudFFM(nn.Module):
         if reconstruction_execution_mode not in ("legacy_full", "cached_streamed"):
             raise ValueError(
                 "reconstruction_execution_mode must be 'legacy_full' or 'cached_streamed'."
+            )
+        if reconstruction_geometry_cache is not None and reconstruction_execution_mode != "cached_streamed":
+            raise ValueError(
+                "reconstruction_geometry_cache requires cached_streamed execution."
             )
 
         bsz = coords.shape[0]
@@ -3104,6 +3196,7 @@ class PointCloudFFM(nn.Module):
                 mask_map=mask_map,
                 reconstruction_query_chunk_size=reconstruction_query_chunk_size,
                 reconstruction_cache_level=reconstruction_cache_level,
+                reconstruction_geometry_cache=reconstruction_geometry_cache,
             )
         self._last_reconstruction_condition_bytes = 0
         self._last_reconstruction_cache_bytes = 0
