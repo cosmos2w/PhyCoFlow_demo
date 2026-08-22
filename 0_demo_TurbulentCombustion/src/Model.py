@@ -1917,10 +1917,16 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
         cq_global_scale_init: float = 1.0,
         cq_local_scale_init: float = 1.0,
         cq_readout_scale_init: float = 1.0e-2,
+        cq_fusion_mode: str = "additive",
     ) -> None:
         if cq_readout_mode not in ("full", "lowrank"):
             raise ValueError(
                 f"cq_readout_mode must be one of ['full', 'lowrank'], got {cq_readout_mode!r}."
+            )
+        if cq_fusion_mode not in ("additive", "structured_concat"):
+            raise ValueError(
+                "cq_fusion_mode must be one of ['additive', 'structured_concat'], "
+                f"got {cq_fusion_mode!r}."
             )
         if cq_readout_heads < 1:
             raise ValueError(f"cq_readout_heads must be positive, got {cq_readout_heads}.")
@@ -1975,6 +1981,7 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
 
         self.cq_query_dim = int(cq_query_dim)
         self.cq_readout_mode = str(cq_readout_mode)
+        self.cq_fusion_mode = str(cq_fusion_mode)
         self.cq_readout_rank = int(cq_readout_rank)
         self.cq_readout_heads = int(max(1, min(num_heads, 4)) if cq_readout_mode == "full" else cq_readout_heads)
         self.hidden_dim = int(hidden_dim)
@@ -1998,25 +2005,40 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             depth=3,
         )
         self.cq_global_proj = nn.Linear(hidden_dim, self.cq_query_dim)
-        self.cq_local_proj = (
-            nn.Identity()
-            if cond_dim == self.cq_query_dim
-            else nn.Linear(cond_dim, self.cq_query_dim)
-        )
-
-        self.cq_global_scale = nn.Parameter(torch.tensor(float(cq_global_scale_init)))
-        self.cq_local_scale = nn.Parameter(torch.tensor(float(cq_local_scale_init)))
-        self.cq_readout_scale = nn.Parameter(torch.tensor(float(cq_readout_scale_init)))
-        self.cq_fusion_norm = nn.LayerNorm(self.cq_query_dim)
-        self.cq_head = nn.Sequential(
-            nn.Linear(self.cq_query_dim, self.cq_query_dim),
-            nn.GELU(),
-            nn.Dropout(mlp_dropout),
-            nn.Linear(self.cq_query_dim, self.cq_query_dim),
-            nn.GELU(),
-            nn.Dropout(mlp_dropout),
-            nn.Linear(self.cq_query_dim, n_fields),
-        )
+        if self.cq_fusion_mode == "additive":
+            # Keep this module set, ordering, and all shapes unchanged so CQ
+            # checkpoints created before cq_fusion_mode continue to strict-load.
+            self.cq_local_proj = (
+                nn.Identity()
+                if cond_dim == self.cq_query_dim
+                else nn.Linear(cond_dim, self.cq_query_dim)
+            )
+            self.cq_global_scale = nn.Parameter(torch.tensor(float(cq_global_scale_init)))
+            self.cq_local_scale = nn.Parameter(torch.tensor(float(cq_local_scale_init)))
+            self.cq_readout_scale = nn.Parameter(torch.tensor(float(cq_readout_scale_init)))
+            self.cq_fusion_norm = nn.LayerNorm(self.cq_query_dim)
+            self.cq_head = nn.Sequential(
+                nn.Linear(self.cq_query_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, n_fields),
+            )
+        else:
+            fusion_dim = 2 * self.cq_query_dim + self.cond_dim
+            self.cq_readout_scale = nn.Parameter(torch.tensor(float(cq_readout_scale_init)))
+            self.cq_fusion_norm = nn.LayerNorm(fusion_dim)
+            self.cq_head = nn.Sequential(
+                nn.Linear(fusion_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, n_fields),
+            )
         if self.gather_mode == "topk_rbf_glres":
             self.cq_coarse_film = nn.Linear(self.cq_query_dim, 2 * self.cq_query_dim)
             self.cq_coarse_head = nn.Sequential(
@@ -2278,15 +2300,21 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
                 condition_context["obs_mask"],
                 condition_context.get("sensor_importance_bias"),
             )
-        local_q = self.cq_local_proj(local_cond)
         global_q = condition_context["global_q"]
-        fused = (
-            point_q
-            + self.cq_global_scale * global_q.unsqueeze(1)
-            + self.cq_local_scale * local_q
-            + self.cq_readout_scale * query_global_q
-        )
-        residual = self.cq_head(self.cq_fusion_norm(fused))
+        if self.cq_fusion_mode == "structured_concat":
+            global_for_head = (
+                global_q.unsqueeze(1)
+                + self.cq_readout_scale * query_global_q
+            )
+            head_input = torch.cat([point_q, global_for_head, local_cond], dim=-1)
+        else:
+            head_input = (
+                point_q
+                + self.cq_global_scale * global_q.unsqueeze(1)
+                + self.cq_local_scale * self.cq_local_proj(local_cond)
+                + self.cq_readout_scale * query_global_q
+            )
+        residual = self.cq_head(self.cq_fusion_norm(head_input))
         if self.gather_mode == "topk_rbf_glres":
             return self.cq_coarse_scale * self._predict_cq_coarse(point_q, global_q) + residual
         return residual
@@ -2315,16 +2343,32 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
         )
         total_parameters = sum(parameter.numel() for parameter in self.parameters())
         point_input_dim = self.coord_feat_dim + self.n_fields + 1
-        local_projection_macs = (
-            0 if self.cond_dim == self.cq_query_dim
-            else self.cond_dim * self.cq_query_dim
+        fusion_dim = (
+            self.cq_query_dim
+            if self.cq_fusion_mode == "additive"
+            else 2 * self.cq_query_dim + self.cond_dim
         )
+        if self.cq_fusion_mode == "additive":
+            local_projection_macs = (
+                0 if self.cond_dim == self.cq_query_dim
+                else self.cond_dim * self.cq_query_dim
+            )
+            head_and_coarse_macs = (
+                3 * self.cq_query_dim ** 2
+                + 2 * self.cq_query_dim * self.n_fields
+            )
+        else:
+            local_projection_macs = 0
+            head_and_coarse_macs = (
+                fusion_dim * self.cq_query_dim
+                + 2 * self.cq_query_dim ** 2
+                + 2 * self.cq_query_dim * self.n_fields
+            )
         common_linear_macs = (
             point_input_dim * self.cq_query_dim
             + 2 * self.cq_query_dim ** 2
             + local_projection_macs
-            + 3 * self.cq_query_dim ** 2
-            + 2 * self.cq_query_dim * self.n_fields
+            + head_and_coarse_macs
         )
         if self.cq_readout_mode == "full":
             readout_linear_macs = (
@@ -2350,13 +2394,17 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             "latent_dim": self.latent_dim,
             "cond_dim": self.cond_dim,
             "readout_mode": self.cq_readout_mode,
+            "fusion_mode": self.cq_fusion_mode,
             "readout_rank": (self.cq_readout_rank if self.cq_readout_mode == "lowrank" else None),
             "readout_heads": self.cq_readout_heads,
             "point_state_width": self.cq_query_dim,
             "global_width": self.cq_query_dim,
-            "local_width": self.cq_query_dim,
+            "local_width": (
+                self.cq_query_dim
+                if self.cq_fusion_mode == "additive" else self.cond_dim
+            ),
             "legacy_concat_width": 2 * self.hidden_dim + self.cond_dim,
-            "cq_fused_width": self.cq_query_dim,
+            "cq_fused_width": fusion_dim,
             "theoretical_query_linear_macs_per_query_excluding_attention": (
                 common_linear_macs + readout_linear_macs
             ),

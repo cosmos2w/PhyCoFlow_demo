@@ -107,6 +107,7 @@ def build_gl_rbf_ffm(config: Mapping[str, Any], n_fields: int, device: torch.dev
             **common,
             cq_query_dim=int(_get(config, "cq_query_dim", 128)),
             cq_readout_mode=str(_get(config, "cq_readout_mode", "lowrank")),
+            cq_fusion_mode=str(_get(config, "cq_fusion_mode", "additive")),
             cq_readout_rank=int(_get(config, "cq_readout_rank", 64)),
             cq_readout_heads=int(_get(config, "cq_readout_heads", 4)),
             cq_global_scale_init=float(_get(config, "cq_global_scale_init", 1.0)),

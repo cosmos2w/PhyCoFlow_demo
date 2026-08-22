@@ -1,0 +1,23 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/wanglz/miniconda3/envs/phycoflow_env/bin/python3.10
+cachedir: .pytest_cache
+rootdir: /home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/.worktrees/pointcloud-cq-balanced/0_demo_TurbulentCombustion
+plugins: mock-3.15.1, jaxtyping-0.3.3, anyio-4.13.0
+collecting ... collected 14 items
+
+tests/test_cq_balanced.py::test_structured_concat_contract_and_forward PASSED [  7%]
+tests/test_cq_balanced.py::test_default_additive_state_is_unchanged_and_strict_loadable PASSED [ 14%]
+tests/test_cq_balanced.py::test_unknown_fusion_mode_rejected PASSED      [ 21%]
+tests/test_cq_balanced.py::test_structured_concat_all_required_gradients_reachable PASSED [ 28%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[geometry-euler-1] PASSED [ 35%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[geometry-euler-2] PASSED [ 42%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[geometry-euler-4] PASSED [ 50%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[geometry-heun-2] PASSED [ 57%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[static_features-euler-1] PASSED [ 64%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[static_features-euler-2] PASSED [ 71%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[static_features-euler-4] PASSED [ 78%]
+tests/test_cq_balanced.py::test_structured_concat_cached_and_persistent_equivalence[static_features-heun-2] PASSED [ 85%]
+tests/test_cq_balanced.py::test_structured_concat_persistent_sample_performs_zero_new_knn_searches PASSED [ 92%]
+tests/test_cq_balanced.py::test_structured_concat_microbatch_loss_gradients_and_update_match PASSED [100%]
+
+============================== 14 passed in 3.08s ==============================

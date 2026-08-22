@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage-6 cost benchmark for F0, CQ-Full, and CQ-LR."""
+"""Stage-6 cost benchmark for F0, CQ-LR, and CQ-Balanced."""
 
 from __future__ import annotations
 
@@ -38,6 +38,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--query-sizes", type=int, nargs="+", default=[4096, 16384, 65536])
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--balanced-query-dim", type=int, default=192)
     parser.add_argument("--n-obs", type=int, default=256)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
@@ -74,17 +76,18 @@ def make_inputs(
     n_fields: int,
     device: torch.device,
     seed: int,
+    batch_size: int = 1,
 ) -> dict[str, torch.Tensor]:
     generator = torch.Generator(device=device).manual_seed(seed)
-    coords = torch.rand(1, n_query, 3, generator=generator, device=device)
+    coords = torch.rand(batch_size, n_query, 3, generator=generator, device=device)
     return {
         "coords": coords,
-        "x_t": torch.randn(1, n_query, n_fields, generator=generator, device=device),
-        "t": torch.rand(1, generator=generator, device=device),
-        "obs_coords": torch.rand(1, n_obs, 3, generator=generator, device=device),
-        "obs_values": torch.randn(1, n_obs, 1, generator=generator, device=device),
-        "obs_mask": torch.ones(1, n_obs, device=device),
-        "obs_field_ids": torch.arange(n_obs, device=device).remainder(n_fields).unsqueeze(0),
+        "x_t": torch.randn(batch_size, n_query, n_fields, generator=generator, device=device),
+        "t": torch.rand(batch_size, generator=generator, device=device),
+        "obs_coords": torch.rand(batch_size, n_obs, 3, generator=generator, device=device),
+        "obs_values": torch.randn(batch_size, n_obs, 1, generator=generator, device=device),
+        "obs_mask": torch.ones(batch_size, n_obs, device=device),
+        "obs_field_ids": torch.arange(n_obs, device=device).remainder(n_fields).unsqueeze(0).expand(batch_size, -1),
     }
 
 
@@ -140,6 +143,7 @@ def build_models(
     config: dict[str, Any],
     checkpoint_path: Path,
     device: torch.device,
+    balanced_query_dim: int = 192,
 ) -> dict[str, torch.nn.Module]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     models = {}
@@ -147,12 +151,17 @@ def build_models(
     f0 = build_gl_rbf_ffm(config, n_fields=5, device=device)
     f0.load_state_dict(checkpoint_model_state(checkpoint), strict=True)
     models["F0"] = f0
-    for label, mode in (("CQ-Full", "full"), ("CQ-LR", "lowrank")):
+    candidates = (
+        ("CQ-LR", 128, "lowrank", "additive"),
+        (f"CQ-Balanced-{balanced_query_dim}-Full", balanced_query_dim, "full", "structured_concat"),
+    )
+    for label, query_dim, readout_mode, fusion_mode in candidates:
         candidate = copy.deepcopy(config)
         candidate.update(
             backbone="GL_rbf_ENH_CQ",
-            cq_query_dim=128,
-            cq_readout_mode=mode,
+            cq_query_dim=query_dim,
+            cq_readout_mode=readout_mode,
+            cq_fusion_mode=fusion_mode,
             cq_readout_rank=64,
             cq_readout_heads=4,
             cq_global_scale_init=1.0,
@@ -244,7 +253,8 @@ def component_profile(
             backbone.pos_enc(values["coords"])
             if backbone.pos_enc is not None else values["coords"]
         ))
-        t_feat = values["t"].view(1, 1, 1).expand(1, values["coords"].shape[1], 1)
+        batch_size = int(values["coords"].shape[0])
+        t_feat = values["t"].view(batch_size, 1, 1).expand(batch_size, values["coords"].shape[1], 1)
         if hasattr(backbone, "cq_query_dim"):
             point, point_ms = average(lambda: backbone.cq_point_encoder(torch.cat(
                 [coord_feat, values["x_t"], t_feat], dim=-1,
@@ -271,13 +281,22 @@ def component_profile(
             global_q = condition["global_q"]
 
             def fusion_head() -> torch.Tensor:
-                fused = (
-                    point
-                    + backbone.cq_global_scale * global_q.unsqueeze(1)
-                    + backbone.cq_local_scale * backbone.cq_local_proj(local)
-                    + backbone.cq_readout_scale * readout
-                )
-                return backbone.cq_head(backbone.cq_fusion_norm(fused))
+                if backbone.cq_fusion_mode == "structured_concat":
+                    global_for_head = (
+                        global_q.unsqueeze(1)
+                        + backbone.cq_readout_scale * readout
+                    )
+                    head_input = torch.cat(
+                        [point, global_for_head, local], dim=-1,
+                    )
+                else:
+                    head_input = (
+                        point
+                        + backbone.cq_global_scale * global_q.unsqueeze(1)
+                        + backbone.cq_local_scale * backbone.cq_local_proj(local)
+                        + backbone.cq_readout_scale * readout
+                    )
+                return backbone.cq_head(backbone.cq_fusion_norm(head_input))
 
             def coarse() -> torch.Tensor:
                 return backbone.cq_coarse_scale * backbone._predict_cq_coarse(
@@ -323,6 +342,17 @@ def benchmark_million(
 ) -> dict[str, Any]:
     values = make_inputs(n_query, n_obs, 5, device, seed=1_000_003)
     model.eval()
+    sync(device)
+    geometry_start = time.perf_counter()
+    geometry = model.prepare_reconstruction_geometry_cache(
+        coords=values["coords"],
+        obs_coords=values["obs_coords"],
+        obs_mask=values["obs_mask"],
+        chunk_size=chunk_size,
+    )
+    sync(device)
+    geometry_build_s = time.perf_counter() - geometry_start
+    geometry_mb = geometry.nbytes() / 1024.0**2
     if device.type == "cuda":
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
@@ -338,12 +368,13 @@ def benchmark_million(
             obs_values=values["obs_values"],
             obs_mask=values["obs_mask"],
             obs_field_ids=values["obs_field_ids"],
-            n_steps=2,
+            n_steps=4,
             ode_solver="euler",
             obs_consistency_mode="none",
             reconstruction_execution_mode="cached_streamed",
             reconstruction_query_chunk_size=chunk_size,
             reconstruction_cache_level="static_features",
+            reconstruction_geometry_cache=geometry,
         )
     sync(device)
     wall_s = time.perf_counter() - start
@@ -363,12 +394,14 @@ def benchmark_million(
         "status": "ok",
         "N_query": n_query,
         "N_obs": n_obs,
-        "nfe": 2,
+        "nfe": 4,
         "solver": "euler",
         "chunk_size": chunk_size,
-        "cache_level": "static_features",
+        "cache_level": "static_persistent_geometry",
+        "geometry_build_s": geometry_build_s,
+        "geometry_cache_mb": geometry_mb,
         "wall_s": wall_s,
-        "seconds_per_million_queries_per_nfe": wall_s / (n_query / 1e6) / 2.0,
+        "seconds_per_million_queries_per_nfe": wall_s / (n_query / 1e6) / 4.0,
         "peak_allocated_mb": peak_allocated,
         "peak_reserved_mb": peak_reserved,
         "condition_context_mb": condition_mb,
@@ -390,18 +423,24 @@ def main() -> None:
         )
 
     config = yaml.safe_load(args.f0_config.read_text())
-    models = build_models(config, args.f0_checkpoint, device)
+    models = build_models(
+        config, args.f0_checkpoint, device, args.balanced_query_dim,
+    )
     summaries = [model_summary(label, model) for label, model in models.items()]
     scaling_rows = []
     for label, model in models.items():
         for n_query in args.query_sizes:
-            values = make_inputs(n_query, args.n_obs, 5, device, seed=10_000 + n_query)
+            values = make_inputs(
+                n_query, args.n_obs, 5, device, seed=10_000 + n_query,
+                batch_size=args.batch_size,
+            )
             try:
                 row = {
                     "label": label,
                     "status": "ok",
                     "N_query": n_query,
                     "N_obs": args.n_obs,
+                    "batch_size": args.batch_size,
                     **benchmark_step(
                         model, values, iterations=args.iterations,
                         warmup=args.warmup, device=device,
@@ -442,6 +481,7 @@ def main() -> None:
                 averaged = (
                     "wall_s", "seconds_per_million_queries_per_nfe",
                     "condition_context_mb", "static_query_cache_mb",
+                    "geometry_build_s", "geometry_cache_mb",
                 )
                 peaked = (
                     "peak_allocated_mb", "peak_reserved_mb",
@@ -474,6 +514,7 @@ def main() -> None:
         "device": str(device),
         "gpu_name": torch.cuda.get_device_name(device),
         "torch_version": torch.__version__,
+        "batch_size": args.batch_size,
         "f0_config": str(args.f0_config.resolve()),
         "f0_checkpoint": str(args.f0_checkpoint.resolve()),
         "model_summaries": summaries,

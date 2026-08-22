@@ -267,6 +267,11 @@ def parse_args():
     # ----------------------------------------------------------
     p.add_argument("--cq-query-dim", type=int, default=128)
     p.add_argument("--cq-readout-mode", choices=["full", "lowrank"], default="lowrank")
+    p.add_argument(
+        "--cq-fusion-mode",
+        choices=["additive", "structured_concat"],
+        default="additive",
+    )
     p.add_argument("--cq-readout-rank", type=int, default=64)
     p.add_argument("--cq-readout-heads", type=int, default=4)
     p.add_argument("--cq-global-scale-init", type=float, default=1.0)
@@ -1794,6 +1799,7 @@ def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str
         "glres_scale_init",
         "cq_query_dim",
         "cq_readout_mode",
+        "cq_fusion_mode",
         "cq_readout_rank",
         "cq_readout_heads",
         "cq_global_scale_init",
@@ -2076,6 +2082,7 @@ def main():
             "[*] GL_rbf_ENH_CQ settings: "
             f"query_dim={args.cq_query_dim}, "
             f"readout_mode={args.cq_readout_mode}, "
+            f"fusion_mode={args.cq_fusion_mode}, "
             f"readout_rank={args.cq_readout_rank}, "
             f"readout_heads={args.cq_readout_heads}, "
             f"sensor_coord_encoding={sensor_coord_encoding}, "
@@ -2113,6 +2120,7 @@ def main():
             glres_scale_init=glres_scale_init,
             cq_query_dim=args.cq_query_dim,
             cq_readout_mode=args.cq_readout_mode,
+            cq_fusion_mode=args.cq_fusion_mode,
             cq_readout_rank=args.cq_readout_rank,
             cq_readout_heads=args.cq_readout_heads,
             cq_global_scale_init=args.cq_global_scale_init,
@@ -2419,6 +2427,7 @@ def main():
                 ckpt.update({
                     "cq_query_dim": args.cq_query_dim,
                     "cq_readout_mode": args.cq_readout_mode,
+                    "cq_fusion_mode": args.cq_fusion_mode,
                     "cq_readout_rank": args.cq_readout_rank,
                     "cq_readout_heads": args.cq_readout_heads,
                     "cq_global_scale_init": args.cq_global_scale_init,

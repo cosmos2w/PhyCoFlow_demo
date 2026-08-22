@@ -825,6 +825,7 @@ def build_model(cfg: Dict[str, Any], dataset: TurbulentCombustionH5Dataset) -> n
             glres_scale_init=cfg_get_not_none(cfg, "glres_scale_init", 1e-2),
             cq_query_dim=cfg.get("cq_query_dim", 128),
             cq_readout_mode=cfg.get("cq_readout_mode", "lowrank"),
+            cq_fusion_mode=cfg.get("cq_fusion_mode", "additive"),
             cq_readout_rank=cfg.get("cq_readout_rank", 64),
             cq_readout_heads=cfg.get("cq_readout_heads", 4),
             cq_global_scale_init=cfg.get("cq_global_scale_init", 1.0),
