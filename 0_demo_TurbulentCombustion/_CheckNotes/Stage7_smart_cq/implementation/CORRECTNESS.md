@@ -43,7 +43,7 @@ pytest -q tests/test_pointcloud_cq.py tests/test_cq_balanced.py \
 84 passed, 1 skipped
 
 pytest -q
-140 passed, 1 skipped
+141 passed, 1 skipped
 ```
 
 Focused coverage includes EMA formula/apply/restore/checkpoint/resume, zero-init FiLM identity and gradients, literal latent widths 128/256 with a fixed 128-D query decoder, hand-computed value/support, sigma gradient, changed values/field IDs, one-search uncached execution, one condition-context build over cached NFE-4, zero post-build persistent KNN, cached/fresh equivalence, and monolithic/query-microbatch loss-gradient-update equivalence for Stage-7 off/all-on.

@@ -6,7 +6,7 @@ Status: implementation and correctness gates complete; interference-sensitive GP
 
 - Focused Stage-7 tests: **11 passed**.
 - Existing CQ/cache/microbatch regression groups: **84 passed, 1 skipped**.
-- Complete regression suite after implementation: **140 passed, 1 skipped**.
+- Complete regression suite after implementation: **141 passed, 1 skipped**.
 - Frozen clean CQ-LR-128 `best.pt`: strict load succeeded with **0 missing / 0 unexpected** keys.
 
 ## Training decision
