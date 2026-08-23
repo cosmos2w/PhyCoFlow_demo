@@ -68,55 +68,11 @@ from direct_coherence_loss import (
 )
 from model_finetune import find_source_run_dir, load_source_config
 from model_ema import ModelEMA
+from phycoflow_pointcloud.checkpointing import checkpoint_model_state
+from phycoflow_pointcloud.config import resolve_model_identity
+from phycoflow_pointcloud.models.factory import build_pointcloud_model
+from phycoflow_pointcloud.priors import IIDGaussianPrior, RFFGaussianPrior
 
-
-def checkpoint_model_state(
-    checkpoint,
-    prefer_ema: Optional[bool] = None,
-    model: Optional[nn.Module] = None,
-):
-    """Return live or EMA weights while preserving exact frozen model state.
-
-    Passing ``model`` keeps buffers and non-trainable parameters from the live
-    checkpoint. This also repairs old EMA checkpoints that averaged frozen RF
-    prior buffers before that behavior was corrected.
-    """
-    state_dict = checkpoint
-    if isinstance(checkpoint, dict) and "model" in checkpoint:
-        if prefer_ema is None:
-            prefer_ema = bool(
-                checkpoint.get("model_ema_eval", checkpoint.get("model_ema_enabled", False))
-            )
-        use_ema = bool(prefer_ema and "model_ema" in checkpoint)
-        if use_ema:
-            ema_state = checkpoint["model_ema"]
-            state_dict = ema_state.get("shadow", ema_state) if isinstance(ema_state, dict) else ema_state
-            averaged_names = (
-                ema_state.get("averaged_parameter_names")
-                if isinstance(ema_state, dict) else None
-            )
-            live_state = checkpoint["model"]
-            if averaged_names is not None:
-                ema_shadow = ema_state.get("shadow", ema_state)
-                state_dict = dict(live_state)
-                state_dict.update({name: ema_shadow[name] for name in averaged_names})
-            elif model is not None:
-                state_dict = dict(state_dict)
-                frozen_names = {
-                    name for name, _ in model.named_buffers()
-                } | {
-                    name for name, parameter in model.named_parameters()
-                    if not parameter.requires_grad
-                }
-                for name in frozen_names:
-                    if name in live_state:
-                        state_dict[name] = live_state[name]
-        else:
-            state_dict = checkpoint["model"]
-    if isinstance(state_dict, dict) and "_metadata" in state_dict:
-        state_dict = dict(state_dict)
-        state_dict.pop("_metadata", None)
-    return state_dict
 
 def parse_args():
 
@@ -124,6 +80,10 @@ def parse_args():
 
     p.add_argument("--config", type=str, 
                    default="Save_config/config_pointcloud_ffm.yaml", help="Path to YAML config")
+    p.add_argument("--model-name", type=str, default=None,
+                   help="Public model name; historical backbone remains authoritative for compatibility.")
+    p.add_argument("--coord-dim", type=int, default=3,
+                   help="Coordinate-channel count (the turbulent-combustion profile uses 3).")
     p.add_argument("--Demo-Num", type=int, 
                    default=0, help="Demo ID tag for saving directories")
     p.add_argument("--device-ids", type=int, nargs="+", default=[0])
@@ -508,34 +468,6 @@ def normalize_conditioning_args(args):
         args.vis_n_obs_list = list(args.n_obs_max_list)
 
     return args
-
-class IIDGaussianPrior(nn.Module):
-    def forward(self, coords: torch.Tensor, n_channels: int) -> torch.Tensor:
-        bsz, n_pts, _ = coords.shape
-        return torch.randn(bsz, n_pts, n_channels, device=coords.device, dtype=coords.dtype)
-
-
-class RFFGaussianPrior(nn.Module):
-    """Scalable smooth Gaussian-field approximation via random Fourier features."""
-
-    def __init__(self, coord_dim: int = 3, n_features: int = 256, lengthscale: float = 0.15):
-        super().__init__()
-        self.coord_dim = coord_dim
-        self.n_features = n_features
-        self.lengthscale = lengthscale
-        self.register_buffer("omega", torch.randn(coord_dim, n_features) / max(lengthscale, 1e-6))
-        self.register_buffer("phase", 2 * math.pi * torch.rand(n_features))
-
-    def _features(self, coords: torch.Tensor) -> torch.Tensor:
-        z = coords @ self.omega + self.phase
-        return math.sqrt(2.0 / self.n_features) * torch.cos(z)
-
-    def forward(self, coords: torch.Tensor, n_channels: int) -> torch.Tensor:
-        phi = self._features(coords)
-        bsz, _, n_feat = phi.shape
-        weights = torch.randn(bsz, n_channels, n_feat, device=coords.device, dtype=coords.dtype)
-        return torch.einsum("bnf,bcf->bnc", phi, weights)
-
 
 # =====================================================================
 # LEGACY DATA PATH — BEGIN
@@ -1915,6 +1847,12 @@ def main():
                 else:
                     print(f"Warning: YAML key '{key}' is not a recognized argument. Ignoring.")
         args = normalize_conditioning_args(args)
+        if args.model_name is not None or args.backbone in {
+            "GL_rbf", "GL_rbf_ENH", "GL_rbf_ENH_CQ"
+        }:
+            identity = resolve_model_identity(vars(args))
+            args.model_name = identity.public_name
+            args.backbone = identity.internal_backbone
                     
         # Backup the YAML file
         backup_dir = os.path.join(demo_dir, "Save_config", "pointcloud_ffm")
@@ -2109,13 +2047,13 @@ def main():
     data_path_diagnostics = DataPathDiagnostics(save_dir, data_path_config)
 
     prior = IIDGaussianPrior() if args.prior == "iid" else RFFGaussianPrior(
-        coord_dim=3, n_features=args.rff_features, lengthscale=args.rff_lengthscale
+        coord_dim=args.coord_dim, n_features=args.rff_features, lengthscale=args.rff_lengthscale
     )
 
     if args.backbone == "mlp_rbf":
         backbone = ConditionalPointMLPRBF(
             n_fields=train_set.num_fields,
-            coord_dim=3,
+            coord_dim=args.coord_dim,
             hidden_dim=args.hidden_dim,
             cond_dim=args.cond_dim,
             field_embed_dim=args.field_embed_dim,
@@ -2128,7 +2066,7 @@ def main():
     elif args.backbone == "perceiver":
         backbone = ConditionalPointPerceiver(
             n_fields=train_set.num_fields,
-            coord_dim=3,
+            coord_dim=args.coord_dim,
             latent_dim=args.latent_dim,
             num_latents=args.num_latents,
             num_heads=args.num_heads,
@@ -2167,51 +2105,12 @@ def main():
             f"ema={args.model_ema_enabled}, "
             f"ema_decay={args.model_ema_decay}"
         )
-        backbone = ConditionalPointHybridLocalGlobalRBFCQ(
+        model = build_pointcloud_model(
+            vars(args),
             n_fields=train_set.num_fields,
-            coord_dim=3,
-            hidden_dim=args.hidden_dim,
-            cond_dim=args.cond_dim,
-            field_embed_dim=args.field_embed_dim,
-            latent_dim=args.latent_dim,
-            num_latents=args.num_latents,
-            num_heads=args.num_heads,
-            num_latent_blocks=args.num_latent_blocks,
-            ff_mult=args.ff_mult,
-            attn_dropout=args.attn_dropout,
-            mlp_dropout=args.mlp_dropout,
-            rbf_sigma=args.rbf_sigma,
-            summary_type=args.summary_type,
-            gather_mode=args.gather_mode,
-            gather_topk=args.gather_topk,
-            gather_query_chunk_size=args.gather_query_chunk_size,
-            learnable_rbf_sigma=args.learnable_rbf_sigma,
-            neighbor_backend=args.neighbor_backend,
-            sensor_local_topk=args.sensor_local_topk,
-            sensor_local_dropout=args.sensor_local_dropout,
-            use_fourier_pe=args.USE_FOURIER_PE,
-            fourier_pe_num_bands=args.fourier_pe_num_bands,
-            fourier_pe_max_freq=args.fourier_pe_max_freq,
-            sensor_coord_encoding=sensor_coord_encoding,
-            latent_sensor_reinject=latent_sensor_reinject,
-            latent_reinject_every=args.latent_reinject_every,
-            glres_scale_init=glres_scale_init,
-            cq_query_dim=args.cq_query_dim,
-            cq_readout_mode=args.cq_readout_mode,
-            cq_fusion_mode=args.cq_fusion_mode,
-            cq_readout_rank=args.cq_readout_rank,
-            cq_readout_heads=args.cq_readout_heads,
-            cq_global_scale_init=args.cq_global_scale_init,
-            cq_local_scale_init=args.cq_local_scale_init,
-            cq_readout_scale_init=args.cq_readout_scale_init,
-            cq_time_conditioning=args.cq_time_conditioning,
-            cq_time_embed_dim=args.cq_time_embed_dim,
-            cq_time_max_period=args.cq_time_max_period,
-            cq_time_film_zero_init=args.cq_time_film_zero_init,
-            cq_measurement_support_mode=args.cq_measurement_support_mode,
-            cq_measurement_support_normalize=args.cq_measurement_support_normalize,
+            device=device,
+            prior_override=prior,
         )
-        model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:
         enhanced = args.backbone == "GL_rbf_ENH"
 
@@ -2258,44 +2157,12 @@ def main():
             f"glres_scale_init={glres_scale_init}"
         )
 
-        backbone = ConditionalPointHybridLocalGlobalRBF(
+        model = build_pointcloud_model(
+            vars(args),
             n_fields=train_set.num_fields,
-            coord_dim=3,
-            hidden_dim=args.hidden_dim,
-            cond_dim=args.cond_dim,
-            field_embed_dim=args.field_embed_dim,
-            latent_dim=args.latent_dim,
-            num_latents=args.num_latents,
-            num_heads=args.num_heads,
-            num_latent_blocks=args.num_latent_blocks,
-            ff_mult=args.ff_mult,
-            attn_dropout=args.attn_dropout,
-            mlp_dropout=args.mlp_dropout,
-            rbf_sigma=args.rbf_sigma,
-            summary_type=args.summary_type,
-
-            gather_mode=args.gather_mode,
-            gather_topk=args.gather_topk,
-            gather_query_chunk_size=args.gather_query_chunk_size,
-            learnable_rbf_sigma=args.learnable_rbf_sigma,
-            neighbor_backend=args.neighbor_backend,
-
-            sensor_local_topk=args.sensor_local_topk,
-            sensor_local_dropout=args.sensor_local_dropout,
-            use_fourier_pe=args.USE_FOURIER_PE,
-            fourier_pe_num_bands=args.fourier_pe_num_bands,
-            fourier_pe_max_freq=args.fourier_pe_max_freq,
-            enhanced_backbone=enhanced,
-            sensor_coord_encoding=sensor_coord_encoding,
-            latent_sensor_reinject=latent_sensor_reinject,
-            latent_reinject_every=args.latent_reinject_every,
-            query_latent_readout=query_latent_readout,
-            query_readout_type=query_readout_type,
-            query_readout_scale_init=query_readout_scale_init,
-            enhanced_head_norm=enhanced_head_norm,
-            glres_scale_init=glres_scale_init,
+            device=device,
+            prior_override=prior,
         )
-        model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone == "fno":
         # FNO requires an explicit regular-grid interpretation of the dataset.
         try:

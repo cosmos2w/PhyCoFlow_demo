@@ -1,8 +1,10 @@
 # Stage 7 post-RC cleanup plan
 
-Status: **plan only — not executed**  
+Status: **Phases 0–5 executed on `cleanup/gl-rbf-cq-rc1`; Phase 6 deferred**  
 Compatibility baseline: annotated tag `gl-rbf-cq-v0.9.0-rc1`  
 Public target names: `GL_rbf_CQ`, `GL_rbf_CQ-fast`, `GL_rbf_ENH` (legacy)
+
+Execution evidence is indexed in `_CheckNotes/Stage7_cleanup/RESULTS.md`.
 
 ## 1. Purpose and guardrails
 
