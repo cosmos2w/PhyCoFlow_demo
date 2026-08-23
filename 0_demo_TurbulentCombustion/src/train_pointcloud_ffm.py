@@ -18,6 +18,7 @@ import shutil
 import json
 import math
 import os
+import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Sequence
 
@@ -37,11 +38,22 @@ from helpers import (
     visualize_reconstruction,
     build_sparse_condition,
 )
+from pointcloud_data_path import (
+    DataPathDiagnostics,
+    PointCloudBatchCollator,
+    ResolvedDataPathConfig,
+    apply_resolved_data_path_config,
+    materialize_queries_from_full,
+    materialize_sparse_condition_from_layout,
+    print_resolved_data_path_config,
+    resolve_data_path_config,
+)
 from Model import (
     ConditionalPointFFM, 
     ConditionalPointMLPRBF, 
     ConditionalPointPerceiver,
     ConditionalPointHybridLocalGlobalRBF,
+    ConditionalPointHybridLocalGlobalRBFCQ,
     PointCloudFFM,
     FNO,
     FNOFFM,
@@ -76,6 +88,12 @@ def parse_args():
 
     p.add_argument("--data", type=str, 
                    default="Dataset/Merged_CH4COTU1P.h5")
+    p.add_argument(
+        "--dataset-stats-path",
+        type=str,
+        default=None,
+        help="Optional precomputed normalization statistics. Defaults to dataset_stats.pt in the run directory.",
+    )
     p.add_argument("--FIELD-NAMES", "--FIELD_NAMES", dest="FIELD_NAMES", nargs="+", default=None)
     p.add_argument("--field-names", dest="field_names", nargs="+", default=None)
     p.add_argument("--save-dir", type=str, 
@@ -99,7 +117,7 @@ def parse_args():
     # Backbone selection
     # ------------------------------
     p.add_argument(
-        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"], 
+        "--backbone", type=str, default="mlp_rbf", choices = ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH", "GL_rbf_ENH_CQ"],
         help="Backbone type. point-cloud MLP+RBF, point-cloud Perceiver, or grid-based FNO baseline.")
 
     p.add_argument("--seed", type=int, default=42)
@@ -107,10 +125,48 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--weight-decay", type=float, default=1e-6)
+    p.add_argument("--scheduler-t-max", type=int, default=None,
+                   help="Optional cosine schedule horizon; defaults to epochs for legacy behavior.")
     p.add_argument("--train-ratio", type=float, default=0.9)
     p.add_argument("--train-ratio-downsample", dest="train_ratio_downsample", type=float, default=1.0)
     p.add_argument("--time-stride", type=int, default=1)
     p.add_argument("--num-workers", type=int, default=4)
+
+    # ----------------------------------------------------------
+    # Data-path performance / compatibility experiment
+    # ----------------------------------------------------------
+    p.add_argument("--data-path-mode", type=str, default="legacy", choices=["legacy", "optimized"])
+    p.add_argument("--coord-batch-mode", type=str, default=None,
+                   choices=["legacy_clone", "shared_mesh"])
+    p.add_argument("--index-sampling-mode", type=str, default=None,
+                   choices=["legacy_randperm", "scalable"])
+    p.add_argument("--sampling-device", type=str, default=None,
+                   choices=["legacy_gpu", "cpu"])
+    p.add_argument("--field-read-mode", type=str, default=None,
+                   choices=["legacy_full_snapshot", "indexed_union"])
+    p.add_argument("--field-normalization-mode", type=str, default=None,
+                   choices=["legacy_full_after_read", "selected_after_full_read"])
+    p.add_argument("--gpu-transfer-mode", type=str, default=None,
+                   choices=["legacy_full", "selected_only"])
+    p.add_argument("--data-path-diag-storage-mode", type=str, default=None,
+                   choices=["legacy_rewrite", "append"])
+    p.add_argument("--dataloader-persistent-workers", default=None,
+                   action=argparse.BooleanOptionalAction)
+    p.add_argument("--dataloader-prefetch-factor", type=int, default=None)
+    p.add_argument("--non-blocking-transfer", default=None,
+                   action=argparse.BooleanOptionalAction)
+    p.add_argument("--data-path-diagnostics", default=False,
+                   action=argparse.BooleanOptionalAction)
+    p.add_argument("--data-path-diag-every-n-steps", type=int, default=50)
+    p.add_argument("--data-path-diag-warmup-steps", type=int, default=5)
+    p.add_argument("--data-path-diag-max-steps-per-epoch", type=int, default=10)
+    p.add_argument("--training-log-every-n-steps", type=int, default=None)
+    p.add_argument(
+        "--training-history-plot-every-n-epochs",
+        type=int,
+        default=1,
+        help="Regenerate the loss-history PNG every N epochs; use 0 to disable plotting.",
+    )
 
     # ------------------------------
     # These are hyperparameters for mlp_rbf backbone or part of GL_rbf
@@ -207,6 +263,22 @@ def parse_args():
                    help="Initial scale for topk_rbf_glres residual terms: sensor importance and coarse scaffold.")
 
     # ----------------------------------------------------------
+    # Compact Query Decoder — GL_rbf_ENH_CQ
+    # ----------------------------------------------------------
+    p.add_argument("--cq-query-dim", type=int, default=128)
+    p.add_argument("--cq-readout-mode", choices=["full", "lowrank"], default="lowrank")
+    p.add_argument(
+        "--cq-fusion-mode",
+        choices=["additive", "structured_concat"],
+        default="additive",
+    )
+    p.add_argument("--cq-readout-rank", type=int, default=64)
+    p.add_argument("--cq-readout-heads", type=int, default=4)
+    p.add_argument("--cq-global-scale-init", type=float, default=1.0)
+    p.add_argument("--cq-local-scale-init", type=float, default=1.0)
+    p.add_argument("--cq-readout-scale-init", type=float, default=1.0e-2)
+
+    # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
     # Num_x / Num_y must be supplied for the FNO baseline.
     # ----------------------------------------------------------
@@ -244,6 +316,14 @@ def parse_args():
     # These are hyperparameters for training process
     # ------------------------------
     p.add_argument("--n-query-points", type=int, default=4096)
+    p.add_argument("--train-query-microbatch-size", type=int, default=None)
+    p.add_argument("--reuse-condition-context-across-query-microbatches",
+                   action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--reconstruction-execution-mode", type=str, default="legacy_full",
+                   choices=["legacy_full", "cached_streamed"])
+    p.add_argument("--reconstruction-query-chunk-size", type=int, default=8192)
+    p.add_argument("--reconstruction-cache-level", type=str, default="static_features",
+                   choices=["none", "geometry", "static_features"])
     p.add_argument("--query-sampling", type=str, default="uniform", choices=["uniform", "obs_mix"])
     p.add_argument("--query-sample-near-ratio", type=float, default=0.25)
     p.add_argument("--query-sample-far-ratio", type=float, default=0.25)
@@ -281,6 +361,13 @@ def parse_args():
 
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--save-every", type=int, default=10)
+    p.add_argument(
+        "--checkpoint-epochs",
+        type=int,
+        nargs="*",
+        default=[],
+        help="Optional epochs whose checkpoints are retained as epoch_XXXX.pt.",
+    )
     p.add_argument("--n-steps-generation", type=int, default=32)
 
     # ----------------------------------------------------------
@@ -393,16 +480,37 @@ class RFFGaussianPrior(nn.Module):
         return torch.einsum("bnf,bcf->bnc", phi, weights)
 
 
-def collate_snapshots(batch):
-    return {
+# =====================================================================
+# LEGACY DATA PATH — BEGIN
+# Temporary A/B reference implementation.
+# Remove after optimized path is validated.
+# =====================================================================
+def collate_snapshots_legacy(batch):
+    start = time.perf_counter()
+    result = {
         "coords": torch.stack([b["coords"] for b in batch], dim=0),
         "fields": torch.stack([b["fields"] for b in batch], dim=0),
         "time_index": torch.stack([b["time_index"] for b in batch], dim=0),
         "physical_time": torch.stack([b["physical_time"] for b in batch], dim=0),
     }
+    if any("data_path_item_timings" in item for item in batch):
+        hdf5_ms = sum(item.get("data_path_item_timings", {}).get("hdf5_read_ms", 0.0) for item in batch)
+        normalization_ms = sum(
+            item.get("data_path_item_timings", {}).get("cpu_normalization_ms", 0.0)
+            for item in batch
+        )
+        result["data_path_timings"] = {
+            "index_sampling_ms": 0.0,
+            "hdf5_read_ms": hdf5_ms,
+            "cpu_normalization_ms": normalization_ms,
+            "cpu_materialization_ms": max(
+                0.0, (time.perf_counter() - start) * 1000.0
+            ),
+        }
+    return result
 
 
-def sample_query_subset(
+def sample_query_subset_legacy(
     coords: torch.Tensor,
     fields: torch.Tensor,
     n_query: Optional[int],
@@ -490,6 +598,170 @@ def sample_query_subset(
     field_idx = idx.unsqueeze(-1).expand(-1, -1, fields.shape[-1])
     return torch.gather(coords, dim=1, index=coord_idx), torch.gather(fields, dim=1, index=field_idx), idx
 
+
+# Backward-compatible names for reconstruction helpers and old imports.
+collate_snapshots = collate_snapshots_legacy
+sample_query_subset = sample_query_subset_legacy
+# =====================================================================
+# LEGACY DATA PATH — END
+# =====================================================================
+
+def build_pointcloud_loader(
+    dataset: Dataset,
+    args,
+    data_path_config: ResolvedDataPathConfig,
+    *,
+    training: bool,
+    shuffle: bool,
+    generator: Optional[torch.Generator] = None,
+) -> DataLoader:
+    """Build a loader with one resolved data-path configuration."""
+    collator_dataset = dataset
+    while isinstance(collator_dataset, Subset):
+        collator_dataset = collator_dataset.dataset
+    exact_legacy_collate = (
+        data_path_config.coord_batch_mode == "legacy_clone"
+        and data_path_config.sampling_device == "legacy_gpu"
+        and data_path_config.gpu_transfer_mode == "legacy_full"
+    )
+    collate_fn = collate_snapshots_legacy if exact_legacy_collate else PointCloudBatchCollator(
+        dataset=collator_dataset,
+        config=data_path_config,
+        cond_fields=args.cond_fields,
+        n_obs_min=args.n_obs_min_list,
+        n_obs_max=args.n_obs_max_list,
+        n_query_points=None if args.backbone == "fno" else args.n_query_points,
+        query_sampling=args.query_sampling if training else "uniform",
+        query_sample_near_ratio=args.query_sample_near_ratio,
+        query_sample_far_ratio=args.query_sample_far_ratio,
+        query_sample_sigma_ratio=args.query_sample_sigma_ratio,
+    )
+    loader_kwargs = {
+        "dataset": dataset,
+        "batch_size": args.batch_size,
+        "shuffle": shuffle,
+        "generator": generator,
+        "num_workers": args.num_workers,
+        "pin_memory": torch.cuda.is_available(),
+        "collate_fn": collate_fn,
+    }
+    if int(args.num_workers) > 0:
+        loader_kwargs["persistent_workers"] = data_path_config.dataloader_persistent_workers
+        if data_path_config.dataloader_prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = data_path_config.dataloader_prefetch_factor
+    return DataLoader(**loader_kwargs)
+
+
+def _sync_cuda_for_diagnostic(device: torch.device, enabled: bool) -> None:
+    if enabled and device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def _prepare_training_tensors(
+    *,
+    batch: Dict[str, object],
+    device: torch.device,
+    data_path_config: ResolvedDataPathConfig,
+    diagnostic_step: bool,
+    cond_fields: Sequence[int],
+    n_obs_min_list: Sequence[int],
+    n_obs_max_list: Sequence[int],
+    n_query_points: Optional[int],
+    query_sampling: str,
+    query_sample_near_ratio: float,
+    query_sample_far_ratio: float,
+    query_sample_sigma_ratio: float,
+) -> tuple[Dict[str, torch.Tensor], Dict[str, float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+    """Transfer/materialize a batch while retaining an exact legacy branch."""
+    timings = {
+        "h2d_ms": 0.0,
+        "sparse_condition_materialization_ms": 0.0,
+        "query_materialization_ms": 0.0,
+    }
+    non_blocking = bool(data_path_config.non_blocking_transfer)
+    _sync_cuda_for_diagnostic(device, diagnostic_step)
+    start = time.perf_counter()
+
+    if bool(batch.get("materialized_selected", False)):
+        tensors = {
+            key: batch[key].to(device, non_blocking=non_blocking)
+            for key in (
+                "coords_q", "fields_q", "obs_coords", "obs_values",
+                "obs_mask", "obs_indices", "obs_field_ids",
+            )
+        }
+        _sync_cuda_for_diagnostic(device, diagnostic_step)
+        timings["h2d_ms"] = (time.perf_counter() - start) * 1000.0
+        return tensors, timings, None, None
+
+    fields_full = batch["fields"].to(device, non_blocking=non_blocking)
+    if "coords_shared" in batch:
+        coords_shared = batch["coords_shared"].to(device, non_blocking=non_blocking)
+        coords_full = coords_shared.unsqueeze(0).expand(fields_full.shape[0], -1, -1)
+    else:
+        coords_full = batch["coords"].to(device, non_blocking=non_blocking)
+    _sync_cuda_for_diagnostic(device, diagnostic_step)
+    timings["h2d_ms"] = (time.perf_counter() - start) * 1000.0
+
+    if "obs_layout" in batch:
+        start = time.perf_counter()
+        sparse = materialize_sparse_condition_from_layout(
+            coords_full=coords_full,
+            fields_full=fields_full,
+            obs_layout=batch["obs_layout"],
+        )
+        _sync_cuda_for_diagnostic(device, diagnostic_step)
+        timings["sparse_condition_materialization_ms"] = (time.perf_counter() - start) * 1000.0
+        start = time.perf_counter()
+        coords_q, fields_q = materialize_queries_from_full(
+            coords_full, fields_full, batch["query_indices"]
+        )
+        _sync_cuda_for_diagnostic(device, diagnostic_step)
+        timings["query_materialization_ms"] = (time.perf_counter() - start) * 1000.0
+    else:
+        # =====================================================================
+        # LEGACY DATA PATH — BEGIN
+        # Historical GPU sampling/materialization preserved for exact A/B runs.
+        # =====================================================================
+        start = time.perf_counter()
+        obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
+            coords_full=coords_full,
+            fields_full=fields_full,
+            cond_fields=cond_fields,
+            n_obs_min=n_obs_min_list,
+            n_obs_max=n_obs_max_list,
+        )
+        _sync_cuda_for_diagnostic(device, diagnostic_step)
+        timings["sparse_condition_materialization_ms"] = (time.perf_counter() - start) * 1000.0
+        sparse = {
+            "obs_coords": obs_coords,
+            "obs_values": obs_values,
+            "obs_mask": obs_mask,
+            "obs_indices": obs_indices,
+            "obs_field_ids": obs_field_ids,
+        }
+        start = time.perf_counter()
+        coords_q, fields_q, _ = sample_query_subset_legacy(
+            coords=coords_full,
+            fields=fields_full,
+            n_query=n_query_points,
+            mode=query_sampling,
+            obs_coords=obs_coords,
+            obs_mask=obs_mask,
+            near_ratio=query_sample_near_ratio,
+            far_ratio=query_sample_far_ratio,
+            sigma_ratio=query_sample_sigma_ratio,
+        )
+        _sync_cuda_for_diagnostic(device, diagnostic_step)
+        timings["query_materialization_ms"] = (time.perf_counter() - start) * 1000.0
+        # =====================================================================
+        # LEGACY DATA PATH — END
+        # =====================================================================
+
+    tensors = {"coords_q": coords_q, "fields_q": fields_q, **sparse}
+    return tensors, timings, coords_full, fields_full
+
+
 def run_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -504,67 +776,178 @@ def run_epoch(
     query_sample_far_ratio: float = 0.25,
     query_sample_sigma_ratio: float = 0.05,
     epoch: int = 0,
+    data_path_config: Optional[ResolvedDataPathConfig] = None,
+    diagnostics: Optional[DataPathDiagnostics] = None,
+    train_query_microbatch_size: Optional[int] = None,
+    reuse_condition_context_across_query_microbatches: bool = True,
 ) -> float:
     training = optimizer is not None
     model.train(training)
+    if data_path_config is None:
+        data_path_config = resolve_data_path_config({"data_path_mode": "legacy"})
 
-    total = 0.0
+    total = None
     count = 0
-
     mode_str = "Train" if training else "Eval"
     pbar = tqdm(loader, desc=f"Epoch {epoch:04d} [{mode_str}]", leave=False)
+    iterator = iter(pbar)
+    step = 0
+    while True:
+        total_step_start = time.perf_counter()
+        try:
+            batch = next(iterator)
+        except StopIteration:
+            break
+        loader_wait_ms = (time.perf_counter() - total_step_start) * 1000.0
+        diagnostic_step = diagnostics is not None and diagnostics.should_sample(epoch, step)
+        if diagnostic_step and device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
 
-    for batch in pbar:
-        coords_full = batch["coords"].to(device)
-        fields_full = batch["fields"].to(device)
-
-        # Build generalized sparse observations.
-        obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
-            coords_full=coords_full,
-            fields_full=fields_full,
-            cond_fields=cond_fields,
-            n_obs_min=n_obs_min_list,
-            n_obs_max=n_obs_max_list,
-        )
-
-        # for models that must operate on the full regular grid like FNO, 
-        # point subsampling will be disabled.
         effective_n_query = None if getattr(model, "requires_full_grid", False) else n_query_points
         sampling_mode = query_sampling if training else "uniform"
-        coords_q, fields_q, _ = sample_query_subset(
-            coords=coords_full,
-            fields=fields_full,
-            n_query=effective_n_query,
-            mode=sampling_mode,
-            obs_coords=obs_coords,
-            obs_mask=obs_mask,
-            near_ratio=query_sample_near_ratio,
-            far_ratio=query_sample_far_ratio,
-            sigma_ratio=query_sample_sigma_ratio,
+        tensors, prep_timings, _, _ = _prepare_training_tensors(
+            batch=batch,
+            device=device,
+            data_path_config=data_path_config,
+            diagnostic_step=diagnostic_step,
+            cond_fields=cond_fields,
+            n_obs_min_list=n_obs_min_list,
+            n_obs_max_list=n_obs_max_list,
+            n_query_points=effective_n_query,
+            query_sampling=sampling_mode,
+            query_sample_near_ratio=query_sample_near_ratio,
+            query_sample_far_ratio=query_sample_far_ratio,
+            query_sample_sigma_ratio=query_sample_sigma_ratio,
         )
-
-        loss, _ = model.training_loss(
-            x1=fields_q,
-            coords=coords_q,
-            obs_coords=obs_coords,
-            obs_values=obs_values,
-            obs_mask=obs_mask,
-            obs_field_ids=obs_field_ids,
-            obs_indices=obs_indices,
+        allocated_after_materialization_mb = (
+            torch.cuda.memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0
         )
 
         if training:
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+        allocated_before_model_mb = (
+            torch.cuda.memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0
+        )
+        microbatch_active = (
+            train_query_microbatch_size is not None
+            and int(train_query_microbatch_size) > 0
+            and int(train_query_microbatch_size) < int(tensors["coords_q"].shape[1])
+            and hasattr(model, "training_loss_microbatched")
+        )
+        _sync_cuda_for_diagnostic(device, diagnostic_step)
+        start = time.perf_counter()
+        if microbatch_active:
+            grad_context = torch.enable_grad() if training else torch.no_grad()
+            with grad_context:
+                loss, microbatch_metrics = model.training_loss_microbatched(
+                    x1=tensors["fields_q"],
+                    coords=tensors["coords_q"],
+                    obs_coords=tensors["obs_coords"],
+                    obs_values=tensors["obs_values"],
+                    obs_mask=tensors["obs_mask"],
+                    obs_field_ids=tensors["obs_field_ids"],
+                    obs_indices=tensors["obs_indices"],
+                    query_microbatch_size=int(train_query_microbatch_size),
+                    backward=training,
+                    reuse_condition_context=reuse_condition_context_across_query_microbatches,
+                    synchronize_timing=diagnostic_step,
+                )
+        else:
+            microbatch_metrics = {}
+            loss, _ = model.training_loss(
+                x1=tensors["fields_q"],
+                coords=tensors["coords_q"],
+                obs_coords=tensors["obs_coords"],
+                obs_values=tensors["obs_values"],
+                obs_mask=tensors["obs_mask"],
+                obs_field_ids=tensors["obs_field_ids"],
+                obs_indices=tensors["obs_indices"],
+            )
+        _sync_cuda_for_diagnostic(device, diagnostic_step)
+        forward_ms = (time.perf_counter() - start) * 1000.0
+
+        backward_ms = 0.0
+        optimizer_ms = 0.0
+        if training:
+            start = time.perf_counter()
+            if not microbatch_active:
+                loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            _sync_cuda_for_diagnostic(device, diagnostic_step)
+            backward_ms = (time.perf_counter() - start) * 1000.0
+            start = time.perf_counter()
             optimizer.step()
+            _sync_cuda_for_diagnostic(device, diagnostic_step)
+            optimizer_ms = (time.perf_counter() - start) * 1000.0
 
-        current_loss = float(loss.detach().cpu())
-        total += current_loss
+        detached = loss.detach()
+        total = detached if total is None else total + detached
         count += 1
-        pbar.set_postfix_str(f"loss={current_loss:.6e}")
+        if step % data_path_config.training_log_every_n_steps == 0:
+            pbar.set_postfix_str(f"loss={float(detached):.6e}")
 
-    return total / max(count, 1)
+        if diagnostic_step:
+            _sync_cuda_for_diagnostic(device, True)
+            collate_timings = batch.get("data_path_timings", {})
+            pre_model_ms = sum(float(collate_timings.get(key, 0.0)) for key in (
+                "index_sampling_ms", "hdf5_read_ms", "cpu_normalization_ms", "cpu_materialization_ms"
+            )) + sum(prep_timings.values())
+            diagnostics.record({
+                "epoch": int(epoch),
+                "step": int(step),
+                "data_path_mode": data_path_config.data_path_mode,
+                "coord_batch_mode": data_path_config.coord_batch_mode,
+                "index_sampling_mode": data_path_config.index_sampling_mode,
+                "sampling_device": data_path_config.sampling_device,
+                "field_read_mode": data_path_config.field_read_mode,
+                "field_normalization_mode": data_path_config.field_normalization_mode,
+                "gpu_transfer_mode": data_path_config.gpu_transfer_mode,
+                "data_path_diag_storage_mode": data_path_config.data_path_diag_storage_mode,
+                "batch_size": int(tensors["coords_q"].shape[0]),
+                "N_full": int(batch.get("n_full", batch.get("fields", tensors["fields_q"]).shape[1])),
+                "N_query": int(tensors["coords_q"].shape[1]),
+                "N_obs_total": int(tensors["obs_mask"].sum()),
+                "loader_wait_ms": loader_wait_ms,
+                "index_sampling_ms": float(collate_timings.get("index_sampling_ms", 0.0)),
+                "hdf5_read_ms": float(collate_timings.get("hdf5_read_ms", 0.0)),
+                "cpu_normalization_ms": float(collate_timings.get("cpu_normalization_ms", 0.0)),
+                "cpu_materialization_ms": float(collate_timings.get("cpu_materialization_ms", 0.0)),
+                "h2d_ms": prep_timings["h2d_ms"],
+                "sparse_condition_materialization_ms": prep_timings["sparse_condition_materialization_ms"],
+                "query_materialization_ms": prep_timings["query_materialization_ms"],
+                "pre_model_total_ms": pre_model_ms,
+                "model_forward_ms": forward_ms,
+                "backward_ms": backward_ms,
+                "query_microbatch_active": int(microbatch_active),
+                "train_query_microbatch_size": (
+                    int(train_query_microbatch_size) if microbatch_active else 0
+                ),
+                "rf_bridge_ms": float(microbatch_metrics.get("rf_bridge_ms", 0.0)),
+                "condition_context_ms": float(microbatch_metrics.get("condition_context_ms", 0.0)),
+                "query_chunk_forward_ms": float(microbatch_metrics.get("query_chunk_forward_ms", 0.0)),
+                "query_chunk_backward_ms": float(microbatch_metrics.get("query_chunk_backward_ms", 0.0)),
+                "query_microbatches": int(microbatch_metrics.get("query_microbatches", 1)),
+                "optimizer_ms": optimizer_ms,
+                "total_training_step_ms": (time.perf_counter() - total_step_start) * 1000.0,
+                "allocated_after_materialization_mb": allocated_after_materialization_mb,
+                "allocated_before_model_mb": allocated_before_model_mb,
+                "gpu_peak_allocated_mb": (
+                    torch.cuda.max_memory_allocated(device) / (1024 ** 2) if device.type == "cuda" else 0.0
+                ),
+                "gpu_peak_reserved_mb": (
+                    torch.cuda.max_memory_reserved(device) / (1024 ** 2) if device.type == "cuda" else 0.0
+                ),
+            })
+        # Release selected/full batch views before the next diagnostic resets
+        # peak memory, otherwise the next step would measure overlap with stale
+        # references from this iteration.
+        del tensors, loss, detached
+        step += 1
+
+    if diagnostics is not None:
+        diagnostics.flush()
+        diagnostics.print_epoch_summary(epoch)
+    return float(total.cpu()) / max(count, 1) if total is not None else float("nan")
 
 
 def build_direct_coherence_config(args) -> DirectCoherenceConfig:
@@ -594,7 +977,12 @@ def current_coherence_loss_weight(args, epoch: int) -> float:
     return base * min(max(progress, 0.0), 1.0)
 
 
-def build_epoch_train_loader(train_set, args, epoch: int) -> DataLoader:
+def build_epoch_train_loader(
+    train_set,
+    args,
+    epoch: int,
+    data_path_config: Optional[ResolvedDataPathConfig] = None,
+) -> DataLoader:
     """
     Build a fresh random subset loader for one epoch.
 
@@ -611,14 +999,17 @@ def build_epoch_train_loader(train_set, args, epoch: int) -> DataLoader:
         epoch_set = Subset(train_set, indices)
     else:
         epoch_set = train_set
-    return DataLoader(
+    if data_path_config is None:
+        data_path_config = resolve_data_path_config({"data_path_mode": "legacy"})
+    # The collator must retain the base dataset (for shared coordinates/HDF5),
+    # while DataLoader may iterate a Subset of it.
+    return build_pointcloud_loader(
         epoch_set,
-        batch_size=args.batch_size,
+        args,
+        data_path_config,
+        training=True,
         shuffle=True,
         generator=generator,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-        collate_fn=collate_snapshots,
     )
 
 
@@ -660,8 +1051,16 @@ def run_epoch_direct_coherence(
     epoch: int,
     mean: Optional[torch.Tensor] = None,
     std: Optional[torch.Tensor] = None,
+    data_path_config: Optional[ResolvedDataPathConfig] = None,
 ) -> tuple[dict, int]:
     model.train(True)
+    if data_path_config is None:
+        data_path_config = resolve_data_path_config({"data_path_mode": "legacy"})
+    if data_path_config.gpu_transfer_mode == "selected_only":
+        raise ValueError(
+            "direct_coherence currently requires gpu_transfer_mode='legacy_full' because its "
+            "coherence rollout consumes additional full/reference points."
+        )
     loss_module = DirectGlobalCoherenceLoss(direct_cfg)
     rows = []
     applied = 0
@@ -670,28 +1069,28 @@ def run_epoch_direct_coherence(
     pbar = tqdm(loader, desc=f"Epoch {epoch:04d} [{mode_str}]", leave=False)
 
     for batch in pbar:
-        coords_full = batch["coords"].to(device)
-        fields_full = batch["fields"].to(device)
-        obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = build_sparse_condition(
-            coords_full=coords_full,
-            fields_full=fields_full,
-            cond_fields=cond_fields,
-            n_obs_min=n_obs_min_list,
-            n_obs_max=n_obs_max_list,
-        )
-
         effective_n_query = None if getattr(model, "requires_full_grid", False) else n_query_points
-        coords_q, fields_q, _ = sample_query_subset(
-            coords=coords_full,
-            fields=fields_full,
-            n_query=effective_n_query,
-            mode=query_sampling,
-            obs_coords=obs_coords,
-            obs_mask=obs_mask,
-            near_ratio=query_sample_near_ratio,
-            far_ratio=query_sample_far_ratio,
-            sigma_ratio=query_sample_sigma_ratio,
+        tensors, _, coords_full, fields_full = _prepare_training_tensors(
+            batch=batch,
+            device=device,
+            data_path_config=data_path_config,
+            diagnostic_step=False,
+            cond_fields=cond_fields,
+            n_obs_min_list=n_obs_min_list,
+            n_obs_max_list=n_obs_max_list,
+            n_query_points=effective_n_query,
+            query_sampling=query_sampling,
+            query_sample_near_ratio=query_sample_near_ratio,
+            query_sample_far_ratio=query_sample_far_ratio,
+            query_sample_sigma_ratio=query_sample_sigma_ratio,
         )
+        coords_q = tensors["coords_q"]
+        fields_q = tensors["fields_q"]
+        obs_coords = tensors["obs_coords"]
+        obs_values = tensors["obs_values"]
+        obs_mask = tensors["obs_mask"]
+        obs_indices = tensors["obs_indices"]
+        obs_field_ids = tensors["obs_field_ids"]
         data_loss, _ = model.training_loss(
             x1=fields_q,
             coords=coords_q,
@@ -961,35 +1360,62 @@ def load_history_rows(csv_path: Path, max_epoch: Optional[int] = None) -> list[d
 
 
 class TrainingHistoryLogger:
-    def __init__(self, run_dir: Path, initial_rows: Optional[list[dict]] = None) -> None:
+    def __init__(
+        self,
+        run_dir: Path,
+        initial_rows: Optional[list[dict]] = None,
+        plot_every_n_epochs: int = 1,
+    ) -> None:
         self.csv_path = run_dir / "loss_history.csv"
         self.json_path = run_dir / "loss_history.json"
         self.plot_path = run_dir / "loss_history.png"
+        self.plot_every_n_epochs = max(0, int(plot_every_n_epochs))
         self.rows = []
         with open(self.csv_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
-            writer.writerow(["epoch", "train_loss", "val_loss"])
+            writer.writerow([
+                "epoch", "train_loss", "val_loss",
+                "train_seconds", "validation_seconds", "epoch_seconds",
+            ])
             for raw_row in initial_rows or []:
                 row = {
                     "epoch": int(raw_row["epoch"]),
                     "train_loss": None if raw_row.get("train_loss") is None else float(raw_row["train_loss"]),
                     "val_loss": None if raw_row.get("val_loss") is None else float(raw_row["val_loss"]),
+                    "train_seconds": None if raw_row.get("train_seconds") is None else float(raw_row["train_seconds"]),
+                    "validation_seconds": None if raw_row.get("validation_seconds") is None else float(raw_row["validation_seconds"]),
+                    "epoch_seconds": None if raw_row.get("epoch_seconds") is None else float(raw_row["epoch_seconds"]),
                 }
                 self.rows.append(row)
                 writer.writerow([
                     row["epoch"],
                     "" if row["train_loss"] is None else row["train_loss"],
                     "" if row["val_loss"] is None else row["val_loss"],
+                    "" if row["train_seconds"] is None else row["train_seconds"],
+                    "" if row["validation_seconds"] is None else row["validation_seconds"],
+                    "" if row["epoch_seconds"] is None else row["epoch_seconds"],
                 ])
         with open(self.json_path, "w", encoding="utf-8") as handle:
             json.dump(self.rows, handle, indent=2)
-        self._plot()
+        if self.plot_every_n_epochs > 0:
+            self._plot()
 
-    def log_and_plot(self, epoch: int, train_loss: float, val_loss: Optional[float] = None) -> None:
+    def log_and_plot(
+        self,
+        epoch: int,
+        train_loss: float,
+        val_loss: Optional[float] = None,
+        train_seconds: Optional[float] = None,
+        validation_seconds: Optional[float] = None,
+        epoch_seconds: Optional[float] = None,
+    ) -> None:
         row = {
             "epoch": int(epoch),
             "train_loss": float(train_loss),
             "val_loss": None if val_loss is None else float(val_loss),
+            "train_seconds": None if train_seconds is None else float(train_seconds),
+            "validation_seconds": None if validation_seconds is None else float(validation_seconds),
+            "epoch_seconds": None if epoch_seconds is None else float(epoch_seconds),
         }
         self.rows.append(row)
 
@@ -999,10 +1425,14 @@ class TrainingHistoryLogger:
                 row["epoch"],
                 row["train_loss"],
                 "" if row["val_loss"] is None else row["val_loss"],
+                "" if row["train_seconds"] is None else row["train_seconds"],
+                "" if row["validation_seconds"] is None else row["validation_seconds"],
+                "" if row["epoch_seconds"] is None else row["epoch_seconds"],
             ])
         with open(self.json_path, "w", encoding="utf-8") as handle:
             json.dump(self.rows, handle, indent=2)
-        self._plot()
+        if self.plot_every_n_epochs > 0 and epoch % self.plot_every_n_epochs == 0:
+            self._plot()
 
     def _plot(self) -> None:
         train_points = [
@@ -1367,6 +1797,14 @@ def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str
         "query_readout_scale_init",
         "enhanced_head_norm",
         "glres_scale_init",
+        "cq_query_dim",
+        "cq_readout_mode",
+        "cq_fusion_mode",
+        "cq_readout_rank",
+        "cq_readout_heads",
+        "cq_global_scale_init",
+        "cq_local_scale_init",
+        "cq_readout_scale_init",
     ]
     current = vars(args)
     lines = ["\nArchitecture keys that commonly affect checkpoint compatibility:"]
@@ -1476,6 +1914,15 @@ def main():
     else:
         args.pretrained_inherited_base_config_keys = []
 
+    data_path_config = resolve_data_path_config(args)
+    args = apply_resolved_data_path_config(args, data_path_config)
+    if args.training_mode == "direct_coherence" and data_path_config.gpu_transfer_mode == "selected_only":
+        raise ValueError(
+            "direct_coherence needs full reference fields. Set gpu_transfer_mode='legacy_full'; "
+            "shared coordinates and CPU/scalable index sampling remain available as hybrid ablations."
+        )
+    print_resolved_data_path_config(data_path_config)
+
     save_dir.mkdir(parents=True, exist_ok=True)
     recon_dir = save_dir / "Evaluation"
     resume_checkpoint_epoch = int(reload_ckpt.get("epoch", 0)) if reload_ckpt is not None else None
@@ -1520,7 +1967,11 @@ def main():
     # roots are no longer used by this trainer.
 
     # Initialize helpers
-    logger = TrainingHistoryLogger(save_dir, initial_rows=initial_history_rows)
+    logger = TrainingHistoryLogger(
+        save_dir,
+        initial_rows=initial_history_rows,
+        plot_every_n_epochs=args.training_history_plot_every_n_epochs,
+    )
     direct_cfg = build_direct_coherence_config(args)
     direct_logger = (
         DirectCoherenceHistoryLogger(save_dir, initial_rows=initial_direct_history_rows)
@@ -1544,7 +1995,10 @@ def main():
         seed=args.seed,
         time_stride=args.time_stride,
         field_names=args.FIELD_NAMES if args.FIELD_NAMES is not None else args.field_names,
-        stats_path=str(save_dir / "dataset_stats.pt"),
+        stats_path=args.dataset_stats_path or str(save_dir / "dataset_stats.pt"),
+        coord_batch_mode=data_path_config.coord_batch_mode,
+        defer_field_read=(data_path_config.sampling_device == "cpu"),
+        instrument_data_path=data_path_config.data_path_diagnostics,
     )
     val_set = TurbulentCombustionH5Dataset(
         args.data,
@@ -1553,24 +2007,32 @@ def main():
         seed=args.seed,
         time_stride=args.time_stride,
         field_names=args.FIELD_NAMES if args.FIELD_NAMES is not None else args.field_names,
-        stats_path=str(save_dir / "dataset_stats.pt"),
+        stats_path=args.dataset_stats_path or str(save_dir / "dataset_stats.pt"),
+        coord_batch_mode=data_path_config.coord_batch_mode,
+        defer_field_read=(data_path_config.sampling_device == "cpu"),
+        instrument_data_path=data_path_config.data_path_diagnostics,
     )
-    train_loader = DataLoader(
+    hdf5_layout = train_set.hdf5_layout()
+    print(
+        "[*] HDF5 fields layout: "
+        f"shape={hdf5_layout['shape']} chunks={hdf5_layout['chunks']} "
+        f"dtype={hdf5_layout['dtype']} compression={hdf5_layout['compression']}"
+    )
+    train_loader = build_pointcloud_loader(
         train_set,
-        batch_size=args.batch_size,
+        args,
+        data_path_config,
+        training=True,
         shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-        collate_fn=collate_snapshots,
     )
-    val_loader = DataLoader(
+    val_loader = build_pointcloud_loader(
         val_set,
-        batch_size=args.batch_size,
+        args,
+        data_path_config,
+        training=False,
         shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-        collate_fn=collate_snapshots,
     )
+    data_path_diagnostics = DataPathDiagnostics(save_dir, data_path_config)
 
     prior = IIDGaussianPrior() if args.prior == "iid" else RFFGaussianPrior(
         coord_dim=3, n_features=args.rff_features, lengthscale=args.rff_lengthscale
@@ -1606,6 +2068,64 @@ def main():
             use_fourier_pe=args.USE_FOURIER_PE,
             fourier_pe_num_bands=args.fourier_pe_num_bands,
             fourier_pe_max_freq=args.fourier_pe_max_freq,
+        )
+        model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
+    elif args.backbone == "GL_rbf_ENH_CQ":
+        sensor_coord_encoding = args.sensor_coord_encoding or "fourier"
+        latent_sensor_reinject = (
+            True if args.latent_sensor_reinject is None else args.latent_sensor_reinject
+        )
+        glres_scale_init = (
+            1.0e-2 if args.glres_scale_init is None else args.glres_scale_init
+        )
+        print(
+            "[*] GL_rbf_ENH_CQ settings: "
+            f"query_dim={args.cq_query_dim}, "
+            f"readout_mode={args.cq_readout_mode}, "
+            f"fusion_mode={args.cq_fusion_mode}, "
+            f"readout_rank={args.cq_readout_rank}, "
+            f"readout_heads={args.cq_readout_heads}, "
+            f"sensor_coord_encoding={sensor_coord_encoding}, "
+            f"latent_sensor_reinject={latent_sensor_reinject}, "
+            f"glres_scale_init={glres_scale_init}"
+        )
+        backbone = ConditionalPointHybridLocalGlobalRBFCQ(
+            n_fields=train_set.num_fields,
+            coord_dim=3,
+            hidden_dim=args.hidden_dim,
+            cond_dim=args.cond_dim,
+            field_embed_dim=args.field_embed_dim,
+            latent_dim=args.latent_dim,
+            num_latents=args.num_latents,
+            num_heads=args.num_heads,
+            num_latent_blocks=args.num_latent_blocks,
+            ff_mult=args.ff_mult,
+            attn_dropout=args.attn_dropout,
+            mlp_dropout=args.mlp_dropout,
+            rbf_sigma=args.rbf_sigma,
+            summary_type=args.summary_type,
+            gather_mode=args.gather_mode,
+            gather_topk=args.gather_topk,
+            gather_query_chunk_size=args.gather_query_chunk_size,
+            learnable_rbf_sigma=args.learnable_rbf_sigma,
+            neighbor_backend=args.neighbor_backend,
+            sensor_local_topk=args.sensor_local_topk,
+            sensor_local_dropout=args.sensor_local_dropout,
+            use_fourier_pe=args.USE_FOURIER_PE,
+            fourier_pe_num_bands=args.fourier_pe_num_bands,
+            fourier_pe_max_freq=args.fourier_pe_max_freq,
+            sensor_coord_encoding=sensor_coord_encoding,
+            latent_sensor_reinject=latent_sensor_reinject,
+            latent_reinject_every=args.latent_reinject_every,
+            glres_scale_init=glres_scale_init,
+            cq_query_dim=args.cq_query_dim,
+            cq_readout_mode=args.cq_readout_mode,
+            cq_fusion_mode=args.cq_fusion_mode,
+            cq_readout_rank=args.cq_readout_rank,
+            cq_readout_heads=args.cq_readout_heads,
+            cq_global_scale_init=args.cq_global_scale_init,
+            cq_local_scale_init=args.cq_local_scale_init,
+            cq_readout_scale_init=args.cq_readout_scale_init,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:
@@ -1758,7 +2278,7 @@ def main():
     print(f'\nSelected Backbone: {args.backbone}\n')
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=(args.scheduler_t_max or args.epochs))
 
     if reload_ckpt is not None:
         model.load_state_dict(checkpoint_model_state(reload_ckpt))
@@ -1786,8 +2306,12 @@ def main():
         print("[*] Loaded pretrained model state; new run starts at epoch 1")
 
     for epoch in range(start_epoch, args.epochs + 1):
+        epoch_wall_start = time.perf_counter()
+        train_wall_start = time.perf_counter()
         if args.training_mode == "direct_coherence":
-            epoch_train_loader = build_epoch_train_loader(train_set, args, epoch)
+            epoch_train_loader = build_epoch_train_loader(
+                train_set, args, epoch, data_path_config=data_path_config
+            )
             direct_metrics, global_step = run_epoch_direct_coherence(
                 model=model,
                 loader=epoch_train_loader,
@@ -1807,6 +2331,7 @@ def main():
                 epoch=epoch,
                 mean=train_set.mean.to(device),
                 std=train_set.std.to(device),
+                data_path_config=data_path_config,
             )
             tr_loss = float(direct_metrics["total_loss"])
         else:
@@ -1825,8 +2350,15 @@ def main():
                 query_sample_far_ratio=args.query_sample_far_ratio,
                 query_sample_sigma_ratio=args.query_sample_sigma_ratio,
                 epoch=epoch,
+                data_path_config=data_path_config,
+                diagnostics=data_path_diagnostics,
+                train_query_microbatch_size=args.train_query_microbatch_size,
+                reuse_condition_context_across_query_microbatches=(
+                    args.reuse_condition_context_across_query_microbatches
+                ),
             )
             global_step += len(train_loader)
+        train_seconds = time.perf_counter() - train_wall_start
         scheduler.step()
 
         if direct_metrics is not None:
@@ -1847,7 +2379,9 @@ def main():
         else:
             print(f"[train] epoch={epoch:04d} loss={tr_loss:.6e}")
         val_loss = None
+        validation_seconds = 0.0
         if epoch % args.eval_every == 0 or epoch == 1:
+            validation_wall_start = time.perf_counter()
             with torch.no_grad():
                 val_loss = run_epoch(
                     model=model,
@@ -1863,7 +2397,14 @@ def main():
                     query_sample_far_ratio=args.query_sample_far_ratio,
                     query_sample_sigma_ratio=args.query_sample_sigma_ratio,
                     epoch=epoch,
+                    data_path_config=data_path_config,
+                    diagnostics=data_path_diagnostics,
+                    train_query_microbatch_size=args.train_query_microbatch_size,
+                    reuse_condition_context_across_query_microbatches=(
+                        args.reuse_condition_context_across_query_microbatches
+                    ),
                 )
+            validation_seconds = time.perf_counter() - validation_wall_start
             print(f"[valid] epoch={epoch:04d} loss={val_loss:.6e}")
 
             ckpt = {
@@ -1882,8 +2423,21 @@ def main():
                 "Num_x": args.Num_x,
                 "Num_y": args.Num_y,
             }
+            if args.backbone == "GL_rbf_ENH_CQ":
+                ckpt.update({
+                    "cq_query_dim": args.cq_query_dim,
+                    "cq_readout_mode": args.cq_readout_mode,
+                    "cq_fusion_mode": args.cq_fusion_mode,
+                    "cq_readout_rank": args.cq_readout_rank,
+                    "cq_readout_heads": args.cq_readout_heads,
+                    "cq_global_scale_init": args.cq_global_scale_init,
+                    "cq_local_scale_init": args.cq_local_scale_init,
+                    "cq_readout_scale_init": args.cq_readout_scale_init,
+                })
             ckpt.update(checkpoint_metadata(args, direct_cfg, source_run_dir, source_checkpoint))
             torch.save(ckpt, save_dir / "last.pt")
+            if epoch in set(args.checkpoint_epochs or []):
+                torch.save(ckpt, save_dir / f"epoch_{epoch:04d}.pt")
             if val_loss < best_val:
                 best_val = val_loss
                 torch.save(ckpt, save_dir / "best.pt")
@@ -1927,12 +2481,22 @@ def main():
                     snapshot_index=0,
                     file_tag=f"{args.ode_solver}_nfe{nfe}",
                     save_metrics_json = True,
+                    reconstruction_execution_mode=args.reconstruction_execution_mode,
+                    reconstruction_query_chunk_size=args.reconstruction_query_chunk_size,
+                    reconstruction_cache_level=args.reconstruction_cache_level,
                 )
 
                 metric_str = ", ".join([f"{k}:{v:.4e}" for k, v in recon_metrics.items()])
                 print(f"[recon] epoch={epoch:04d} solver={args.ode_solver} n_steps={nfe} | {metric_str}")
 
-        logger.log_and_plot(epoch=epoch, train_loss=tr_loss, val_loss=val_loss)
+        logger.log_and_plot(
+            epoch=epoch,
+            train_loss=tr_loss,
+            val_loss=val_loss,
+            train_seconds=train_seconds,
+            validation_seconds=validation_seconds,
+            epoch_seconds=time.perf_counter() - epoch_wall_start,
+        )
 
     print("Training complete.")
     print(f"Best validation loss: {best_val:.6e}")

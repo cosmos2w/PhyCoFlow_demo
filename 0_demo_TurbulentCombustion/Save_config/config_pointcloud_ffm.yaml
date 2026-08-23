@@ -25,6 +25,51 @@ train_ratio : 0.9
 time_stride : 1
 num_workers : 4
 
+# ==========================================================
+# LEGACY DATA PATH REFERENCE
+# Temporary for controlled A/B comparison. To activate the full historical
+# profile, replace the active candidate values below with these values.
+# ==========================================================
+# data_path_mode: "legacy"
+# coord_batch_mode: "legacy_clone"
+# index_sampling_mode: "legacy_randperm"
+# sampling_device: "legacy_gpu"
+# field_read_mode: "legacy_full_snapshot"
+# field_normalization_mode: "legacy_full_after_read"
+# gpu_transfer_mode: "legacy_full"
+# data_path_diag_storage_mode: "legacy_rewrite"
+# dataloader_persistent_workers: false
+# dataloader_prefetch_factor: null
+# non_blocking_transfer: false
+# training_log_every_n_steps: 1
+
+# ==========================================================
+# OPTIMIZED DATA PATH CANDIDATE
+# Keep this explicit while benchmarking against legacy. Set a component to null
+# to inherit its data_path_mode profile default.
+# ==========================================================
+data_path_mode: "optimized"       # choices: ["legacy", "optimized"]
+coord_batch_mode: "shared_mesh"   # choices: ["legacy_clone", "shared_mesh"]
+index_sampling_mode: "scalable"   # choices: ["legacy_randperm", "scalable"]
+sampling_device: "cpu"            # choices: ["legacy_gpu", "cpu"]
+
+# Benchmark both. The current contiguous HDF5 layout may favor the default full read.
+field_read_mode: "legacy_full_snapshot"  # choices: ["legacy_full_snapshot", "indexed_union"]
+# field_read_mode: "indexed_union"
+field_normalization_mode: "selected_after_full_read"  # choices: ["legacy_full_after_read", "selected_after_full_read"]
+
+gpu_transfer_mode: "selected_only"       # choices: ["legacy_full", "selected_only"]
+dataloader_persistent_workers: true
+dataloader_prefetch_factor: 2
+non_blocking_transfer: true
+
+data_path_diagnostics: true
+data_path_diag_storage_mode: "append"  # choices: ["legacy_rewrite", "append"]
+data_path_diag_every_n_steps: 50
+data_path_diag_warmup_steps: 5
+data_path_diag_max_steps_per_epoch: 10
+training_log_every_n_steps: 20
+
 # ----------------------------------------------------------
 # Backbone selection
 # ----------------------------------------------------------
@@ -34,7 +79,7 @@ num_workers : 4
 #   2) repeated sensor-to-latent re-injection,
 #   3) lightweight query-to-latent global readout,
 #   4) LayerNorm before the fusion head.
-backbone: "GL_rbf_ENH" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
+backbone: "GL_rbf_ENH" # Selection also supports "GL_rbf_ENH_CQ".
 
 # ----------------------------------------------------------
 # Hyperparameters for mlp_rbf backbone
@@ -91,6 +136,16 @@ query_readout_scale_init: 1.0e-2     # Small positive gate for query-to-latent r
 enhanced_head_norm: true             # Apply LayerNorm before the [query, global, local] fusion head.
 glres_scale_init: 1.0e-2             # Initial scale for topk_rbf_glres scaffold and sensor-importance terms.
 
+# GL_rbf_ENH_CQ query-execution settings. These do not alter hidden_dim,
+# latent_dim, cond_dim, latent count/blocks/heads, K, or Fourier bands.
+cq_query_dim: 128
+cq_readout_mode: "lowrank"            # choices: ["full", "lowrank"]
+cq_readout_rank: 64
+cq_readout_heads: 4
+cq_global_scale_init: 1.0
+cq_local_scale_init: 1.0
+cq_readout_scale_init: 1.0e-2
+
 # ----------------------------------------------------------
 # Regular-grid specification required by the FNO baseline
 # These MUST be provided and must match the dataset, otherwise training will warn and exit.
@@ -115,6 +170,15 @@ condition_blur_sigma: 2.5
 # These are hyperparameters for the training process
 # ----------------------------------------------------------
 n_query_points : 4096       # Number of query points to be evaluated in training process
+train_query_microbatch_size: null  # null or >= n_query_points keeps monolithic query execution
+reuse_condition_context_across_query_microbatches: true
+
+# Reconstruction execution reference:
+# reconstruction_execution_mode: "legacy_full"
+# reconstruction_cache_level: "none"
+reconstruction_execution_mode: "cached_streamed"  # choices: ["legacy_full", "cached_streamed"]
+reconstruction_query_chunk_size: 8192
+reconstruction_cache_level: "static_features"      # choices: ["none", "geometry", "static_features"]
 query_sampling: "uniform"   # "obs_mix" or "uniform" (faster)
 query_sample_near_ratio: 0.25
 query_sample_far_ratio: 0.25

@@ -1,0 +1,58 @@
+{
+  "config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_compact_query/screen_cq_lr/runs/CQ_LR_DemoN9401_20260821_194308/run_config.yaml",
+  "manifest": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage1_fixed_val_manifest.pt",
+  "manifest_checksum_sha256": "392806184e0257f95f8d7a550ef1fb9ca85a1bd7fa8537d5471807763f1a0822",
+  "materialized_input_checksum_sha256": "b116f09b4ffc40bf821155f86df5a993cacfb0e70ba83830d0727cfd143c0e95",
+  "device": "cuda:0",
+  "batch_size": 1,
+  "repeats": 3,
+  "rf_seed": 1729,
+  "controlled_rng": true,
+  "reference_checkpoint": "CQ_LR_DemoN9401_20260821_194308",
+  "summary": {
+    "CQ_LR_DemoN9401_20260821_194308": {
+      "path": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_compact_query/screen_cq_lr/runs/CQ_LR_DemoN9401_20260821_194308/epoch_0001.pt",
+      "epoch": 1,
+      "stored_val_loss": 1.5395381450653076,
+      "mean_rf_loss": 1.4664964604501922,
+      "std_rf_loss": 0.2835609468015372,
+      "paired_difference_vs_reference_mean": 0.0,
+      "paired_difference_vs_reference_std": 0.0,
+      "paired_difference_vs_reference_max_abs": 0.0,
+      "evaluations": 192
+    },
+    "CQ_LR_DemoN9401_20260821_194308/epoch_0020.pt": {
+      "path": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_compact_query/screen_cq_lr/runs/CQ_LR_DemoN9401_20260821_194308/epoch_0020.pt",
+      "epoch": 20,
+      "stored_val_loss": 0.8815106749534607,
+      "mean_rf_loss": 0.8172722190308074,
+      "std_rf_loss": 0.27401413133695246,
+      "paired_difference_vs_reference_mean": -0.6492242414193848,
+      "paired_difference_vs_reference_std": 0.2808488862003005,
+      "paired_difference_vs_reference_max_abs": 1.3651843070983887,
+      "evaluations": 192
+    },
+    "CQ_LR_DemoN9401_20260821_194308/epoch_0040.pt": {
+      "path": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_compact_query/screen_cq_lr/runs/CQ_LR_DemoN9401_20260821_194308/epoch_0040.pt",
+      "epoch": 40,
+      "stored_val_loss": 0.7176459431648254,
+      "mean_rf_loss": 0.63529297701704,
+      "std_rf_loss": 0.22435797827886753,
+      "paired_difference_vs_reference_mean": -0.8312034834331522,
+      "paired_difference_vs_reference_std": 0.2779629303890555,
+      "paired_difference_vs_reference_max_abs": 1.476730614900589,
+      "evaluations": 192
+    },
+    "CQ_LR_DemoN9401_20260821_194308/epoch_0060.pt": {
+      "path": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_compact_query/screen_cq_lr/runs/CQ_LR_DemoN9401_20260821_194308/epoch_0060.pt",
+      "epoch": 60,
+      "stored_val_loss": 0.6663652658462524,
+      "mean_rf_loss": 0.6254441329122832,
+      "std_rf_loss": 0.22387611820760658,
+      "paired_difference_vs_reference_mean": -0.8410523275379092,
+      "paired_difference_vs_reference_std": 0.2840644131126544,
+      "paired_difference_vs_reference_max_abs": 1.5679242610931396,
+      "evaluations": 192
+    }
+  }
+}

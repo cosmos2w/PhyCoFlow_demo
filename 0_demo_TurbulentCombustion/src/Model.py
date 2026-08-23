@@ -1,8 +1,8 @@
 
 
-import math, os, torch
+import math, os, time, torch
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Sequence
+from typing import Any, Dict, Mapping, Optional, Tuple, Sequence
 
 import numpy as np
 import torch.nn as nn
@@ -16,6 +16,11 @@ from obs_consistency import (
     build_smooth_observation_maps,
     normalize_obs_consistency_mode,
     scatter_observed_values,
+)
+from persistent_topk_geometry_cache import (
+    build_persistent_topk_geometry_cache,
+    cache_tensors,
+    validate_persistent_topk_geometry_cache,
 )
 
 FIELD_NAMES = ("CH4", "CO", "T", "U_1", "p")
@@ -329,6 +334,80 @@ class CrossAttentionBlock(nn.Module):
         return x
 
 
+class CompactLatentReadout(nn.Module):
+    """Lightweight query-specific latent readout with cacheable latent K/V."""
+
+    def __init__(
+        self,
+        query_in_dim: int,
+        latent_dim: int,
+        query_dim: int,
+        rank: int = 64,
+        num_heads: int = 4,
+        attn_dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        if rank < 1 or rank % num_heads != 0:
+            raise ValueError(
+                f"cq_readout_rank must be positive and divisible by cq_readout_heads; "
+                f"got rank={rank}, heads={num_heads}."
+            )
+        if query_dim < 1 or query_dim % num_heads != 0:
+            raise ValueError(
+                f"cq_query_dim must be positive and divisible by cq_readout_heads; "
+                f"got query_dim={query_dim}, heads={num_heads}."
+            )
+        self.rank = int(rank)
+        self.num_heads = int(num_heads)
+        self.head_rank = self.rank // self.num_heads
+        self.query_dim = int(query_dim)
+        self.head_value_dim = self.query_dim // self.num_heads
+        self.attn_dropout = float(attn_dropout)
+
+        self.query_norm = nn.LayerNorm(query_in_dim)
+        self.latent_norm = nn.LayerNorm(latent_dim)
+        self.q_proj = nn.Linear(query_in_dim, rank, bias=False)
+        self.k_proj = nn.Linear(latent_dim, rank, bias=False)
+        self.v_proj = nn.Linear(latent_dim, query_dim, bias=False)
+        self.out_norm = nn.LayerNorm(query_dim)
+
+    def project_latents(self, latents: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Project condition-static latent memory once for reuse across chunks/NFEs."""
+        bsz, n_latents, _ = latents.shape
+        normalized = self.latent_norm(latents)
+        keys = self.k_proj(normalized).view(
+            bsz, n_latents, self.num_heads, self.head_rank,
+        ).transpose(1, 2)
+        values = self.v_proj(normalized).view(
+            bsz, n_latents, self.num_heads, self.head_value_dim,
+        ).transpose(1, 2)
+        return keys, values
+
+    def forward(
+        self,
+        query_features: torch.Tensor,
+        *,
+        latents: Optional[torch.Tensor] = None,
+        projected_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        if projected_kv is None:
+            if latents is None:
+                raise ValueError("CompactLatentReadout requires latents or projected_kv.")
+            projected_kv = self.project_latents(latents)
+        keys, values = projected_kv
+        bsz, n_query, _ = query_features.shape
+        queries = self.q_proj(self.query_norm(query_features)).view(
+            bsz, n_query, self.num_heads, self.head_rank,
+        ).transpose(1, 2)
+        logits = torch.matmul(queries, keys.transpose(-2, -1)) / math.sqrt(self.head_rank)
+        weights = torch.softmax(logits, dim=-1)
+        weights = F.dropout(weights, p=self.attn_dropout, training=self.training)
+        readout = torch.matmul(weights, values).transpose(1, 2).reshape(
+            bsz, n_query, self.query_dim,
+        )
+        return self.out_norm(readout)
+
+
 class SelfAttentionBlock(nn.Module):
     """
     Standard latent self-attention block with residual connection and FFN.
@@ -592,6 +671,7 @@ class ConditionalPointPerceiver(nn.Module):
             outputs.append(self.head(decoded))
 
         return torch.cat(outputs, dim=1)
+
 
     def forward(
         self,
@@ -1434,6 +1514,257 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
         return torch.cat(outputs, dim=1)
 
+    def prepare_condition_context(
+        self,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Build differentiable observation-only state once per condition."""
+        sensor_tokens = self._build_sensor_tokens(
+            obs_coords, obs_values, obs_mask, obs_field_ids,
+        )
+        latents = self._encode_latents(sensor_tokens, obs_mask)
+        global_feat = self._extract_global_summary(latents)
+        refined = self.sensor_back_attn(q=sensor_tokens, kv=latents, kv_padding_mask=None)
+        refined = refined * obs_mask.unsqueeze(-1)
+        refined = self.sensor_out_proj(refined) * obs_mask.unsqueeze(-1)
+        if self.gather_mode == "topk_rbf_ptlocal":
+            refined = self._sensor_local_refine(obs_coords, refined, obs_mask)
+        context = {
+            "obs_coords": obs_coords,
+            "obs_mask": obs_mask,
+            "latents": latents,
+            "global_feat": global_feat,
+            "refined_sensor_feat": refined,
+        }
+        if self.gather_mode == "topk_rbf_glres":
+            context["sensor_importance_bias"] = self._compute_sensor_importance_bias(
+                refined, obs_mask,
+            )
+        return context
+
+    def _aggregate_topk_from_geometry(
+        self,
+        topk_d2: torch.Tensor,
+        topk_idx: torch.Tensor,
+        topk_valid: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+    ) -> torch.Tensor:
+        if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
+            raise ValueError("Geometry caching supports topk_rbf and topk_rbf_glres.")
+        sensor_feat = batched_gather_3d(
+            condition_context["refined_sensor_feat"], topk_idx,
+        )
+        sigma = (
+            torch.exp(self.log_rbf_sigma).clamp_min(1e-6)
+            if self.learnable_rbf_sigma else self.rbf_sigma
+        )
+        logits = -topk_d2 / (2 * sigma ** 2 + 1e-12)
+        importance = condition_context.get("sensor_importance_bias")
+        if importance is not None:
+            logits = logits + self.sensor_importance_scale * batched_gather_2d(
+                importance, topk_idx,
+            )
+        weights = torch.softmax(logits.masked_fill(~topk_valid, -1e9), dim=-1)
+        return torch.sum(weights.unsqueeze(-1) * sensor_feat, dim=2)
+
+    def prepare_query_context(
+        self,
+        coords: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+        cache_level: str = "none",
+        chunk_size: Optional[int] = None,
+        precomputed_geometry: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Cache geometry or inference-only static query features in FP32."""
+        if cache_level not in ("none", "geometry", "static_features"):
+            raise ValueError("Unknown reconstruction cache level.")
+        chunk_size = max(1, int(chunk_size or self.gather_query_chunk_size or 8192))
+        context: Dict[str, Any] = {
+            "cache_level": cache_level,
+            "n_query": int(coords.shape[1]),
+            "chunk_size": chunk_size,
+        }
+        if cache_level == "none":
+            if precomputed_geometry is not None:
+                raise ValueError("Persistent geometry requires geometry or static_features cache level.")
+            return context
+        if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
+            raise ValueError("Query caching supports topk_rbf and topk_rbf_glres.")
+        persistent_topk = None
+        if precomputed_geometry is not None:
+            validate_persistent_topk_geometry_cache(
+                precomputed_geometry, self, coords=coords,
+                obs_coords=condition_context["obs_coords"],
+                obs_mask=condition_context["obs_mask"],
+            )
+            persistent_topk = cache_tensors(precomputed_geometry)
+        if self.pos_enc is None:
+            context["coord_feat"] = coords
+        else:
+            coord_feat = coords.new_empty(coords.shape[0], coords.shape[1], self.coord_feat_dim)
+            for start in range(0, coords.shape[1], chunk_size):
+                end = min(start + chunk_size, coords.shape[1])
+                coord_feat[:, start:end] = self.pos_enc(coords[:, start:end])
+            context["coord_feat"] = coord_feat
+        if cache_level == "geometry":
+            if persistent_topk is not None:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                context.update(topk_d2=topk_d2, topk_idx=topk_idx, topk_valid=topk_valid)
+                return context
+            k = min(self.gather_topk, condition_context["obs_coords"].shape[1])
+            topk_d2 = coords.new_empty(coords.shape[0], coords.shape[1], k)
+            topk_idx = torch.empty(
+                coords.shape[0], coords.shape[1], k,
+                dtype=torch.long, device=coords.device,
+            )
+            topk_valid = torch.empty(
+                coords.shape[0], coords.shape[1], k,
+                dtype=torch.bool, device=coords.device,
+            )
+            for start in range(0, coords.shape[1], chunk_size):
+                end = min(start + chunk_size, coords.shape[1])
+                d2, idx, _, _, valid = self._get_topk_neighbors(
+                    coords[:, start:end],
+                    condition_context["obs_coords"],
+                    condition_context["refined_sensor_feat"],
+                    condition_context["obs_mask"],
+                    k,
+                )
+                topk_d2[:, start:end] = d2
+                topk_idx[:, start:end] = idx
+                topk_valid[:, start:end] = valid
+            context.update(
+                topk_d2=topk_d2,
+                topk_idx=topk_idx,
+                topk_valid=topk_valid,
+            )
+            return context
+        if self.training and torch.is_grad_enabled():
+            raise ValueError("static_features caching is inference-only.")
+        if self.use_query_latent_readout and self.query_readout_type != "coord":
+            raise ValueError("static_features requires coordinate query readout.")
+        local_cache = coords.new_empty(
+            coords.shape[0], coords.shape[1],
+            condition_context["refined_sensor_feat"].shape[-1],
+        )
+        query_global_cache = (
+            coords.new_empty(coords.shape[0], coords.shape[1], condition_context["global_feat"].shape[-1])
+            if self.use_query_latent_readout else None
+        )
+        for start in range(0, coords.shape[1], chunk_size):
+            end = min(start + chunk_size, coords.shape[1])
+            coords_c = coords[:, start:end]
+            empty_feat = coords_c.new_empty(coords_c.shape[0], coords_c.shape[1], 0)
+            if persistent_topk is None:
+                local_cache[:, start:end] = self._aggregate_chunk(
+                    coords_c,
+                    empty_feat,
+                    condition_context["obs_coords"],
+                    condition_context["refined_sensor_feat"],
+                    condition_context["obs_mask"],
+                    condition_context.get("sensor_importance_bias"),
+                )
+            else:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                local_cache[:, start:end] = self._aggregate_topk_from_geometry(
+                    topk_d2[:, start:end],
+                    topk_idx[:, start:end],
+                    topk_valid[:, start:end],
+                    condition_context,
+                )
+            if self.use_query_latent_readout:
+                q = self._build_query_readout_tokens(empty_feat, coords_c)
+                readout = self.query_latent_readout(
+                    q=q, kv=condition_context["latents"], kv_padding_mask=None,
+                )
+                query_global_cache[:, start:end] = self.query_readout_out(readout)
+        context["local_cond"] = local_cache
+        if query_global_cache is not None:
+            context["query_global"] = query_global_cache
+        return context
+
+    def forward_query_chunk(
+        self,
+        t: torch.Tensor,
+        x_t_chunk: torch.Tensor,
+        coords_chunk: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+        query_context: Optional[Mapping[str, Any]] = None,
+        query_slice: Optional[slice] = None,
+    ) -> torch.Tensor:
+        """Run the complete dynamic velocity head for one query chunk."""
+        bsz, n_pts, _ = x_t_chunk.shape
+        query_slice = query_slice or slice(0, n_pts)
+        cached_coord = None if query_context is None else query_context.get("coord_feat")
+        coord_feat = (
+            cached_coord[:, query_slice]
+            if cached_coord is not None
+            else (self.pos_enc(coords_chunk) if self.pos_enc is not None else coords_chunk)
+        )
+        t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
+        point_feat = self.point_encoder(torch.cat([coord_feat, x_t_chunk, t_feat], dim=-1))
+        global_feat = condition_context["global_feat"]
+        if self.use_query_latent_readout:
+            cached_global = None if query_context is None else query_context.get("query_global")
+            if cached_global is None:
+                q = self._build_query_readout_tokens(point_feat, coords_chunk)
+                readout = self.query_latent_readout(
+                    q=q, kv=condition_context["latents"], kv_padding_mask=None,
+                )
+                query_global = self.query_readout_out(readout)
+            else:
+                query_global = cached_global[:, query_slice]
+            global_for_head = global_feat.unsqueeze(1) + self.query_readout_scale * query_global
+        else:
+            global_for_head = global_feat.unsqueeze(1).expand(bsz, n_pts, -1)
+        cached_local = None if query_context is None else query_context.get("local_cond")
+        if cached_local is not None:
+            local_cond = cached_local[:, query_slice]
+        elif query_context is not None and "topk_idx" in query_context:
+            local_cond = self._aggregate_topk_from_geometry(
+                query_context["topk_d2"][:, query_slice],
+                query_context["topk_idx"][:, query_slice],
+                query_context["topk_valid"][:, query_slice],
+                condition_context,
+            )
+        else:
+            local_cond = self.aggregate_sparse_obs(
+                coords_chunk,
+                point_feat,
+                condition_context["obs_coords"],
+                condition_context["refined_sensor_feat"],
+                condition_context["obs_mask"],
+                condition_context.get("sensor_importance_bias"),
+            )
+        head_in = torch.cat([point_feat, global_for_head, local_cond], dim=-1)
+        residual = self.head(self.head_in_norm(head_in))
+        if self.gather_mode == "topk_rbf_glres":
+            return self.coarse_scale * self._predict_global_coarse(point_feat, global_feat) + residual
+        return residual
+
+    @staticmethod
+    def context_nbytes(context: Mapping[str, Any]) -> int:
+        seen: set[tuple[int, int]] = set()
+        total = 0
+
+        def visit(value: Any) -> None:
+            nonlocal total
+            if torch.is_tensor(value):
+                storage = value.untyped_storage()
+                key = (storage.data_ptr(), storage.nbytes())
+                if key not in seen:
+                    seen.add(key)
+                    total += storage.nbytes()
+            elif isinstance(value, Mapping):
+                for child in value.values():
+                    visit(child)
+
+        visit(context)
+        return total
+
     def forward(
         self,
         t: torch.Tensor,
@@ -1546,6 +1877,545 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
 
 # ------------------------------
+class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRBF):
+    """Compact-query sibling of GL_rbf_ENH with an unchanged condition/local core."""
+
+    def __init__(
+        self,
+        n_fields: int,
+        coord_dim: int = 3,
+        hidden_dim: int = 256,
+        cond_dim: int = 128,
+        field_embed_dim: int = 32,
+        latent_dim: int = 256,
+        num_latents: int = 64,
+        num_heads: int = 8,
+        num_latent_blocks: int = 3,
+        ff_mult: int = 4,
+        attn_dropout: float = 0.0,
+        mlp_dropout: float = 0.0,
+        rbf_sigma: float = 0.05,
+        summary_type: str = "cls",
+        gather_mode: str = "topk_rbf_glres",
+        gather_topk: int = 32,
+        gather_query_chunk_size: Optional[int] = None,
+        learnable_rbf_sigma: bool = False,
+        neighbor_backend: str = "torch",
+        sensor_local_topk: int = 8,
+        sensor_local_dropout: float = 0.0,
+        use_fourier_pe: bool = False,
+        fourier_pe_num_bands: int = 32,
+        fourier_pe_max_freq: float = 64.0,
+        sensor_coord_encoding: str = "fourier",
+        latent_sensor_reinject: bool = True,
+        latent_reinject_every: int = 1,
+        glres_scale_init: float = 1.0e-2,
+        cq_query_dim: int = 128,
+        cq_readout_mode: str = "lowrank",
+        cq_readout_rank: int = 64,
+        cq_readout_heads: int = 4,
+        cq_global_scale_init: float = 1.0,
+        cq_local_scale_init: float = 1.0,
+        cq_readout_scale_init: float = 1.0e-2,
+        cq_fusion_mode: str = "additive",
+    ) -> None:
+        if cq_readout_mode not in ("full", "lowrank"):
+            raise ValueError(
+                f"cq_readout_mode must be one of ['full', 'lowrank'], got {cq_readout_mode!r}."
+            )
+        if cq_fusion_mode not in ("additive", "structured_concat"):
+            raise ValueError(
+                "cq_fusion_mode must be one of ['additive', 'structured_concat'], "
+                f"got {cq_fusion_mode!r}."
+            )
+        if cq_readout_heads < 1:
+            raise ValueError(f"cq_readout_heads must be positive, got {cq_readout_heads}.")
+        if cq_query_dim < 1 or cq_query_dim % cq_readout_heads != 0:
+            raise ValueError(
+                "cq_query_dim must be positive and divisible by cq_readout_heads; "
+                f"got query_dim={cq_query_dim}, heads={cq_readout_heads}."
+            )
+        if cq_readout_rank < 1 or cq_readout_rank % cq_readout_heads != 0:
+            raise ValueError(
+                "cq_readout_rank must be positive and divisible by cq_readout_heads; "
+                f"got rank={cq_readout_rank}, heads={cq_readout_heads}."
+            )
+
+        # Build the unchanged F0 condition/global/local core first. The inherited
+        # query modules are then removed and replaced, leaving GL_rbf_ENH untouched.
+        super().__init__(
+            n_fields=n_fields,
+            coord_dim=coord_dim,
+            hidden_dim=hidden_dim,
+            cond_dim=cond_dim,
+            field_embed_dim=field_embed_dim,
+            latent_dim=latent_dim,
+            num_latents=num_latents,
+            num_heads=num_heads,
+            num_latent_blocks=num_latent_blocks,
+            ff_mult=ff_mult,
+            attn_dropout=attn_dropout,
+            mlp_dropout=mlp_dropout,
+            rbf_sigma=rbf_sigma,
+            summary_type=summary_type,
+            gather_mode=gather_mode,
+            gather_topk=gather_topk,
+            gather_query_chunk_size=gather_query_chunk_size,
+            learnable_rbf_sigma=learnable_rbf_sigma,
+            neighbor_backend=neighbor_backend,
+            sensor_local_topk=sensor_local_topk,
+            sensor_local_dropout=sensor_local_dropout,
+            use_fourier_pe=use_fourier_pe,
+            fourier_pe_num_bands=fourier_pe_num_bands,
+            fourier_pe_max_freq=fourier_pe_max_freq,
+            enhanced_backbone=True,
+            sensor_coord_encoding=sensor_coord_encoding,
+            latent_sensor_reinject=latent_sensor_reinject,
+            latent_reinject_every=latent_reinject_every,
+            query_latent_readout=True,
+            query_readout_type="coord",
+            query_readout_scale_init=cq_readout_scale_init,
+            enhanced_head_norm=True,
+            glres_scale_init=glres_scale_init,
+        )
+
+        self.cq_query_dim = int(cq_query_dim)
+        self.cq_readout_mode = str(cq_readout_mode)
+        self.cq_fusion_mode = str(cq_fusion_mode)
+        self.cq_readout_rank = int(cq_readout_rank)
+        self.cq_readout_heads = int(max(1, min(num_heads, 4)) if cq_readout_mode == "full" else cq_readout_heads)
+        self.hidden_dim = int(hidden_dim)
+        self.cond_dim = int(cond_dim)
+
+        for name in (
+            "point_encoder", "query_decoder_token", "query_readout_in",
+            "query_latent_readout", "query_readout_out", "query_readout_scale",
+            "head", "head_in_norm", "coarse_film", "coarse_head", "coarse_scale",
+        ):
+            if hasattr(self, name):
+                delattr(self, name)
+
+        if self.gather_mode == "topk_rbf_gate":
+            self.query_to_cond = nn.Linear(self.cq_query_dim, cond_dim, bias=False)
+
+        self.cq_point_encoder = make_mlp(
+            in_dim=self.coord_feat_dim + n_fields + 1,
+            hidden_dim=self.cq_query_dim,
+            out_dim=self.cq_query_dim,
+            depth=3,
+        )
+        self.cq_global_proj = nn.Linear(hidden_dim, self.cq_query_dim)
+        if self.cq_fusion_mode == "additive":
+            # Keep this module set, ordering, and all shapes unchanged so CQ
+            # checkpoints created before cq_fusion_mode continue to strict-load.
+            self.cq_local_proj = (
+                nn.Identity()
+                if cond_dim == self.cq_query_dim
+                else nn.Linear(cond_dim, self.cq_query_dim)
+            )
+            self.cq_global_scale = nn.Parameter(torch.tensor(float(cq_global_scale_init)))
+            self.cq_local_scale = nn.Parameter(torch.tensor(float(cq_local_scale_init)))
+            self.cq_readout_scale = nn.Parameter(torch.tensor(float(cq_readout_scale_init)))
+            self.cq_fusion_norm = nn.LayerNorm(self.cq_query_dim)
+            self.cq_head = nn.Sequential(
+                nn.Linear(self.cq_query_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, n_fields),
+            )
+        else:
+            fusion_dim = 2 * self.cq_query_dim + self.cond_dim
+            self.cq_readout_scale = nn.Parameter(torch.tensor(float(cq_readout_scale_init)))
+            self.cq_fusion_norm = nn.LayerNorm(fusion_dim)
+            self.cq_head = nn.Sequential(
+                nn.Linear(fusion_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Dropout(mlp_dropout),
+                nn.Linear(self.cq_query_dim, n_fields),
+            )
+        if self.gather_mode == "topk_rbf_glres":
+            self.cq_coarse_film = nn.Linear(self.cq_query_dim, 2 * self.cq_query_dim)
+            self.cq_coarse_head = nn.Sequential(
+                nn.LayerNorm(self.cq_query_dim),
+                nn.Linear(self.cq_query_dim, self.cq_query_dim),
+                nn.GELU(),
+                nn.Linear(self.cq_query_dim, n_fields),
+            )
+            self.cq_coarse_scale = nn.Parameter(torch.tensor(float(glres_scale_init)))
+
+        # Construct the only variant-specific module last so CQ-Full and CQ-LR
+        # receive identical seed-controlled initialization for every shared CQ module.
+        if self.cq_readout_mode == "full":
+            self.cq_query_decoder_token = nn.Parameter(
+                torch.randn(1, self.cq_query_dim) * 0.02
+            )
+            self.cq_readout_in = nn.Linear(
+                self.coord_feat_dim + self.cq_query_dim, latent_dim, bias=False,
+            )
+            self.cq_latent_readout = CrossAttentionBlock(
+                dim=latent_dim,
+                num_heads=max(1, min(num_heads, 4)),
+                ff_mult=max(1, ff_mult // 2),
+                attn_dropout=attn_dropout,
+                mlp_dropout=mlp_dropout,
+            )
+            self.cq_readout_out = nn.Linear(latent_dim, self.cq_query_dim, bias=False)
+        else:
+            self.cq_latent_readout = CompactLatentReadout(
+                query_in_dim=self.coord_feat_dim,
+                latent_dim=latent_dim,
+                query_dim=self.cq_query_dim,
+                rank=self.cq_readout_rank,
+                num_heads=self.cq_readout_heads,
+                attn_dropout=attn_dropout,
+            )
+
+    def _cq_readout(
+        self,
+        coord_feat: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+    ) -> torch.Tensor:
+        if self.cq_readout_mode == "full":
+            bsz, n_query, _ = coord_feat.shape
+            token = self.cq_query_decoder_token.view(1, 1, -1).expand(
+                bsz, n_query, -1,
+            )
+            query = self.cq_readout_in(torch.cat([coord_feat, token], dim=-1))
+            readout = self.cq_latent_readout(
+                q=query, kv=condition_context["latents"], kv_padding_mask=None,
+            )
+            return self.cq_readout_out(readout)
+        return self.cq_latent_readout(
+            coord_feat,
+            projected_kv=(
+                condition_context["cq_latent_k"],
+                condition_context["cq_latent_v"],
+            ),
+        )
+
+    def _cq_readout_chunked(
+        self,
+        coord_feat: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+    ) -> torch.Tensor:
+        n_query = int(coord_feat.shape[1])
+        chunk_size = self.gather_query_chunk_size
+        if chunk_size is None and n_query > 4096:
+            chunk_size = 4096
+        if chunk_size is None or n_query <= chunk_size:
+            return self._cq_readout(coord_feat, condition_context)
+        return torch.cat([
+            self._cq_readout(coord_feat[:, start:start + chunk_size], condition_context)
+            for start in range(0, n_query, chunk_size)
+        ], dim=1)
+
+    def _predict_cq_coarse(
+        self,
+        point_q: torch.Tensor,
+        global_q: torch.Tensor,
+    ) -> torch.Tensor:
+        gamma, beta = self.cq_coarse_film(global_q).chunk(2, dim=-1)
+        coarse_feat = (
+            point_q * (1.0 + torch.tanh(gamma).unsqueeze(1))
+            + beta.unsqueeze(1)
+        )
+        return self.cq_coarse_head(coarse_feat)
+
+    def prepare_condition_context(
+        self,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        context = super().prepare_condition_context(
+            obs_coords, obs_values, obs_mask, obs_field_ids,
+        )
+        context["global_q"] = self.cq_global_proj(context["global_feat"])
+        if self.cq_readout_mode == "lowrank":
+            keys, values = self.cq_latent_readout.project_latents(context["latents"])
+            context["cq_latent_k"] = keys
+            context["cq_latent_v"] = values
+        return context
+
+    def prepare_query_context(
+        self,
+        coords: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+        cache_level: str = "none",
+        chunk_size: Optional[int] = None,
+        precomputed_geometry: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        if cache_level not in ("none", "geometry", "static_features"):
+            raise ValueError("Unknown reconstruction cache level.")
+        chunk_size = max(1, int(chunk_size or self.gather_query_chunk_size or 8192))
+        context: Dict[str, Any] = {
+            "cache_level": cache_level,
+            "n_query": int(coords.shape[1]),
+            "chunk_size": chunk_size,
+        }
+        if cache_level == "none":
+            if precomputed_geometry is not None:
+                raise ValueError("Persistent geometry requires geometry or static_features cache level.")
+            return context
+        if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
+            raise ValueError("Query caching supports topk_rbf and topk_rbf_glres.")
+        persistent_topk = None
+        if precomputed_geometry is not None:
+            validate_persistent_topk_geometry_cache(
+                precomputed_geometry, self, coords=coords,
+                obs_coords=condition_context["obs_coords"],
+                obs_mask=condition_context["obs_mask"],
+            )
+            persistent_topk = cache_tensors(precomputed_geometry)
+
+        coord_feat = coords.new_empty(
+            coords.shape[0], coords.shape[1], self.coord_feat_dim,
+        )
+        for start in range(0, coords.shape[1], chunk_size):
+            end = min(start + chunk_size, coords.shape[1])
+            coord_feat[:, start:end] = (
+                self.pos_enc(coords[:, start:end])
+                if self.pos_enc is not None else coords[:, start:end]
+            )
+        context["coord_feat"] = coord_feat
+
+        if cache_level == "geometry":
+            if persistent_topk is not None:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                context.update(topk_d2=topk_d2, topk_idx=topk_idx, topk_valid=topk_valid)
+                return context
+            k = min(self.gather_topk, condition_context["obs_coords"].shape[1])
+            topk_d2 = coords.new_empty(coords.shape[0], coords.shape[1], k)
+            topk_idx = torch.empty(
+                coords.shape[0], coords.shape[1], k,
+                dtype=torch.long, device=coords.device,
+            )
+            topk_valid = torch.empty(
+                coords.shape[0], coords.shape[1], k,
+                dtype=torch.bool, device=coords.device,
+            )
+            for start in range(0, coords.shape[1], chunk_size):
+                end = min(start + chunk_size, coords.shape[1])
+                d2, idx, _, _, valid = self._get_topk_neighbors(
+                    coords[:, start:end],
+                    condition_context["obs_coords"],
+                    condition_context["refined_sensor_feat"],
+                    condition_context["obs_mask"],
+                    k,
+                )
+                topk_d2[:, start:end] = d2
+                topk_idx[:, start:end] = idx
+                topk_valid[:, start:end] = valid
+            context.update(topk_d2=topk_d2, topk_idx=topk_idx, topk_valid=topk_valid)
+            return context
+
+        if self.training and torch.is_grad_enabled():
+            raise ValueError("static_features caching is inference-only.")
+        local_cache = coords.new_empty(
+            coords.shape[0], coords.shape[1],
+            condition_context["refined_sensor_feat"].shape[-1],
+        )
+        readout_cache = coords.new_empty(
+            coords.shape[0], coords.shape[1], self.cq_query_dim,
+        )
+        for start in range(0, coords.shape[1], chunk_size):
+            end = min(start + chunk_size, coords.shape[1])
+            coords_c = coords[:, start:end]
+            empty_feat = coords_c.new_empty(coords_c.shape[0], coords_c.shape[1], 0)
+            if persistent_topk is None:
+                local_cache[:, start:end] = self._aggregate_chunk(
+                    coords_c,
+                    empty_feat,
+                    condition_context["obs_coords"],
+                    condition_context["refined_sensor_feat"],
+                    condition_context["obs_mask"],
+                    condition_context.get("sensor_importance_bias"),
+                )
+            else:
+                topk_d2, topk_idx, topk_valid = persistent_topk
+                local_cache[:, start:end] = self._aggregate_topk_from_geometry(
+                    topk_d2[:, start:end],
+                    topk_idx[:, start:end],
+                    topk_valid[:, start:end],
+                    condition_context,
+                )
+            readout_cache[:, start:end] = self._cq_readout(
+                coord_feat[:, start:end], condition_context,
+            )
+        context["local_cond"] = local_cache
+        context["query_global"] = readout_cache
+        return context
+
+    def forward_query_chunk(
+        self,
+        t: torch.Tensor,
+        x_t_chunk: torch.Tensor,
+        coords_chunk: torch.Tensor,
+        condition_context: Mapping[str, torch.Tensor],
+        query_context: Optional[Mapping[str, Any]] = None,
+        query_slice: Optional[slice] = None,
+    ) -> torch.Tensor:
+        bsz, n_pts, _ = x_t_chunk.shape
+        query_slice = query_slice or slice(0, n_pts)
+        cached_coord = None if query_context is None else query_context.get("coord_feat")
+        coord_feat = (
+            cached_coord[:, query_slice]
+            if cached_coord is not None
+            else (self.pos_enc(coords_chunk) if self.pos_enc is not None else coords_chunk)
+        )
+        t_feat = t.view(bsz, 1, 1).expand(bsz, n_pts, 1)
+        point_q = self.cq_point_encoder(
+            torch.cat([coord_feat, x_t_chunk, t_feat], dim=-1),
+        )
+
+        cached_readout = None if query_context is None else query_context.get("query_global")
+        query_global_q = (
+            cached_readout[:, query_slice]
+            if cached_readout is not None
+            else self._cq_readout_chunked(coord_feat, condition_context)
+        )
+        cached_local = None if query_context is None else query_context.get("local_cond")
+        if cached_local is not None:
+            local_cond = cached_local[:, query_slice]
+        elif query_context is not None and "topk_idx" in query_context:
+            local_cond = self._aggregate_topk_from_geometry(
+                query_context["topk_d2"][:, query_slice],
+                query_context["topk_idx"][:, query_slice],
+                query_context["topk_valid"][:, query_slice],
+                condition_context,
+            )
+        else:
+            local_cond = self.aggregate_sparse_obs(
+                coords_chunk,
+                point_q,
+                condition_context["obs_coords"],
+                condition_context["refined_sensor_feat"],
+                condition_context["obs_mask"],
+                condition_context.get("sensor_importance_bias"),
+            )
+        global_q = condition_context["global_q"]
+        if self.cq_fusion_mode == "structured_concat":
+            global_for_head = (
+                global_q.unsqueeze(1)
+                + self.cq_readout_scale * query_global_q
+            )
+            head_input = torch.cat([point_q, global_for_head, local_cond], dim=-1)
+        else:
+            head_input = (
+                point_q
+                + self.cq_global_scale * global_q.unsqueeze(1)
+                + self.cq_local_scale * self.cq_local_proj(local_cond)
+                + self.cq_readout_scale * query_global_q
+            )
+        residual = self.cq_head(self.cq_fusion_norm(head_input))
+        if self.gather_mode == "topk_rbf_glres":
+            return self.cq_coarse_scale * self._predict_cq_coarse(point_q, global_q) + residual
+        return residual
+
+    def forward(
+        self,
+        t: torch.Tensor,
+        x_t: torch.Tensor,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        condition_context = self.prepare_condition_context(
+            obs_coords, obs_values, obs_mask, obs_field_ids,
+        )
+        return self.forward_query_chunk(t, x_t, coords, condition_context)
+
+    def model_summary(self) -> Dict[str, Any]:
+        query_prefixes = ("cq_", "query_to_cond", "gather_gate")
+        query_parameters = sum(
+            parameter.numel()
+            for name, parameter in self.named_parameters()
+            if name.startswith(query_prefixes)
+        )
+        total_parameters = sum(parameter.numel() for parameter in self.parameters())
+        point_input_dim = self.coord_feat_dim + self.n_fields + 1
+        fusion_dim = (
+            self.cq_query_dim
+            if self.cq_fusion_mode == "additive"
+            else 2 * self.cq_query_dim + self.cond_dim
+        )
+        if self.cq_fusion_mode == "additive":
+            local_projection_macs = (
+                0 if self.cond_dim == self.cq_query_dim
+                else self.cond_dim * self.cq_query_dim
+            )
+            head_and_coarse_macs = (
+                3 * self.cq_query_dim ** 2
+                + 2 * self.cq_query_dim * self.n_fields
+            )
+        else:
+            local_projection_macs = 0
+            head_and_coarse_macs = (
+                fusion_dim * self.cq_query_dim
+                + 2 * self.cq_query_dim ** 2
+                + 2 * self.cq_query_dim * self.n_fields
+            )
+        common_linear_macs = (
+            point_input_dim * self.cq_query_dim
+            + 2 * self.cq_query_dim ** 2
+            + local_projection_macs
+            + head_and_coarse_macs
+        )
+        if self.cq_readout_mode == "full":
+            readout_linear_macs = (
+                (self.coord_feat_dim + self.cq_query_dim) * self.latent_dim
+                + 2 * self.latent_dim ** 2
+                + 2 * self.latent_dim * (
+                    self.cq_latent_readout.ff.net[0].out_features
+                )
+                + self.latent_dim * self.cq_query_dim
+            )
+            attention_macs = 2 * self.num_latents * self.latent_dim
+        else:
+            readout_linear_macs = self.coord_feat_dim * self.cq_readout_rank
+            attention_macs = self.num_latents * (
+                self.cq_readout_rank + self.cq_query_dim
+            )
+        return {
+            "backbone": "GL_rbf_ENH_CQ",
+            "total_parameters": total_parameters,
+            "condition_core_parameters": total_parameters - query_parameters,
+            "query_decoder_parameters": query_parameters,
+            "query_dim": self.cq_query_dim,
+            "latent_dim": self.latent_dim,
+            "cond_dim": self.cond_dim,
+            "readout_mode": self.cq_readout_mode,
+            "fusion_mode": self.cq_fusion_mode,
+            "readout_rank": (self.cq_readout_rank if self.cq_readout_mode == "lowrank" else None),
+            "readout_heads": self.cq_readout_heads,
+            "point_state_width": self.cq_query_dim,
+            "global_width": self.cq_query_dim,
+            "local_width": (
+                self.cq_query_dim
+                if self.cq_fusion_mode == "additive" else self.cond_dim
+            ),
+            "legacy_concat_width": 2 * self.hidden_dim + self.cond_dim,
+            "cq_fused_width": fusion_dim,
+            "theoretical_query_linear_macs_per_query_excluding_attention": (
+                common_linear_macs + readout_linear_macs
+            ),
+            "theoretical_query_attention_macs_per_query": attention_macs,
+            "mac_estimate_note": (
+                "Linear/attention multiply-accumulates only; excludes activations, "
+                "normalization, RBF gather, and condition-static projections."
+            ),
+        }
+
+
 # FNO backbone
 
 # Gaussian splatting condition: FNOs truncate the Fourier series to a specific number of low-frequency modes (n_modes_x, n_modes_y), 
@@ -1943,6 +2813,21 @@ class PointCloudFFM(nn.Module):
         """
         return self.prior(coords, self.model.n_fields)
 
+    @torch.no_grad()
+    def prepare_reconstruction_geometry_cache(
+        self,
+        *,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_mask: torch.Tensor,
+        chunk_size: int = 8192,
+    ) -> Any:
+        """Build reusable Top-K geometry without condition-dependent features."""
+        return build_persistent_topk_geometry_cache(
+            self.model, coords=coords, obs_coords=obs_coords,
+            obs_mask=obs_mask, chunk_size=chunk_size,
+        )
+
     def simulate(self, t: torch.Tensor, x0: torch.Tensor, x1: torch.Tensor) -> torch.Tensor:
         """
         Straight-line interpolation between source x0 and target x1.
@@ -1995,6 +2880,276 @@ class PointCloudFFM(nn.Module):
             "target_rms": float(target.pow(2).mean().sqrt().detach().cpu()),
         }
 
+    def prepare_training_bridge(
+        self,
+        x1: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Sample one coherent RF stochastic bridge for all effective queries."""
+        x0 = self.sample_source(coords)
+        t = torch.rand(x1.shape[0], device=x1.device, dtype=x1.dtype)
+        return {
+            "x0": x0,
+            "t": t,
+            "x_t": self.simulate(t, x0, x1),
+            "target": self.target_vector_field(x0, x1),
+        }
+
+    def training_loss_microbatched(
+        self,
+        *,
+        x1: torch.Tensor,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+        obs_indices: Optional[torch.Tensor] = None,
+        query_microbatch_size: int,
+        backward: bool = False,
+        reuse_condition_context: bool = True,
+        synchronize_timing: bool = False,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Evaluate one unchanged RF objective with bounded query activations."""
+        del obs_indices  # Point-cloud GL-RBF uses coordinates/field IDs directly.
+        n_query = int(coords.shape[1])
+        chunk_size = max(1, int(query_microbatch_size))
+        if chunk_size >= n_query:
+            loss, metrics = self.training_loss(
+                x1=x1, coords=coords, obs_coords=obs_coords,
+                obs_values=obs_values, obs_mask=obs_mask,
+                obs_field_ids=obs_field_ids,
+            )
+            if backward:
+                loss.backward()
+            metrics.update({
+                "rf_bridge_ms": 0.0,
+                "condition_context_ms": 0.0,
+                "query_chunk_forward_ms": 0.0,
+                "query_chunk_backward_ms": 0.0,
+                "query_microbatches": 1.0,
+            })
+            return loss.detach() if backward else loss, metrics
+
+        def sync() -> None:
+            if synchronize_timing and x1.device.type == "cuda":
+                torch.cuda.synchronize(x1.device)
+
+        sync()
+        start = time.perf_counter()
+        bridge = self.prepare_training_bridge(x1, coords)
+        sync()
+        bridge_ms = (time.perf_counter() - start) * 1000.0
+
+        condition_context = None
+        sync()
+        start = time.perf_counter()
+        if reuse_condition_context:
+            if not hasattr(self.model, "prepare_condition_context"):
+                raise ValueError("Condition-context reuse is unavailable for this backbone.")
+            condition_context = self.model.prepare_condition_context(
+                obs_coords, obs_values, obs_mask, obs_field_ids,
+            )
+        sync()
+        condition_ms = (time.perf_counter() - start) * 1000.0
+
+        total_elements = int(bridge["target"].numel())
+        total_loss = x1.new_zeros(())
+        forward_ms = 0.0
+        backward_ms = 0.0
+        chunks = 0
+        for start_index in range(0, n_query, chunk_size):
+            end_index = min(start_index + chunk_size, n_query)
+            query_slice = slice(start_index, end_index)
+            sync()
+            start = time.perf_counter()
+            if condition_context is not None:
+                pred = self.model.forward_query_chunk(
+                    t=bridge["t"],
+                    x_t_chunk=bridge["x_t"][:, query_slice],
+                    coords_chunk=coords[:, query_slice],
+                    condition_context=condition_context,
+                )
+            else:
+                pred = self.model(
+                    bridge["t"],
+                    bridge["x_t"][:, query_slice],
+                    coords[:, query_slice],
+                    obs_coords,
+                    obs_values,
+                    obs_mask,
+                    obs_field_ids,
+                )
+            chunk_loss = F.mse_loss(
+                pred, bridge["target"][:, query_slice], reduction="sum",
+            ) / total_elements
+            sync()
+            forward_ms += (time.perf_counter() - start) * 1000.0
+            if backward:
+                sync()
+                start = time.perf_counter()
+                chunk_loss.backward(
+                    retain_graph=condition_context is not None and end_index < n_query,
+                )
+                sync()
+                backward_ms += (time.perf_counter() - start) * 1000.0
+                total_loss = total_loss + chunk_loss.detach()
+            else:
+                total_loss = total_loss + chunk_loss
+            chunks += 1
+            del pred, chunk_loss
+
+        target = bridge["target"]
+        metrics = {
+            "loss": float(total_loss.detach().cpu()),
+            "target_rms": float(target.pow(2).mean().sqrt().detach().cpu()),
+            "rf_bridge_ms": bridge_ms,
+            "condition_context_ms": condition_ms,
+            "query_chunk_forward_ms": forward_ms,
+            "query_chunk_backward_ms": backward_ms,
+            "query_microbatches": float(chunks),
+        }
+        return total_loss, metrics
+
+    def _sample_cached_streamed(
+        self,
+        *,
+        x: torch.Tensor,
+        coords: torch.Tensor,
+        obs_coords: torch.Tensor,
+        obs_values: torch.Tensor,
+        obs_mask: torch.Tensor,
+        obs_field_ids: torch.Tensor,
+        clamp_indices: Optional[torch.Tensor],
+        ts: torch.Tensor,
+        ode_solver: str,
+        obs_consistency_mode: str,
+        obs_consistency_strength: float,
+        obs_consistency_schedule_power: float,
+        obs_consistency_final_clamp: bool,
+        value_map: Optional[torch.Tensor],
+        mask_map: Optional[torch.Tensor],
+        reconstruction_query_chunk_size: int,
+        reconstruction_cache_level: str,
+        reconstruction_geometry_cache: Optional[Any],
+    ) -> torch.Tensor:
+        if not hasattr(self.model, "prepare_condition_context"):
+            raise ValueError(
+                "cached_streamed reconstruction requires a backbone with the context API."
+            )
+        chunk_size = max(1, int(reconstruction_query_chunk_size))
+        profile = bool(getattr(self, "_reconstruction_profile_enabled", False))
+
+        def profile_sync() -> None:
+            if profile and coords.device.type == "cuda":
+                torch.cuda.synchronize(coords.device)
+
+        profile_sync()
+        condition_start = time.perf_counter()
+        condition_context = self.model.prepare_condition_context(
+            obs_coords=obs_coords,
+            obs_values=obs_values,
+            obs_mask=obs_mask,
+            obs_field_ids=obs_field_ids,
+        )
+        profile_sync()
+        condition_seconds = time.perf_counter() - condition_start
+        query_start = time.perf_counter()
+        query_context = self.model.prepare_query_context(
+            coords=coords,
+            condition_context=condition_context,
+            cache_level=reconstruction_cache_level,
+            chunk_size=chunk_size,
+            precomputed_geometry=reconstruction_geometry_cache,
+        )
+        self._last_reconstruction_condition_bytes = self.model.context_nbytes(condition_context)
+        self._last_reconstruction_cache_bytes = self.model.context_nbytes(query_context)
+        profile_sync()
+        self._last_reconstruction_condition_seconds = condition_seconds
+        self._last_reconstruction_query_seconds = time.perf_counter() - query_start
+        ode_start = time.perf_counter()
+        bsz = coords.shape[0]
+        for i in range(len(ts) - 1):
+            t0 = ts[i].expand(bsz)
+            dt = ts[i + 1] - ts[i]
+            for start in range(0, coords.shape[1], chunk_size):
+                end = min(start + chunk_size, coords.shape[1])
+                query_slice = slice(start, end)
+                x_chunk = x[:, query_slice]
+                coords_chunk = coords[:, query_slice]
+                v0 = self.model.forward_query_chunk(
+                    t=t0,
+                    x_t_chunk=x_chunk,
+                    coords_chunk=coords_chunk,
+                    condition_context=condition_context,
+                    query_context=query_context,
+                    query_slice=query_slice,
+                )
+                if obs_consistency_mode in ("endpoint", "endpoint_smooth"):
+                    v0 = apply_endpoint_observation_consistency(
+                        x_t=x_chunk,
+                        v=v0,
+                        t=t0,
+                        value_map=value_map[:, query_slice],
+                        mask_map=mask_map[:, query_slice],
+                        strength=obs_consistency_strength,
+                        schedule_power=obs_consistency_schedule_power,
+                    )
+                if ode_solver == "heun":
+                    x_euler = x_chunk + dt * v0
+                    t1 = ts[i + 1].expand(bsz)
+                    v1 = self.model.forward_query_chunk(
+                        t=t1,
+                        x_t_chunk=x_euler,
+                        coords_chunk=coords_chunk,
+                        condition_context=condition_context,
+                        query_context=query_context,
+                        query_slice=query_slice,
+                    )
+                    if (
+                        obs_consistency_mode in ("endpoint", "endpoint_smooth")
+                        and float(ts[i + 1].item()) < 1.0
+                    ):
+                        v1 = apply_endpoint_observation_consistency(
+                            x_t=x_euler,
+                            v=v1,
+                            t=t1,
+                            value_map=value_map[:, query_slice],
+                            mask_map=mask_map[:, query_slice],
+                            strength=obs_consistency_strength,
+                            schedule_power=obs_consistency_schedule_power,
+                        )
+                    x[:, query_slice] = x_chunk + 0.5 * dt * (v0 + v1)
+                else:
+                    x[:, query_slice] = x_chunk + dt * v0
+
+            if obs_consistency_mode == "default_hard" and clamp_indices is not None:
+                x = scatter_observed_values(
+                    x=x,
+                    obs_values=obs_values,
+                    obs_mask=obs_mask,
+                    obs_indices=clamp_indices,
+                    obs_field_ids=obs_field_ids,
+                    strength=1.0,
+                )
+
+        if (
+            obs_consistency_final_clamp
+            and obs_consistency_mode != "none"
+            and clamp_indices is not None
+        ):
+            x = scatter_observed_values(
+                x=x,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_indices=clamp_indices,
+                obs_field_ids=obs_field_ids,
+                strength=1.0,
+            )
+        profile_sync()
+        self._last_reconstruction_ode_seconds = time.perf_counter() - ode_start
+        return x
+
     @torch.no_grad()
     def sample(
         self,
@@ -2012,6 +3167,10 @@ class PointCloudFFM(nn.Module):
         obs_consistency_schedule_power: float = 2.0,
         obs_consistency_final_clamp: bool = True,
         obs_consistency_chunk_size: int = 8192,
+        reconstruction_execution_mode: str = "legacy_full",
+        reconstruction_query_chunk_size: int = 8192,
+        reconstruction_cache_level: str = "static_features",
+        reconstruction_geometry_cache: Optional[Any] = None,
     ) -> torch.Tensor:
         """
         Integrate the learned rectified-flow ODE from x0 ~ prior to x1.
@@ -2021,6 +3180,14 @@ class PointCloudFFM(nn.Module):
         """
         if n_steps < 1:
             raise ValueError(f"n_steps must be >= 1, got {n_steps}")
+        if reconstruction_execution_mode not in ("legacy_full", "cached_streamed"):
+            raise ValueError(
+                "reconstruction_execution_mode must be 'legacy_full' or 'cached_streamed'."
+            )
+        if reconstruction_geometry_cache is not None and reconstruction_execution_mode != "cached_streamed":
+            raise ValueError(
+                "reconstruction_geometry_cache requires cached_streamed execution."
+            )
 
         bsz = coords.shape[0]
         x = self.sample_source(coords)
@@ -2057,6 +3224,30 @@ class PointCloudFFM(nn.Module):
         ts = torch.linspace(
             0.0, 1.0, n_steps + 1, device=coords.device, dtype=coords.dtype
         )
+
+        if reconstruction_execution_mode == "cached_streamed":
+            return self._sample_cached_streamed(
+                x=x,
+                coords=coords,
+                obs_coords=obs_coords,
+                obs_values=obs_values,
+                obs_mask=obs_mask,
+                obs_field_ids=obs_field_ids,
+                clamp_indices=clamp_indices,
+                ts=ts,
+                ode_solver=ode_solver,
+                obs_consistency_mode=obs_consistency_mode,
+                obs_consistency_strength=obs_consistency_strength,
+                obs_consistency_schedule_power=obs_consistency_schedule_power,
+                obs_consistency_final_clamp=obs_consistency_final_clamp,
+                value_map=value_map,
+                mask_map=mask_map,
+                reconstruction_query_chunk_size=reconstruction_query_chunk_size,
+                reconstruction_cache_level=reconstruction_cache_level,
+                reconstruction_geometry_cache=reconstruction_geometry_cache,
+            )
+        self._last_reconstruction_condition_bytes = 0
+        self._last_reconstruction_cache_bytes = 0
 
         for i in range(n_steps):
             t0 = ts[i].expand(bsz)

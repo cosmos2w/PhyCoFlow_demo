@@ -12,6 +12,7 @@ With this patch:
 import os
 import csv
 import inspect
+import time
 import torch
 import numpy as np
 import json
@@ -245,6 +246,9 @@ class TurbulentCombustionH5Dataset(Dataset):
         stats_path: Optional[str] = None,
         stats_chunk: int = 32,
         time_stride: int = 1,
+        coord_batch_mode: str = "legacy_clone",
+        defer_field_read: bool = False,
+        instrument_data_path: bool = False,
     ) -> None:
         super().__init__()
         self.h5_path     = str(h5_path)
@@ -253,6 +257,16 @@ class TurbulentCombustionH5Dataset(Dataset):
         self.stats_chunk = stats_chunk
         self.time_stride = time_stride
         self._h5         = None
+        self._h5_pid     = None
+        self.fixed_mesh  = True
+        self.coord_batch_mode = str(coord_batch_mode)
+        self.defer_field_read = bool(defer_field_read)
+        self.instrument_data_path = bool(instrument_data_path)
+        if self.coord_batch_mode not in {"legacy_clone", "shared_mesh"}:
+            raise ValueError(
+                "coord_batch_mode must be 'legacy_clone' or 'shared_mesh', got "
+                f"{self.coord_batch_mode!r}."
+            )
 
         with h5py.File(self.h5_path, "r") as f:
             self.num_times  = int(f["fields"].shape[1])
@@ -281,9 +295,78 @@ class TurbulentCombustionH5Dataset(Dataset):
         self.mean, self.std = self._load_or_compute_stats(train_indices=np.sort(all_indices[:n_train]))
 
     def _require_h5(self):
+        """Return a process-local lazy HDF5 handle safe for DataLoader workers."""
+        pid = os.getpid()
+        if self._h5 is not None and self._h5_pid != pid:
+            # A forked worker inherited the parent's file descriptor.  Never use
+            # that live h5py object across processes; reopen it in this worker.
+            try:
+                self._h5.close()
+            except Exception:
+                pass
+            self._h5 = None
         if self._h5 is None:
             self._h5 = h5py.File(self.h5_path, "r")
+            self._h5_pid = pid
         return self._h5
+
+    def close(self) -> None:
+        if self._h5 is not None:
+            try:
+                self._h5.close()
+            finally:
+                self._h5 = None
+                self._h5_pid = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __getstate__(self):
+        """Drop live h5py state when DataLoader uses a spawn context."""
+        state = dict(self.__dict__)
+        state["_h5"] = None
+        state["_h5_pid"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+    def hdf5_layout(self) -> Dict[str, object]:
+        """Describe the field layout relevant to indexed-read performance."""
+        h5 = self._require_h5()
+        ds = h5["fields"]
+        return {
+            "path": self.h5_path,
+            "shape": tuple(int(v) for v in ds.shape),
+            "chunks": None if ds.chunks is None else tuple(int(v) for v in ds.chunks),
+            "dtype": str(ds.dtype),
+            "compression": ds.compression,
+            "fixed_mesh": self.fixed_mesh,
+        }
+
+    def read_fields(
+        self,
+        time_index: int,
+        point_indices: Optional[Union[np.ndarray, torch.Tensor, Sequence[int]]] = None,
+    ) -> torch.Tensor:
+        """Read one raw field snapshot, optionally at sorted unique point indices."""
+        h5 = self._require_h5()
+        if point_indices is None:
+            arr = h5["fields"][0, int(time_index), :, 0, 0, :]
+        else:
+            if isinstance(point_indices, torch.Tensor):
+                idx = point_indices.detach().cpu().numpy().astype(np.int64, copy=False)
+            else:
+                idx = np.asarray(point_indices, dtype=np.int64)
+            if idx.ndim != 1:
+                raise ValueError(f"point_indices must be 1-D, got shape {idx.shape}.")
+            if idx.size and (np.any(idx[1:] <= idx[:-1])):
+                raise ValueError("HDF5 point_indices must be sorted and unique.")
+            arr = h5["fields"][0, int(time_index), idx, 0, 0, :]
+        return torch.from_numpy(np.asarray(arr, dtype=np.float32))
 
     def _load_or_compute_stats(self, train_indices: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
         stats_path = Path(self.stats_path)
@@ -316,17 +399,64 @@ class TurbulentCombustionH5Dataset(Dataset):
 
     def __getitem__(self, i: int) -> Dict[str, torch.Tensor]:
         t_idx = int(self.indices[i])
-        h5 = self._require_h5()
-        x = h5["fields"][0, t_idx, :, 0, 0, :].astype(np.float32)
-        x = torch.from_numpy(x)
-        x = (x - self.mean) / self.std
-        return {
-            "coords": self.coords.clone(),          # normalized coordinates for model
-            "coords_raw": self.coords_raw.clone(),  # original physical coordinates for plotting
-            "fields": x,                    
+        sample = {
+            "sample_index": torch.tensor(int(i), dtype=torch.long),
             "time_index": torch.tensor(t_idx, dtype=torch.long),
             "physical_time": self.times[t_idx].clone(),
         }
+        if not self.defer_field_read:
+            read_start = time.perf_counter()
+            x = self.read_fields(t_idx)
+            read_ms = (time.perf_counter() - read_start) * 1000.0
+            norm_start = time.perf_counter()
+            sample["fields"] = (x - self.mean) / self.std
+            if self.instrument_data_path:
+                sample["data_path_item_timings"] = {
+                    "hdf5_read_ms": read_ms,
+                    "cpu_normalization_ms": (time.perf_counter() - norm_start) * 1000.0,
+                }
+
+        # =====================================================================
+        # LEGACY DATA PATH — BEGIN
+        # Temporary A/B reference implementation.
+        # Remove after optimized path is validated.
+        # =====================================================================
+        if self.coord_batch_mode == "legacy_clone":
+            sample["coords"] = self.coords.clone()
+            sample["coords_raw"] = self.coords_raw.clone()
+        # =====================================================================
+        # LEGACY DATA PATH — END
+        # =====================================================================
+
+        # =====================================================================
+        # OPTIMIZED DATA PATH — BEGIN
+        # Candidate production implementation.  In shared_mesh mode coordinates
+        # live once on the dataset and are gathered by the collator/trainer.
+        # =====================================================================
+        elif not self.fixed_mesh:
+            raise RuntimeError("shared_mesh requires a fixed-mesh dataset.")
+        # =====================================================================
+        # OPTIMIZED DATA PATH — END
+        # =====================================================================
+        return sample
+
+    def get_full_snapshot(self, i: int) -> Dict[str, torch.Tensor]:
+        """Materialize one complete sample for reconstruction/visualization.
+
+        This accessor keeps reconstruction independent of the training item
+        representation.  Shared coordinates are returned by reference because
+        downstream visualization does not mutate them.
+        """
+        sample = self[i]
+        if "fields" not in sample:
+            raw = self.read_fields(int(sample["time_index"]))
+            sample["fields"] = (raw - self.mean) / self.std
+        if "coords" not in sample:
+            if not self.fixed_mesh:
+                raise RuntimeError("Full snapshot materialization requires explicit varying-mesh coordinates.")
+            sample["coords"] = self.coords
+            sample["coords_raw"] = self.coords_raw
+        return sample
 
 class MetricsLogger:
     def __init__(self, base_dir: str, Demo_Num: int, timestamp: str):
@@ -420,7 +550,12 @@ def _broadcast_per_field(
         )
     return values
 
-def build_sparse_condition(
+# =====================================================================
+# LEGACY DATA PATH — BEGIN
+# Temporary A/B reference implementation.
+# Remove after optimized path is validated.
+# =====================================================================
+def build_sparse_condition_legacy(
     coords_full: torch.Tensor,
     fields_full: torch.Tensor,
     cond_fields: Union[int, Sequence[int]],
@@ -491,6 +626,13 @@ def build_sparse_condition(
             cursor += m
 
     return obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids
+
+
+# Backward-compatible public name used by reconstruction/evaluation helpers.
+build_sparse_condition = build_sparse_condition_legacy
+# =====================================================================
+# LEGACY DATA PATH — END
+# =====================================================================
 
 
 def _normalized_l2(u_true: np.ndarray, u_pred: np.ndarray) -> float:
@@ -788,6 +930,9 @@ def reconstruct_snapshot(
     n_obs_list: Union[int, Sequence[int]] = 256,
     n_steps: int = 100,
     ode_solver: Optional[str] = None,
+    reconstruction_execution_mode: str = "legacy_full",
+    reconstruction_query_chunk_size: int = 8192,
+    reconstruction_cache_level: str = "static_features",
 ):
     """
     Reconstruct one snapshot under arbitrary sparse conditioning.
@@ -806,7 +951,11 @@ def reconstruct_snapshot(
     cond_fields = _to_int_list(cond_fields)
     n_obs_list = _broadcast_per_field(n_obs_list, cond_fields, "n_obs_list")
 
-    sample = dataset[snapshot_index]
+    sample = (
+        dataset.get_full_snapshot(snapshot_index)
+        if hasattr(dataset, "get_full_snapshot")
+        else dataset[snapshot_index]
+    )
     coords = sample["coords"].unsqueeze(0).to(device)   # [1, N, D]
     truth = sample["fields"].unsqueeze(0).to(device)    # [1, N, C]
 
@@ -843,6 +992,13 @@ def reconstruct_snapshot(
 
     if "ode_solver" in sig.parameters and ode_solver is not None:
         sample_kwargs["ode_solver"] = ode_solver
+    for key, value in {
+        "reconstruction_execution_mode": reconstruction_execution_mode,
+        "reconstruction_query_chunk_size": reconstruction_query_chunk_size,
+        "reconstruction_cache_level": reconstruction_cache_level,
+    }.items():
+        if key in sig.parameters:
+            sample_kwargs[key] = value
 
     recon = model.sample(**sample_kwargs)
 
@@ -882,6 +1038,9 @@ def visualize_reconstruction(
     obs_consistency_compare_modes: Optional[Sequence[str]] = None,
     obs_consistency_chunk_size: int = 8192,
     sparse_condition: Optional[dict] = None,
+    reconstruction_execution_mode: str = "legacy_full",
+    reconstruction_query_chunk_size: int = 8192,
+    reconstruction_cache_level: str = "static_features",
 ):
     """
     Reconstruct full fields from arbitrary sparse sensors and save improved plots.
@@ -899,7 +1058,11 @@ def visualize_reconstruction(
     cond_fields = _to_int_list(cond_fields)
     n_obs = _broadcast_per_field(n_obs, cond_fields, "n_obs")
 
-    sample = dataset[snapshot_index]
+    sample = (
+        dataset.get_full_snapshot(snapshot_index)
+        if hasattr(dataset, "get_full_snapshot")
+        else dataset[snapshot_index]
+    )
 
     # Normalized coordinates go into the model.
     coords = sample["coords"].unsqueeze(0).to(device)   # [1, N, D]
@@ -941,6 +1104,13 @@ def visualize_reconstruction(
     sig = inspect.signature(model.sample)
     if "ode_solver" in sig.parameters and ode_solver is not None:
         sample_kwargs["ode_solver"] = ode_solver
+    for key, value in {
+        "reconstruction_execution_mode": reconstruction_execution_mode,
+        "reconstruction_query_chunk_size": reconstruction_query_chunk_size,
+        "reconstruction_cache_level": reconstruction_cache_level,
+    }.items():
+        if key in sig.parameters:
+            sample_kwargs[key] = value
 
     recon = model.sample(**sample_kwargs)
 

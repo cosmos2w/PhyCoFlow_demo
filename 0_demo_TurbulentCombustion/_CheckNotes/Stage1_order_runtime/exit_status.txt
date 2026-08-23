@@ -1,0 +1,2 @@
+optimized_exit=0
+legacy_exit=0

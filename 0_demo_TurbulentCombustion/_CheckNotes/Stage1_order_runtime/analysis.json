@@ -1,0 +1,31 @@
+{
+  "optimized": {
+    "history": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage1_order_runs/optimized/ffm_tc_pointcloud_DemoN9112_20260820_204751/loss_history.csv",
+    "epochs": 12,
+    "steady_epochs": "3-12",
+    "steady_mean_seconds_per_epoch": 61.290420869737865,
+    "steady_median_seconds_per_epoch": 61.369396581780165,
+    "steady_min_seconds_per_epoch": 61.00074560381472,
+    "steady_max_seconds_per_epoch": 61.49625256843865,
+    "final_train_loss": 0.9363820502098571
+  },
+  "legacy": {
+    "history": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage1_order_runs/legacy/ffm_tc_pointcloud_DemoN9110_20260820_210026/loss_history.csv",
+    "epochs": 12,
+    "steady_epochs": "3-12",
+    "steady_mean_seconds_per_epoch": 86.8460395439528,
+    "steady_median_seconds_per_epoch": 86.91150291170925,
+    "steady_min_seconds_per_epoch": 86.41289717331529,
+    "steady_max_seconds_per_epoch": 86.97048538085073,
+    "final_train_loss": 0.9419431483491938
+  },
+  "comparison": {
+    "optimized_over_legacy_steady_epoch_ratio": 0.7057365101688807,
+    "optimized_time_reduction_fraction": 0.2942634898311193,
+    "optimized_speedup": 1.4169594254953635,
+    "run_order": [
+      "optimized",
+      "legacy"
+    ]
+  }
+}
