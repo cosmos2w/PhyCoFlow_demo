@@ -164,6 +164,52 @@ def test_ema_formula_apply_restore_and_round_trip(tmp_path: Path):
     torch.testing.assert_close(resumed_ema.shadow["weight"], ema.shadow["weight"])
 
 
+def test_ema_copies_frozen_buffers_and_checkpoint_loader_repairs_legacy_drift():
+    class BufferedModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+            self.register_buffer("frozen_prior", torch.tensor([3.0]))
+
+    model = BufferedModel()
+    ema = ModelEMA(model, decay=0.75)
+    with torch.no_grad():
+        model.weight.fill_(5.0)
+        model.frozen_prior.fill_(7.0)
+    ema.update(model)
+    torch.testing.assert_close(ema.shadow["weight"], torch.tensor([2.0]))
+    torch.testing.assert_close(ema.shadow["frozen_prior"], model.frozen_prior, rtol=0, atol=0)
+
+    modern_checkpoint = {
+        "model": model.state_dict(),
+        "model_ema": ema.state_dict(),
+        "model_ema_enabled": True,
+        "model_ema_eval": True,
+    }
+    modern_state = checkpoint_model_state(modern_checkpoint)
+    torch.testing.assert_close(modern_state["weight"], torch.tensor([2.0]))
+    torch.testing.assert_close(
+        modern_state["frozen_prior"], model.frozen_prior, rtol=0, atol=0
+    )
+
+    legacy_shadow = ema.state_dict()
+    legacy_shadow.pop("averaged_parameter_names")
+    legacy_shadow["shadow"]["frozen_prior"] = torch.tensor([6.5])
+    checkpoint = {
+        "model": model.state_dict(),
+        "model_ema": legacy_shadow,
+        "model_ema_enabled": True,
+        "model_ema_eval": True,
+    }
+    uncorrected = checkpoint_model_state(checkpoint)
+    corrected = checkpoint_model_state(checkpoint, model=model)
+    torch.testing.assert_close(uncorrected["frozen_prior"], torch.tensor([6.5]))
+    torch.testing.assert_close(corrected["weight"], torch.tensor([2.0]))
+    torch.testing.assert_close(
+        corrected["frozen_prior"], model.frozen_prior, rtol=0, atol=0
+    )
+
+
 def test_zero_initialized_film_is_identity_then_all_film_parameters_receive_gradients():
     torch.manual_seed(11)
     backbone = _backbone(all_on=True)

@@ -25,9 +25,14 @@ Both screens retain 128 latents, four latent blocks, K=32, KeOps, learnable sigm
 
 - `implementation/CORRECTNESS.md`: implementation invariants and test evidence.
 - `configs/`: validated 200-epoch screens and the selected S7-B continuation config.
+- `evaluation_1000/RESULTS.md`: final controlled quality, reconstruction, Pareto, and default recommendation.
 - `benchmarks/`: pre-training cost/scaling and persistent-inference output.
+- `benchmarks/attention_kernel_comparison.json`: separate MHA/SDPA/fused-AdamW parity and timing evidence.
 - `screen_200/RESULTS.md`: controlled epoch-200 decision and caveats.
 - `screen_200/evaluation/`: fixed-manifest, deterministic reconstruction, and consolidated comparison artifacts.
 - `figures/generated/stage7_epoch200_pareto/`: editable comparison figure exports.
+- `figures/generated/stage7_final_pareto/`: final quality/throughput recommendation figure.
 
-Both formal screens completed. S7-B / Stage7-All256 was the clear epoch-200 winner and is the only candidate continued to epoch 1000.
+Both formal screens completed, and S7-B / Stage7-All256 completed the sole
+epoch-1000 continuation. It is the recommended default CQ configuration; retain
+CQ-LR-128 as the throughput-first alternative.

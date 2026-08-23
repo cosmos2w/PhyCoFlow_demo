@@ -262,7 +262,7 @@ def main() -> None:
     for checkpoint_path in args.checkpoint:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         model = build_gl_rbf_ffm(config, dataset.num_fields, device)
-        model.load_state_dict(checkpoint_model_state(checkpoint), strict=True)
+        model.load_state_dict(checkpoint_model_state(checkpoint, model=model), strict=True)
         label = checkpoint_path.parent.name
         if label in all_rows:
             label = f"{label}/{checkpoint_path.name}"

@@ -9,12 +9,16 @@ import torch.nn as nn
 
 
 class ModelEMA:
-    """Track every model parameter and buffer without changing the live module."""
+    """Average trainable parameters and copy frozen state without changing the live module."""
 
     def __init__(self, model: nn.Module, decay: float = 0.999) -> None:
         if not 0.0 <= float(decay) < 1.0:
             raise ValueError(f"EMA decay must be in [0, 1), got {decay}.")
         self.decay = float(decay)
+        self.averaged_parameter_names = tuple(
+            name for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        )
         self.num_updates = 0
         self.shadow = self._clone_model_state(model)
 
@@ -26,13 +30,19 @@ class ModelEMA:
 
     @torch.no_grad()
     def update(self, model: nn.Module) -> None:
+        averaged_names = {
+            name for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        }
+        if averaged_names != set(self.averaged_parameter_names):
+            raise RuntimeError("EMA trainable parameter names changed after EMA creation.")
         live = model.state_dict()
         if live.keys() != self.shadow.keys():
             raise RuntimeError("EMA/model state keys differ; architecture changed after EMA creation.")
         for name, value in live.items():
             target = self.shadow[name]
             source = value.detach().to(device=target.device)
-            if target.is_floating_point() or target.is_complex():
+            if name in averaged_names and (target.is_floating_point() or target.is_complex()):
                 target.mul_(self.decay).add_(source, alpha=1.0 - self.decay)
             else:
                 target.copy_(source)
@@ -45,6 +55,7 @@ class ModelEMA:
     def state_dict(self) -> Dict[str, object]:
         return {
             "decay": self.decay,
+            "averaged_parameter_names": list(self.averaged_parameter_names),
             "num_updates": self.num_updates,
             "shadow": OrderedDict(
                 (name, value.detach().clone()) for name, value in self.shadow.items()
@@ -55,6 +66,15 @@ class ModelEMA:
         shadow = state.get("shadow")
         if not isinstance(shadow, Mapping):
             raise ValueError("EMA checkpoint is missing a shadow state mapping.")
+        averaged_names = tuple(
+            state.get("averaged_parameter_names", self.averaged_parameter_names)
+        )
+        if set(averaged_names) != set(self.averaged_parameter_names):
+            missing = sorted(set(self.averaged_parameter_names) - set(averaged_names))
+            unexpected = sorted(set(averaged_names) - set(self.averaged_parameter_names))
+            raise RuntimeError(
+                f"EMA trainable parameter names differ: missing={missing}, unexpected={unexpected}."
+            )
         if shadow.keys() != self.shadow.keys():
             missing = sorted(set(self.shadow) - set(shadow))
             unexpected = sorted(set(shadow) - set(self.shadow))

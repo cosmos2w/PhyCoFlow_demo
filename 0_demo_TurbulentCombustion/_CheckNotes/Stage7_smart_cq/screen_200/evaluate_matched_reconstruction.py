@@ -163,8 +163,8 @@ def main() -> None:
 
     for label, config_path, checkpoint_path, config in candidates:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        state = checkpoint_model_state(checkpoint)
         model = build_gl_rbf_ffm(config, dataset.num_fields, device)
+        state = checkpoint_model_state(checkpoint, model=model)
         model.load_state_dict(state, strict=True)
         model.eval()
         label_dir = output_dir / slugify(label)

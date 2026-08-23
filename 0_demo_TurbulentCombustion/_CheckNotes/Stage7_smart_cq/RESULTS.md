@@ -1,12 +1,12 @@
 # Stage 7 Results
 
-Status: correctness and efficiency gates passed; both 200-epoch screens completed; S7-B selected and resumed toward epoch 1000 on physical GPU 1.
+Status: complete. S7-B / Stage7-All256 finished epoch 1000, passed final quality and efficiency evaluation, and is recommended as the new default CQ configuration.
 
 ## Correctness
 
-- Focused Stage-7 tests: **11 passed**.
+- Focused Stage-7 tests after the final EMA frozen-state correction: **12 passed**.
 - Existing CQ/cache/microbatch regression groups: **84 passed, 1 skipped**.
-- Complete regression suite after implementation: **141 passed, 1 skipped**.
+- Final complete regression suite: **142 passed, 1 skipped**.
 - Frozen clean CQ-LR-128 `best.pt`: strict load succeeded with **0 missing / 0 unexpected** keys.
 
 ## Pre-training efficiency gates
@@ -78,5 +78,48 @@ run from epoch 200 on physical GPU 1 on 2026-08-23. The scheduler and EMA
 states resumed in place; pre-resume artifacts are preserved under
 `screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/bk/`.
 
-The final epoch-1000 default-CQ recommendation and the separate MHA-mask vs
-SDPA/fused-AdamW kernel study remain pending completion of this one run.
+The run completed epoch 1000. The exact milestone has train loss 0.29000 and
+stored validation loss 0.30290. The stored best checkpoint is epoch 965
+(`val_loss=0.29227`), but exact epoch 1000 is marginally better in the controlled
+fixed-manifest RF evaluation (0.261507 vs 0.261564) and is the recommended
+scientific checkpoint.
+
+## Final controlled recommendation
+
+| Candidate | checkpoint | fixed RF | change vs F0 | NFE1 mean | NFE4 mean |
+|---|---:|---:|---:|---:|---:|
+| F0 | e1000 / recon best e845 | 0.325531 | baseline | 0.239674 | 0.262493 |
+| CQ-LR-128 | e1000 / recon best e845 | 0.357043 | 9.7% worse | 0.264192 | 0.294014 |
+| CQ-LR-256† | best e840 | **0.261010** | 19.8% better | **0.210119** | **0.227882** |
+| **Stage7-All256** | **e1000** | **0.261507** | **19.7% better** | **0.213053** | **0.234270** |
+
+† CQ-LR-256 stopped at epoch 842 and is retained as an incomplete reference.
+Stage7-All256 essentially ties its RF quality (0.19% difference) while completing
+the clean 1000-epoch protocol. Versus F0 it improves deterministic reconstruction
+mean by 11.1% at NFE1 and 10.8% at NFE4. The first measured Stage7 milestone to
+beat final F0 RF quality is epoch 400.
+
+The final audit corrected EMA semantics: only trainable parameters are averaged;
+frozen parameters and buffers are copied exactly. Existing Stage-7 checkpoints
+are repaired during loading using their live frozen state. All final
+reconstruction candidates share the same RF-prior checksum, and the correction
+changes S7's fixed RF mean by only 1.2e-6.
+
+**Recommendation: make Stage7-All256 the default balanced CQ configuration.**
+Keep CQ-LR-128 as the throughput-first option. F0 is dominated here because
+Stage7-All256 is both better quality and 1.37x faster training, uses 26.0% less
+allocated GPU memory, and is 1.53x faster for persistent 1M/NFE4 inference.
+
+## Separate kernel result
+
+Parameter/forward/loss/gradient parity passed for MHA-mask versus explicit SDPA.
+At B128/Q4096, MHA+unfused AdamW is 403.85 ms and explicit SDPA+unfused AdamW
+is 406.66 ms (0.7% slower). Keep the current MHA path; PyTorch 2.5 already
+dispatches `need_weights=False` efficiently.
+
+Fused AdamW independently passes one-step parity (maximum parameter delta
+1.49e-8) and reduces the MHA full step to 396.55 ms, a modest 1.8% gain. Treat
+it as an optional kernel optimization, separate from the scientific default.
+
+Full final evidence is in `evaluation_1000/RESULTS.md`; the publication-ready
+Pareto figure is in `figures/generated/stage7_final_pareto/`.

@@ -63,3 +63,45 @@ conda run --no-capture-output -n phycoflow_env \
 python src/train_pointcloud_ffm.py \
   --config _CheckNotes/Stage7_smart_cq/configs/S7_B_All256_1000ep_resume.yaml
 ```
+
+## Final fixed-manifest evaluation
+
+The final command evaluates S7-B milestones and best with exact live frozen
+state plus EMA trainable weights:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 KEOPS_CACHE_FOLDER=/tmp/keops_stage7_eval_final_gpu1 \
+PYTHONPATH=src conda run --no-capture-output -n phycoflow_env \
+python src/evaluate_pointcloud_fixed_manifest.py \
+  --config _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/run_config.yaml \
+  --manifest /home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage1_fixed_val_manifest.pt \
+  --checkpoint _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_0400.pt \
+    _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_0600.pt \
+    _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_0800.pt \
+    _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_1000.pt \
+    _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/best.pt \
+  --device cuda:0 --batch-size 1 --repeats 3 --rf-seed 1729 \
+  --output _CheckNotes/Stage7_smart_cq/evaluation_1000/S7_B_milestones_and_best.json
+```
+
+## Separate kernel benchmark
+
+```bash
+CUDA_VISIBLE_DEVICES=1 PYTHONPATH=src \
+conda run --no-capture-output -n phycoflow_env \
+python _CheckNotes/Stage7_smart_cq/benchmark_attention_kernels.py \
+  --config _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/run_config.yaml \
+  --checkpoint _CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_1000.pt \
+  --device cuda:0 --batch-size 128 --query-size 4096 \
+  --query-microbatch-size 2048 --n-obs 256 --warmup 2 --iterations 7 \
+  --output _CheckNotes/Stage7_smart_cq/benchmarks/attention_kernel_comparison.json
+```
+
+## Final analysis and figure
+
+```bash
+conda run --no-capture-output -n fig \
+python _CheckNotes/Stage7_smart_cq/evaluation_1000/analyze_stage7_final.py
+conda run --no-capture-output -n fig \
+python figures/scripts/plot_stage7_final_pareto.py
+```

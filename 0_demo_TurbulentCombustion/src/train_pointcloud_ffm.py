@@ -70,17 +70,47 @@ from model_finetune import find_source_run_dir, load_source_config
 from model_ema import ModelEMA
 
 
-def checkpoint_model_state(checkpoint, prefer_ema: Optional[bool] = None):
-    """Return live or EMA model weights while preserving legacy checkpoint support."""
+def checkpoint_model_state(
+    checkpoint,
+    prefer_ema: Optional[bool] = None,
+    model: Optional[nn.Module] = None,
+):
+    """Return live or EMA weights while preserving exact frozen model state.
+
+    Passing ``model`` keeps buffers and non-trainable parameters from the live
+    checkpoint. This also repairs old EMA checkpoints that averaged frozen RF
+    prior buffers before that behavior was corrected.
+    """
     state_dict = checkpoint
     if isinstance(checkpoint, dict) and "model" in checkpoint:
         if prefer_ema is None:
             prefer_ema = bool(
                 checkpoint.get("model_ema_eval", checkpoint.get("model_ema_enabled", False))
             )
-        if prefer_ema and "model_ema" in checkpoint:
+        use_ema = bool(prefer_ema and "model_ema" in checkpoint)
+        if use_ema:
             ema_state = checkpoint["model_ema"]
             state_dict = ema_state.get("shadow", ema_state) if isinstance(ema_state, dict) else ema_state
+            averaged_names = (
+                ema_state.get("averaged_parameter_names")
+                if isinstance(ema_state, dict) else None
+            )
+            live_state = checkpoint["model"]
+            if averaged_names is not None:
+                ema_shadow = ema_state.get("shadow", ema_state)
+                state_dict = dict(live_state)
+                state_dict.update({name: ema_shadow[name] for name in averaged_names})
+            elif model is not None:
+                state_dict = dict(state_dict)
+                frozen_names = {
+                    name for name, _ in model.named_buffers()
+                } | {
+                    name for name, parameter in model.named_parameters()
+                    if not parameter.requires_grad
+                }
+                for name in frozen_names:
+                    if name in live_state:
+                        state_dict[name] = live_state[name]
         else:
             state_dict = checkpoint["model"]
     if isinstance(state_dict, dict) and "_metadata" in state_dict:

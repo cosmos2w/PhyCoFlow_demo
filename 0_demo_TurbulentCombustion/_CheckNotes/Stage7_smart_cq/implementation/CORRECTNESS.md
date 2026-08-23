@@ -20,7 +20,14 @@ When Stage-7 architecture features are disabled, no FiLM or measurement/support 
 
 ## EMA
 
-`ModelEMA` tracks parameters and buffers after every optimizer step. Checkpoints contain live `model` state and independent `model_ema` state, decay, and update count. Resume explicitly restores live weights for training and then restores the EMA shadow. Offline evaluation selects EMA weights only when checkpoint metadata enables EMA evaluation. Validation/reconstruction use a context manager and restore live weights exactly afterward.
+`ModelEMA` averages trainable parameters after every optimizer step and copies
+buffers/non-trainable parameters exactly. Checkpoints contain live `model` state
+and independent `model_ema` state, decay, and update count. Resume explicitly
+restores live weights for training and then restores the EMA shadow. Offline
+evaluation selects EMA trainable weights only when checkpoint metadata enables
+EMA evaluation. Validation/reconstruction use a context manager and restore live
+weights exactly afterward. The loader also repairs legacy Stage-7 EMA shadows by
+taking frozen state from the live checkpoint.
 
 ## Time FiLM
 
@@ -40,14 +47,14 @@ The formal Stage-7 configs use `train_query_microbatch_size: 2048` with one reus
 
 ```text
 pytest -q tests/test_stage7_smart_cq.py
-11 passed
+12 passed
 
 pytest -q tests/test_pointcloud_cq.py tests/test_cq_balanced.py \
   tests/test_cq_persistent_topk_cache.py tests/test_pointcloud_query_microbatch.py
 84 passed, 1 skipped
 
 pytest -q
-141 passed, 1 skipped
+142 passed, 1 skipped
 ```
 
-Focused coverage includes EMA formula/apply/restore/checkpoint/resume, zero-init FiLM identity and gradients, literal latent widths 128/256 with a fixed 128-D query decoder, hand-computed value/support, sigma gradient, changed values/field IDs, one-search uncached execution, one condition-context build over cached NFE-4, zero post-build persistent KNN, cached/fresh equivalence, and monolithic/query-microbatch loss-gradient-update equivalence for Stage-7 off/all-on.
+Focused coverage includes EMA formula/apply/restore/checkpoint/resume, exact frozen-buffer copying and legacy-shadow repair, zero-init FiLM identity and gradients, literal latent widths 128/256 with a fixed 128-D query decoder, hand-computed value/support, sigma gradient, changed values/field IDs, one-search uncached execution, one condition-context build over cached NFE-4, zero post-build persistent KNN, cached/fresh equivalence, and monolithic/query-microbatch loss-gradient-update equivalence for Stage-7 off/all-on.
