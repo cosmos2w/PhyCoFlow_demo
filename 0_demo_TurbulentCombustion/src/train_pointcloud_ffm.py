@@ -19,6 +19,7 @@ import json
 import math
 import os
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Sequence
 
@@ -66,11 +67,22 @@ from direct_coherence_loss import (
     sample_coherence_points,
 )
 from model_finetune import find_source_run_dir, load_source_config
+from model_ema import ModelEMA
 
 
-def checkpoint_model_state(checkpoint):
-    """Return a loadable model state, stripping legacy non-parameter keys."""
-    state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
+def checkpoint_model_state(checkpoint, prefer_ema: Optional[bool] = None):
+    """Return live or EMA model weights while preserving legacy checkpoint support."""
+    state_dict = checkpoint
+    if isinstance(checkpoint, dict) and "model" in checkpoint:
+        if prefer_ema is None:
+            prefer_ema = bool(
+                checkpoint.get("model_ema_eval", checkpoint.get("model_ema_enabled", False))
+            )
+        if prefer_ema and "model_ema" in checkpoint:
+            ema_state = checkpoint["model_ema"]
+            state_dict = ema_state.get("shadow", ema_state) if isinstance(ema_state, dict) else ema_state
+        else:
+            state_dict = checkpoint["model"]
     if isinstance(state_dict, dict) and "_metadata" in state_dict:
         state_dict = dict(state_dict)
         state_dict.pop("_metadata", None)
@@ -277,6 +289,21 @@ def parse_args():
     p.add_argument("--cq-global-scale-init", type=float, default=1.0)
     p.add_argument("--cq-local-scale-init", type=float, default=1.0)
     p.add_argument("--cq-readout-scale-init", type=float, default=1.0e-2)
+    p.add_argument("--cq-time-conditioning", choices=["scalar_concat", "sinusoidal_film"],
+                   default="scalar_concat")
+    p.add_argument("--cq-time-embed-dim", type=int, default=128)
+    p.add_argument("--cq-time-max-period", type=float, default=10000.0)
+    p.add_argument("--cq-time-film-zero-init", default=True,
+                   action=argparse.BooleanOptionalAction)
+    p.add_argument("--cq-measurement-support-mode", choices=["none", "rbf_value_support"],
+                   default="none")
+    p.add_argument("--cq-measurement-support-normalize", default=True,
+                   action=argparse.BooleanOptionalAction)
+    p.add_argument("--model-ema-enabled", default=False,
+                   action=argparse.BooleanOptionalAction)
+    p.add_argument("--model-ema-decay", type=float, default=0.999)
+    p.add_argument("--model-ema-eval", default=True,
+                   action=argparse.BooleanOptionalAction)
 
     # ----------------------------------------------------------
     # These are hyperparameters for fno backbone
@@ -780,6 +807,7 @@ def run_epoch(
     diagnostics: Optional[DataPathDiagnostics] = None,
     train_query_microbatch_size: Optional[int] = None,
     reuse_condition_context_across_query_microbatches: bool = True,
+    model_ema: Optional[ModelEMA] = None,
 ) -> float:
     training = optimizer is not None
     model.train(training)
@@ -877,6 +905,8 @@ def run_epoch(
             backward_ms = (time.perf_counter() - start) * 1000.0
             start = time.perf_counter()
             optimizer.step()
+            if model_ema is not None:
+                model_ema.update(model)
             _sync_cuda_for_diagnostic(device, diagnostic_step)
             optimizer_ms = (time.perf_counter() - start) * 1000.0
 
@@ -1052,6 +1082,7 @@ def run_epoch_direct_coherence(
     mean: Optional[torch.Tensor] = None,
     std: Optional[torch.Tensor] = None,
     data_path_config: Optional[ResolvedDataPathConfig] = None,
+    model_ema: Optional[ModelEMA] = None,
 ) -> tuple[dict, int]:
     model.train(True)
     if data_path_config is None:
@@ -1138,6 +1169,8 @@ def run_epoch_direct_coherence(
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             row["data_grad_norm"] = _grad_norm(model)
             optimizer.step()
+            if model_ema is not None:
+                model_ema.update(model)
             row["total_loss"] = float(total_loss.detach().cpu())
         else:
             bsz = coords_full.shape[0]
@@ -1204,6 +1237,8 @@ def run_epoch_direct_coherence(
                 grad_clip_norm=1.0,
                 config_missing_behavior=args.config_missing_behavior,
             )
+            if model_ema is not None:
+                model_ema.update(model)
             applied += 1
             if bool(grad_info.get("gradient_conflict", False)):
                 conflict_count += 1
@@ -1805,6 +1840,15 @@ def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str
         "cq_global_scale_init",
         "cq_local_scale_init",
         "cq_readout_scale_init",
+        "cq_time_conditioning",
+        "cq_time_embed_dim",
+        "cq_time_max_period",
+        "cq_time_film_zero_init",
+        "cq_measurement_support_mode",
+        "cq_measurement_support_normalize",
+        "model_ema_enabled",
+        "model_ema_decay",
+        "model_ema_eval",
     ]
     current = vars(args)
     lines = ["\nArchitecture keys that commonly affect checkpoint compatibility:"]
@@ -2087,7 +2131,11 @@ def main():
             f"readout_heads={args.cq_readout_heads}, "
             f"sensor_coord_encoding={sensor_coord_encoding}, "
             f"latent_sensor_reinject={latent_sensor_reinject}, "
-            f"glres_scale_init={glres_scale_init}"
+            f"glres_scale_init={glres_scale_init}, "
+            f"time_conditioning={args.cq_time_conditioning}, "
+            f"measurement_support={args.cq_measurement_support_mode}, "
+            f"ema={args.model_ema_enabled}, "
+            f"ema_decay={args.model_ema_decay}"
         )
         backbone = ConditionalPointHybridLocalGlobalRBFCQ(
             n_fields=train_set.num_fields,
@@ -2126,6 +2174,12 @@ def main():
             cq_global_scale_init=args.cq_global_scale_init,
             cq_local_scale_init=args.cq_local_scale_init,
             cq_readout_scale_init=args.cq_readout_scale_init,
+            cq_time_conditioning=args.cq_time_conditioning,
+            cq_time_embed_dim=args.cq_time_embed_dim,
+            cq_time_max_period=args.cq_time_max_period,
+            cq_time_film_zero_init=args.cq_time_film_zero_init,
+            cq_measurement_support_mode=args.cq_measurement_support_mode,
+            cq_measurement_support_normalize=args.cq_measurement_support_normalize,
         )
         model = PointCloudFFM(backbone, prior, sigma_min=args.sigma_min).to(device)
     elif args.backbone in ["GL_rbf", "GL_rbf_ENH"]:
@@ -2279,11 +2333,19 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=(args.scheduler_t_max or args.epochs))
+    model_ema = ModelEMA(model, decay=args.model_ema_decay) if args.model_ema_enabled else None
 
     if reload_ckpt is not None:
-        model.load_state_dict(checkpoint_model_state(reload_ckpt))
+        model.load_state_dict(checkpoint_model_state(reload_ckpt, prefer_ema=False))
         if "optimizer" in reload_ckpt:
             optimizer.load_state_dict(reload_ckpt["optimizer"])
+        if "scheduler" in reload_ckpt:
+            scheduler.load_state_dict(reload_ckpt["scheduler"])
+        if model_ema is not None:
+            if "model_ema" in reload_ckpt:
+                model_ema.load_state_dict(reload_ckpt["model_ema"])
+            else:
+                model_ema = ModelEMA(model, decay=args.model_ema_decay)
         print(f"[*] Reloaded model state from {reload_checkpoint_path.name}")
     elif source_checkpoint is not None:
         pretrained_ckpt = torch.load(source_checkpoint, map_location="cpu", weights_only=False)
@@ -2332,6 +2394,7 @@ def main():
                 mean=train_set.mean.to(device),
                 std=train_set.std.to(device),
                 data_path_config=data_path_config,
+                model_ema=model_ema,
             )
             tr_loss = float(direct_metrics["total_loss"])
         else:
@@ -2356,6 +2419,7 @@ def main():
                 reuse_condition_context_across_query_microbatches=(
                     args.reuse_condition_context_across_query_microbatches
                 ),
+                model_ema=model_ema,
             )
             global_step += len(train_loader)
         train_seconds = time.perf_counter() - train_wall_start
@@ -2382,7 +2446,11 @@ def main():
         validation_seconds = 0.0
         if epoch % args.eval_every == 0 or epoch == 1:
             validation_wall_start = time.perf_counter()
-            with torch.no_grad():
+            eval_weights = (
+                model_ema.average_parameters(model)
+                if model_ema is not None and args.model_ema_eval else nullcontext()
+            )
+            with eval_weights, torch.no_grad():
                 val_loss = run_epoch(
                     model=model,
                     loader=val_loader,
@@ -2410,6 +2478,7 @@ def main():
             ckpt = {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
                 "epoch": epoch,
                 "global_step": global_step,
                 "train_loss": tr_loss,
@@ -2423,6 +2492,14 @@ def main():
                 "Num_x": args.Num_x,
                 "Num_y": args.Num_y,
             }
+            if model_ema is not None:
+                ckpt["model_ema"] = model_ema.state_dict()
+            ckpt["model_ema_enabled"] = bool(args.model_ema_enabled)
+            ckpt["model_ema_decay"] = float(args.model_ema_decay)
+            ckpt["model_ema_eval"] = bool(args.model_ema_eval)
+            ckpt["best_selection_weights"] = (
+                "ema" if model_ema is not None and args.model_ema_eval else "live"
+            )
             if args.backbone == "GL_rbf_ENH_CQ":
                 ckpt.update({
                     "cq_query_dim": args.cq_query_dim,
@@ -2433,6 +2510,12 @@ def main():
                     "cq_global_scale_init": args.cq_global_scale_init,
                     "cq_local_scale_init": args.cq_local_scale_init,
                     "cq_readout_scale_init": args.cq_readout_scale_init,
+                    "cq_time_conditioning": args.cq_time_conditioning,
+                    "cq_time_embed_dim": args.cq_time_embed_dim,
+                    "cq_time_max_period": args.cq_time_max_period,
+                    "cq_time_film_zero_init": args.cq_time_film_zero_init,
+                    "cq_measurement_support_mode": args.cq_measurement_support_mode,
+                    "cq_measurement_support_normalize": args.cq_measurement_support_normalize,
                 })
             ckpt.update(checkpoint_metadata(args, direct_cfg, source_run_dir, source_checkpoint))
             torch.save(ckpt, save_dir / "last.pt")
@@ -2467,24 +2550,29 @@ def main():
                 #     file_tag=f"{args.ode_solver}_nfe{nfe}",
                 # )
 
-                recon_metrics = visualize_reconstruction(
-                    model=model,
-                    dataset=val_set,
-                    epoch=epoch,
-                    device=device,
-                    save_dir=str(recon_dir_epoch),
-
-                    cond_fields=args.vis_cond_fields,
-                    n_obs=args.vis_n_obs_list,
-                    n_steps=nfe,
-                    ode_solver=args.ode_solver,
-                    snapshot_index=0,
-                    file_tag=f"{args.ode_solver}_nfe{nfe}",
-                    save_metrics_json = True,
-                    reconstruction_execution_mode=args.reconstruction_execution_mode,
-                    reconstruction_query_chunk_size=args.reconstruction_query_chunk_size,
-                    reconstruction_cache_level=args.reconstruction_cache_level,
+                recon_weights = (
+                    model_ema.average_parameters(model)
+                    if model_ema is not None and args.model_ema_eval else nullcontext()
                 )
+                with recon_weights:
+                    recon_metrics = visualize_reconstruction(
+                        model=model,
+                        dataset=val_set,
+                        epoch=epoch,
+                        device=device,
+                        save_dir=str(recon_dir_epoch),
+
+                        cond_fields=args.vis_cond_fields,
+                        n_obs=args.vis_n_obs_list,
+                        n_steps=nfe,
+                        ode_solver=args.ode_solver,
+                        snapshot_index=0,
+                        file_tag=f"{args.ode_solver}_nfe{nfe}",
+                        save_metrics_json = True,
+                        reconstruction_execution_mode=args.reconstruction_execution_mode,
+                        reconstruction_query_chunk_size=args.reconstruction_query_chunk_size,
+                        reconstruction_cache_level=args.reconstruction_cache_level,
+                    )
 
                 metric_str = ", ".join([f"{k}:{v:.4e}" for k, v in recon_metrics.items()])
                 print(f"[recon] epoch={epoch:04d} solver={args.ode_solver} n_steps={nfe} | {metric_str}")

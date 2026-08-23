@@ -378,6 +378,12 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             cq_global_scale_init=cfg.get("cq_global_scale_init", 1.0),
             cq_local_scale_init=cfg.get("cq_local_scale_init", 1.0),
             cq_readout_scale_init=cfg.get("cq_readout_scale_init", 1e-2),
+            cq_time_conditioning=cfg.get("cq_time_conditioning", "scalar_concat"),
+            cq_time_embed_dim=cfg.get("cq_time_embed_dim", 128),
+            cq_time_max_period=cfg.get("cq_time_max_period", 10000.0),
+            cq_time_film_zero_init=cfg.get("cq_time_film_zero_init", True),
+            cq_measurement_support_mode=cfg.get("cq_measurement_support_mode", "none"),
+            cq_measurement_support_normalize=cfg.get("cq_measurement_support_normalize", True),
         )
         return PointCloudFFM(
             backbone, prior, sigma_min=cfg.get("sigma_min", 1e-4)
