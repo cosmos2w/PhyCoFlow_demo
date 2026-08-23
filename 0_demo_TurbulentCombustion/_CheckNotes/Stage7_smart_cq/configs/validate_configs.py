@@ -18,7 +18,7 @@ ALLOWED_COMMON = {
     "checkpoint_epochs", "cq_fusion_mode", "model_ema_enabled", "model_ema_decay",
     "model_ema_eval", "cq_time_conditioning", "cq_time_embed_dim",
     "cq_time_max_period", "cq_time_film_zero_init", "cq_measurement_support_mode",
-    "cq_measurement_support_normalize",
+    "cq_measurement_support_normalize", "train_query_microbatch_size",
 }
 
 
@@ -51,6 +51,7 @@ def main() -> int:
             "model_ema_enabled": True, "model_ema_decay": 0.999,
             "model_ema_eval": True, "cq_time_conditioning": "sinusoidal_film",
             "cq_measurement_support_mode": "rbf_value_support",
+            "train_query_microbatch_size": 2048,
         }
         expected["latent_dim"] = 128 if name == "S7-A" else 256
         for key, value in expected.items():

@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--formal-batch-size", type=int, default=128)
     parser.add_argument("--formal-query-size", type=int, default=4096)
     parser.add_argument("--million-query-count", type=int, default=1_000_000)
-    parser.add_argument("--million-chunk-size", type=int, default=8192)
+    parser.add_argument("--million-chunk-size", type=int, default=32768)
     parser.add_argument("--skip-million", action="store_true")
     parser.add_argument("--minimum-free-mb", type=float, default=30_000.0)
     parser.add_argument("--allow-busy-gpu", action="store_true")
@@ -70,6 +70,7 @@ def _candidate_config(base: dict[str, Any], *, latent_dim: int, smart: bool) -> 
         model_ema_enabled=smart,
         model_ema_decay=0.999,
         model_ema_eval=True,
+        train_query_microbatch_size=2048 if smart else config.get("train_query_microbatch_size"),
     )
     return config
 
@@ -104,10 +105,15 @@ def benchmark_training_step(
     iterations: int,
     warmup: int,
     device: torch.device,
+    query_microbatch_size: int | None = None,
 ) -> dict[str, float]:
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1.0e-4, weight_decay=1.0e-6)
     ema = ModelEMA(model, decay=0.999) if ema_enabled else None
+    microbatch_active = (
+        query_microbatch_size is not None
+        and 0 < int(query_microbatch_size) < int(values["coords"].shape[1])
+    )
 
     def one_step(measure: bool) -> dict[str, float]:
         optimizer.zero_grad(set_to_none=True)
@@ -116,13 +122,31 @@ def benchmark_training_step(
             torch.cuda.reset_peak_memory_stats(device)
         sync(device)
         full_start = time.perf_counter()
-        (loss, _), forward_ms = timed(device, lambda: model.training_loss(
-            x1=values["x_t"], coords=values["coords"],
-            obs_coords=values["obs_coords"], obs_values=values["obs_values"],
-            obs_mask=values["obs_mask"], obs_field_ids=values["obs_field_ids"],
-            obs_indices=None,
-        ))
-        _, backward_ms = timed(device, loss.backward)
+        if microbatch_active:
+            (_, metrics), _ = timed(device, lambda: model.training_loss_microbatched(
+                x1=values["x_t"], coords=values["coords"],
+                obs_coords=values["obs_coords"], obs_values=values["obs_values"],
+                obs_mask=values["obs_mask"], obs_field_ids=values["obs_field_ids"],
+                obs_indices=None, query_microbatch_size=int(query_microbatch_size),
+                backward=True, reuse_condition_context=True,
+                synchronize_timing=True,
+            ))
+            forward_ms = (
+                metrics["rf_bridge_ms"] + metrics["condition_context_ms"]
+                + metrics["query_chunk_forward_ms"]
+            )
+            backward_ms = metrics["query_chunk_backward_ms"]
+        else:
+            (loss, _), forward_ms = timed(device, lambda: model.training_loss(
+                x1=values["x_t"], coords=values["coords"],
+                obs_coords=values["obs_coords"], obs_values=values["obs_values"],
+                obs_mask=values["obs_mask"], obs_field_ids=values["obs_field_ids"],
+                obs_indices=None,
+            ))
+            _, backward_ms = timed(device, loss.backward)
+        _, grad_clip_ms = timed(
+            device, lambda: torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0),
+        )
         _, optimizer_ms = timed(device, optimizer.step)
         ema_ms = 0.0
         if ema is not None:
@@ -132,9 +156,11 @@ def benchmark_training_step(
         return {
             "forward_ms": forward_ms,
             "backward_ms": backward_ms,
+            "grad_clip_ms": grad_clip_ms,
             "optimizer_ms": optimizer_ms,
             "ema_update_ms": ema_ms,
             "full_step_ms": full_step_ms,
+            "query_microbatch_size": int(query_microbatch_size or 0),
             "peak_allocated_mb": (
                 torch.cuda.max_memory_allocated(device) / 1024.0**2
                 if device.type == "cuda" else 0.0
@@ -270,7 +296,7 @@ def main() -> None:
     summaries = [model_summary(label, model) for label, (model, _, _) in candidates.items()]
     formal_rows = []
     scaling_rows = []
-    for label, (model, ema_enabled, _) in candidates.items():
+    for label, (model, ema_enabled, config) in candidates.items():
         values = make_inputs(
             args.formal_query_size, args.n_obs, 5, device, seed=42,
             batch_size=args.formal_batch_size,
@@ -283,6 +309,7 @@ def main() -> None:
                 **benchmark_training_step(
                     model, values, ema_enabled=ema_enabled,
                     iterations=args.iterations, warmup=args.warmup, device=device,
+                    query_microbatch_size=config.get("train_query_microbatch_size"),
                 ),
             }
         except torch.cuda.OutOfMemoryError as exc:
@@ -326,17 +353,34 @@ def main() -> None:
             print(json.dumps({"benchmark": "persistent", **row}, sort_keys=True))
 
     by_label = {row["label"]: row for row in formal_rows if row.get("status") == "ok"}
+    persistent_by_label = {
+        row["label"]: row for row in million_rows if row.get("status") == "ok"
+    }
     f0 = by_label.get("F0")
+    f0_persistent = persistent_by_label.get("F0")
     gates = {}
     if f0:
         for label, row in by_label.items():
             if label == "F0":
                 continue
+            speedup = f0["full_step_ms"] / row["full_step_ms"]
+            memory_reduction = 1.0 - row["peak_allocated_mb"] / f0["peak_allocated_mb"]
             gates[label] = {
-                "train_speedup_vs_f0": f0["full_step_ms"] / row["full_step_ms"],
-                "peak_memory_reduction_vs_f0": 1.0 - row["peak_allocated_mb"] / f0["peak_allocated_mb"],
-                "passes_train_speed_gate_1p10x": f0["full_step_ms"] / row["full_step_ms"] >= 1.10,
+                "train_speedup_vs_f0": speedup,
+                "peak_memory_reduction_vs_f0": memory_reduction,
+                "passes_train_speed_gate_1p10x": speedup >= 1.10,
+                "passes_memory_reduction_gate_0p10": memory_reduction >= 0.10,
             }
+            if f0_persistent and label in persistent_by_label:
+                persistent_speedup = (
+                    f0_persistent["steady_nfe4_s"]
+                    / persistent_by_label[label]["steady_nfe4_s"]
+                )
+                gates[label]["persistent_nfe4_speedup_vs_f0"] = persistent_speedup
+                gates[label]["passes_persistent_nfe4_gate_1p15x"] = persistent_speedup >= 1.15
+                gates[label]["scientific_launch_eligible"] = (
+                    speedup >= 1.10 and memory_reduction >= 0.10 and persistent_speedup >= 1.15
+                )
     result = {
         "device": str(device), "gpu_name": torch.cuda.get_device_name(device),
         "torch_version": torch.__version__, "free_mb_at_start": free_mb,

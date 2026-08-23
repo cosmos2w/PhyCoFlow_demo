@@ -175,8 +175,8 @@ def test_zero_initialized_film_is_identity_then_all_film_parameters_receive_grad
     output = backbone._cq_apply_timestep_film(point_q, t).square().mean()
     output.backward()
     for name in (
-        "cq_time_norm.weight", "cq_timestep_mlp.0.weight",
-        "cq_timestep_mlp.2.weight", "cq_timestep_film.weight",
+        "cq_timestep_mlp.0.weight", "cq_timestep_mlp.2.weight",
+        "cq_timestep_film.weight",
     ):
         gradient = dict(backbone.named_parameters())[name].grad
         assert gradient is not None, name

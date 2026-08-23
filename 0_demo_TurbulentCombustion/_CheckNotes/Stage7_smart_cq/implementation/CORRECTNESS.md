@@ -24,13 +24,17 @@ When Stage-7 architecture features are disabled, no FiLM or measurement/support 
 
 ## Time FiLM
 
-The scalar `t` remains in the historical point-encoder input. Optional sinusoidal/MLP time conditioning applies a residual scale/shift to normalized `point_q`. The final projection is zero-initialized by default, making the enabled branch an exact identity at initialization. No time enters sensor tokens, latent encoding, refined sensors, persistent geometry, or coordinate/readout caches.
+The scalar `t` remains in the historical point-encoder input. Optional sinusoidal/MLP time conditioning applies standard residual FiLM, `point_q * (1 + scale) + shift`. The final projection is zero-initialized by default, making the enabled branch an exact identity at initialization. No time enters sensor tokens, latent encoding, refined sensors, persistent geometry, or coordinate/readout caches.
 
 ## Raw measurement/support
 
-The shortcut retains raw normalized `obs_values` and `obs_field_ids` only in the enabled condition context. A single Top-K result feeds both learned local conditioning and explicit statistics. Base weights are a softmax of geometry-only RBF logits; GLRES sensor-importance bias is intentionally excluded. For each field, support is its share of total Top-K RBF weight and value is the within-field weighted mean. Missing fields return zero value/support.
+The shortcut retains raw normalized `obs_values` and `obs_field_ids` only in the enabled condition context. A single Top-K result feeds both learned local conditioning and explicit statistics. Base weights are a softmax of geometry-only RBF logits; GLRES sensor-importance bias is intentionally excluded. Differentiable field-wise scatter accumulation avoids a dense `[B,Q,K,field]` tensor. For each field, support is its share of total Top-K RBF weight and value is the within-field weighted mean. Missing fields return zero value/support.
 
-`static_features` caches learned local conditioning, compact latent readout, and the 10-scalar value/support feature. Persistent geometry execution performs zero KNN calls after geometry construction.
+The uncached combined path asks the existing KNN routine for geometry only, computes the explicit statistics, then gathers learned sensor features once. This changes allocation order without adding a search. `static_features` caches learned local conditioning, compact latent readout, and the 10-scalar value/support feature. Persistent geometry execution performs zero KNN calls after geometry construction.
+
+## Exact-gradient execution microbatch
+
+The formal Stage-7 configs use `train_query_microbatch_size: 2048` with one reused condition context. The RF source, timestep, target, B128 batch, and 4096-query objective are unchanged. The regression suite checks monolithic versus microbatch loss, gradients, and optimizer updates for both historical and all-on Stage-7 paths.
 
 ## Commands and results
 

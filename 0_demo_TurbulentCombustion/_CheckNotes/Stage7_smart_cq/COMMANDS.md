@@ -15,7 +15,7 @@ conda run -n phycoflow_env python \
 
 ## Pre-training benchmark on physical GPU 1
 
-The command intentionally refuses to run with less than 30 GiB free unless explicitly overridden.
+The command intentionally refuses to run with less than 30 GiB free unless explicitly overridden. Its formal Stage-7 rows use the configured 2048-query exact-gradient execution microbatch, and persistent 1M-query inference uses a shared 32768-query chunk for all candidates.
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 KEOPS_CACHE_FOLDER=/tmp/keops_stage7_benchmark_gpu1 \
@@ -30,7 +30,7 @@ python src/benchmark_pointcloud_stage7.py \
 
 ## Formal screens
 
-Launch only after the efficiency gate passes. These are direct Python launches; no wrapper script is required. Whether both fit concurrently on physical GPU 1 must be decided from the measured peak memory.
+The efficiency gates passed and both screens fit concurrently on physical GPU 1. These remain direct Python launches; no repository wrapper script is required.
 
 S7-A:
 

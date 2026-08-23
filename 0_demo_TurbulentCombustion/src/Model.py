@@ -1248,7 +1248,8 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         refined_sensor_feat: torch.Tensor,  # [B, M, Cc]
         obs_mask: torch.Tensor,             # [B, M]
         k: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_features: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor]:
         """
         Top-k neighbor search using KeOps Kmin_argKmin.
         """
@@ -1273,10 +1274,12 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # KeOps can return indices in a non-long dtype; convert explicitly.
         topk_idx = topk_idx.long()
 
+        topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
+        if not return_features:
+            return topk_d2, topk_idx, None, None, topk_valid
+
         topk_sensor_feat = batched_gather_3d(refined_sensor_feat, topk_idx)
         topk_sensor_coords = batched_gather_3d(obs_coords, topk_idx)
-        topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
-
         return topk_d2, topk_idx, topk_sensor_feat, topk_sensor_coords, topk_valid
 
     def _knn_search_torch(
@@ -1286,7 +1289,8 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         refined_sensor_feat: torch.Tensor,
         obs_mask: torch.Tensor,
         k: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_features: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor]:
         """
         Fallback KNN search using torch.cdist + torch.topk.
         """
@@ -1296,10 +1300,12 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
 
         topk_d2, topk_idx = torch.topk(d2, k=k, dim=-1, largest=False)
 
+        topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
+        if not return_features:
+            return topk_d2, topk_idx, None, None, topk_valid
+
         topk_sensor_feat = batched_gather_3d(refined_sensor_feat, topk_idx)
         topk_sensor_coords = batched_gather_3d(obs_coords, topk_idx)
-        topk_valid = batched_gather_2d(obs_mask, topk_idx).bool()
-
         return topk_d2, topk_idx, topk_sensor_feat, topk_sensor_coords, topk_valid
 
     def _get_topk_neighbors(
@@ -1309,7 +1315,8 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         refined_sensor_feat: torch.Tensor,
         obs_mask: torch.Tensor,
         k: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return_features: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor]:
         """
         Unified top-k neighbor retrieval.
         """
@@ -1320,6 +1327,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
                 refined_sensor_feat=refined_sensor_feat,
                 obs_mask=obs_mask,
                 k=k,
+                return_features=return_features,
             )
 
         return self._knn_search_torch(
@@ -1328,6 +1336,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             refined_sensor_feat=refined_sensor_feat,
             obs_mask=obs_mask,
             k=k,
+            return_features=return_features,
         )
 
     def _sensor_local_refine(
@@ -1551,12 +1560,15 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         topk_idx: torch.Tensor,
         topk_valid: torch.Tensor,
         condition_context: Mapping[str, torch.Tensor],
+        topk_sensor_feat: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.gather_mode not in ("topk_rbf", "topk_rbf_glres"):
             raise ValueError("Geometry caching supports topk_rbf and topk_rbf_glres.")
-        sensor_feat = batched_gather_3d(
-            condition_context["refined_sensor_feat"], topk_idx,
-        )
+        sensor_feat = topk_sensor_feat
+        if sensor_feat is None:
+            sensor_feat = batched_gather_3d(
+                condition_context["refined_sensor_feat"], topk_idx,
+            )
         sigma = (
             torch.exp(self.log_rbf_sigma).clamp_min(1e-6)
             if self.learnable_rbf_sigma else self.rbf_sigma
@@ -2032,7 +2044,6 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
         )
         self.cq_global_proj = nn.Linear(hidden_dim, self.cq_query_dim)
         if self.cq_timestep_film_enabled:
-            self.cq_time_norm = nn.LayerNorm(self.cq_query_dim)
             self.cq_timestep_mlp = nn.Sequential(
                 nn.Linear(self.cq_time_embed_dim, self.cq_time_embed_dim),
                 nn.SiLU(),
@@ -2143,8 +2154,9 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             return point_q
         embedding = self.cq_timestep_mlp(self._cq_timestep_embedding(t))
         scale, shift = self.cq_timestep_film(embedding).chunk(2, dim=-1)
-        normalized = self.cq_time_norm(point_q)
-        return point_q + normalized * scale.unsqueeze(1) + shift.unsqueeze(1)
+        # Standard residual FiLM. The zero-initialized projection makes this an
+        # exact identity at initialization without normalizing every query token.
+        return point_q * (1.0 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
     def _cq_measurement_support_from_geometry(
         self,
@@ -2165,10 +2177,14 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
         logits = -topk_d2 / (2 * sigma ** 2 + 1e-12)
         weights = torch.softmax(logits.masked_fill(~topk_valid, -1e9), dim=-1)
         weights = weights * topk_valid.to(dtype=weights.dtype)
-        field_axis = torch.arange(self.n_fields, device=field_ids.device).view(1, 1, 1, -1)
-        field_weights = weights.unsqueeze(-1) * (field_ids.unsqueeze(-1) == field_axis).to(weights.dtype)
-        support = field_weights.sum(dim=2)
-        numerator = (field_weights * values.unsqueeze(-1)).sum(dim=2)
+        # Accumulate directly into the five field slots. This is equivalent to
+        # the one-hot [B,Q,K,F] formulation but avoids materializing that large
+        # tensor and remains differentiable with respect to the RBF weights.
+        output_shape = (*weights.shape[:2], self.n_fields)
+        support = weights.new_zeros(output_shape).scatter_add(2, field_ids, weights)
+        numerator = weights.new_zeros(output_shape).scatter_add(
+            2, field_ids, weights * values,
+        )
         measurement = numerator / support.clamp_min(1e-6)
         measurement = torch.where(support > 0, measurement, torch.zeros_like(measurement))
         return torch.cat([measurement, support], dim=-1)
@@ -2186,12 +2202,16 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             condition_context["refined_sensor_feat"],
             condition_context["obs_mask"],
             k,
-        )
-        local_cond = self._aggregate_topk_from_geometry(
-            topk_d2, topk_idx, topk_valid, condition_context,
+            return_features=False,
         )
         raw_features = self._cq_measurement_support_from_geometry(
             topk_d2, topk_idx, topk_valid, condition_context,
+        )
+        topk_sensor_feat = batched_gather_3d(
+            condition_context["refined_sensor_feat"], topk_idx,
+        )
+        local_cond = self._aggregate_topk_from_geometry(
+            topk_d2, topk_idx, topk_valid, condition_context, topk_sensor_feat,
         )
         return local_cond, raw_features
 

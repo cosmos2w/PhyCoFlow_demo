@@ -67,7 +67,7 @@ enhanced_head_norm: true
 glres_scale_init: 1.0e-2
 
 n_query_points: 4096
-train_query_microbatch_size: null
+train_query_microbatch_size: 2048
 reuse_condition_context_across_query_microbatches: true
 query_sampling: "uniform"
 query_sample_near_ratio: 0.25

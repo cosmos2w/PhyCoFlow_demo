@@ -19,7 +19,7 @@ The tag was created and pushed before Stage-7 source changes. Existing performan
 | S7-A / Stage7-Cond128 | 128 | 128-D, LR64/H4, additive | 0.999 | sinusoidal FiLM | RBF value/support |
 | S7-B / Stage7-All256 | 256 | 128-D, LR64/H4, additive | 0.999 | sinusoidal FiLM | RBF value/support |
 
-Both screens retain 128 latents, four latent blocks, K=32, KeOps, learnable sigma, GLRES, the clean optimized data path, 4096 queries, batch 128, seed 42, and scheduler horizon 1000.
+Both screens retain 128 latents, four latent blocks, K=32, KeOps, learnable sigma, GLRES, the clean optimized data path, 4096 effective queries, batch 128, seed 42, and scheduler horizon 1000. Training uses the tested exact-gradient 2048-query execution microbatch with a single reused condition context.
 
 ## Evidence map
 
@@ -29,4 +29,4 @@ Both screens retain 128 latents, four latent blocks, K=32, KeOps, learnable sigm
 - `screen_200/`: formal 200-epoch run artifacts.
 - `comparison/`: fixed-manifest, reconstruction, and Pareto comparison.
 
-Long scientific runs must not start until the pre-training efficiency gates pass.
+The pre-training efficiency gates passed on GPU 1 and both formal 200-epoch screens were launched concurrently on 2026-08-22.
