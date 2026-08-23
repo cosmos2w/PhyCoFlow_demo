@@ -1,0 +1,15 @@
+stage,change,change_class,color
+1,"Matched baseline
++ instrumentation",execution,#E8E8E8
+2,"Selected-only
+data path",execution,#DCEAF5
+3,"Scaling diagnosis
+4k→65k",execution,#DCEAF5
+4,"Cached-streamed
+reconstruction",execution,#DCEAF5
+5,"Query
+microbatching",execution,#DCEAF5
+6,"Compact CQ-LR
+persistent Top-K",architecture,#C9E7DF
+7,"Smart condition
+EMA/FiLM/raw RBF",architecture,#DDCFF0

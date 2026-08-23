@@ -1,0 +1,32 @@
+{
+  "epoch": 1000,
+  "snapshot_index": 0,
+  "cond_fields": [
+    1
+  ],
+  "n_obs": [
+    256
+  ],
+  "n_steps": 4,
+  "ode_solver": "euler",
+  "obs_consistency_mode": "default_hard",
+  "metrics": {
+    "CO": 0.35426291823387146,
+    "T": 0.15673333406448364,
+    "U_0": 0.0897807627916336,
+    "U_1": 0.5570289492607117,
+    "p": 0.013545926660299301,
+    "obs_count_SenConsis_total": 256,
+    "obs_rel_l2_SenConsis": 0.0,
+    "obs_count_SenConsis_CO": 0,
+    "obs_rel_l2_SenConsis_CO": NaN,
+    "obs_count_SenConsis_T": 256,
+    "obs_rel_l2_SenConsis_T": 0.0,
+    "obs_count_SenConsis_U_0": 0,
+    "obs_rel_l2_SenConsis_U_0": NaN,
+    "obs_count_SenConsis_U_1": 0,
+    "obs_rel_l2_SenConsis_U_1": NaN,
+    "obs_count_SenConsis_p": 0,
+    "obs_rel_l2_SenConsis_p": NaN
+  }
+}

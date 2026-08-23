@@ -113,6 +113,12 @@ def build_gl_rbf_ffm(config: Mapping[str, Any], n_fields: int, device: torch.dev
             cq_global_scale_init=float(_get(config, "cq_global_scale_init", 1.0)),
             cq_local_scale_init=float(_get(config, "cq_local_scale_init", 1.0)),
             cq_readout_scale_init=float(_get(config, "cq_readout_scale_init", 1.0e-2)),
+            cq_time_conditioning=str(_get(config, "cq_time_conditioning", "scalar_concat")),
+            cq_time_embed_dim=int(_get(config, "cq_time_embed_dim", 128)),
+            cq_time_max_period=float(_get(config, "cq_time_max_period", 10000.0)),
+            cq_time_film_zero_init=bool(_get(config, "cq_time_film_zero_init", True)),
+            cq_measurement_support_mode=str(_get(config, "cq_measurement_support_mode", "none")),
+            cq_measurement_support_normalize=bool(_get(config, "cq_measurement_support_normalize", True)),
         )
     else:
         query_latent_readout = bool(_get(config, "query_latent_readout", enhanced))
@@ -256,7 +262,7 @@ def main() -> None:
     for checkpoint_path in args.checkpoint:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         model = build_gl_rbf_ffm(config, dataset.num_fields, device)
-        model.load_state_dict(checkpoint_model_state(checkpoint), strict=True)
+        model.load_state_dict(checkpoint_model_state(checkpoint, model=model), strict=True)
         label = checkpoint_path.parent.name
         if label in all_rows:
             label = f"{label}/{checkpoint_path.name}"
