@@ -51,3 +51,15 @@ python src/train_pointcloud_ffm.py \
 ```
 
 For background execution, append distinct output redirections and `&` to the two commands. Do not launch isolated EMA-only, FiLM-only, measurement-only, or latent256-only runs.
+
+## Selected continuation
+
+S7-B was the clear epoch-200 winner. Resume the same run in place on physical
+GPU 1 with the direct Python command:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 KEOPS_CACHE_FOLDER=/tmp/keops_stage7_s7b_continue_gpu1 \
+conda run --no-capture-output -n phycoflow_env \
+python src/train_pointcloud_ffm.py \
+  --config _CheckNotes/Stage7_smart_cq/configs/S7_B_All256_1000ep_resume.yaml
+```

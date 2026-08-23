@@ -45,6 +45,8 @@ Save_TrainedModel/
 # Generated visualization and report exports
 *.png
 *.gif
+*.tif
+*.tiff
 *.svg
 *.csv
 *.json

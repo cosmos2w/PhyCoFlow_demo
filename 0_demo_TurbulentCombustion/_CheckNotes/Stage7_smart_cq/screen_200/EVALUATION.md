@@ -1,6 +1,6 @@
 # Stage-7 epoch-200 evaluation commands
 
-Run these only after S7-A and S7-B have produced `epoch_0200.pt`. Replace `<S7_A_RUN>` and `<S7_B_RUN>` with their timestamped run directories.
+These commands were executed after S7-A and S7-B produced `epoch_0200.pt`. Replace `<S7_A_RUN>` and `<S7_B_RUN>` with their timestamped run directories when reproducing them.
 
 All fixed-manifest evaluations use the clean reference manifest checksum, batch 1, three repeats, and RF seed 1729. Stage-7 checkpoint loading automatically selects EMA weights because `model_ema_eval: true` is recorded in the checkpoint.
 
@@ -53,4 +53,24 @@ python src/evaluate_pointcloud_fixed_manifest.py \
 
 ## Reconstruction
 
-The training configs generate matched snapshot-0 Euler NFE1/2/4 reconstruction at epoch 200 using EMA weights. Reference F0/CQ-LR-128 epoch-200 reconstruction must be generated with the same snapshot, observation layout, consistency behavior, and RF seed before cross-model reconstruction claims are made. Do not compare the existing epoch-1000 images to Stage-7 epoch-200 outputs.
+Training-time reconstructions do not share RNG streams across architectures.
+The formal cross-model comparison therefore uses
+`evaluate_matched_reconstruction.py`, which supplies the same sparse condition
+and resets the same RF seed for every checkpoint and NFE. Its shared-condition
+checksum and all field metrics are stored under `evaluation/matched_reconstruction/`.
+Do not compare the existing epoch-1000 images to Stage-7 epoch-200 outputs.
+
+## Consolidate and plot
+
+```bash
+conda run --no-capture-output -n fig python \
+  _CheckNotes/Stage7_smart_cq/screen_200/analyze_stage7_screen.py \
+  --project-root . \
+  --reference-root /home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion
+
+conda run --no-capture-output -n fig python \
+  figures/scripts/plot_stage7_epoch200_pareto.py
+```
+
+The editable SVG, PDF, PNG, and TIFF outputs are under
+`figures/generated/stage7_epoch200_pareto/`.

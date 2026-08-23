@@ -24,9 +24,10 @@ Both screens retain 128 latents, four latent blocks, K=32, KeOps, learnable sigm
 ## Evidence map
 
 - `implementation/CORRECTNESS.md`: implementation invariants and test evidence.
-- `configs/`: validated 200-epoch S7-A/S7-B configs.
+- `configs/`: validated 200-epoch screens and the selected S7-B continuation config.
 - `benchmarks/`: pre-training cost/scaling and persistent-inference output.
-- `screen_200/`: formal 200-epoch run artifacts.
-- `comparison/`: fixed-manifest, reconstruction, and Pareto comparison.
+- `screen_200/RESULTS.md`: controlled epoch-200 decision and caveats.
+- `screen_200/evaluation/`: fixed-manifest, deterministic reconstruction, and consolidated comparison artifacts.
+- `figures/generated/stage7_epoch200_pareto/`: editable comparison figure exports.
 
-The pre-training efficiency gates passed on GPU 1 and both formal 200-epoch screens were launched concurrently on 2026-08-22.
+Both formal screens completed. S7-B / Stage7-All256 was the clear epoch-200 winner and is the only candidate continued to epoch 1000.

@@ -1,6 +1,6 @@
 # Stage 7 Results
 
-Status: correctness and efficiency gates passed; S7-A and S7-B 200-epoch screens launched concurrently on physical GPU 1.
+Status: correctness and efficiency gates passed; both 200-epoch screens completed; S7-B selected and resumed toward epoch 1000 on physical GPU 1.
 
 ## Correctness
 
@@ -47,10 +47,36 @@ Logs:
 - `screen_200/logs/S7_A_20260822_224755.log`
 - `screen_200/logs/S7_B_20260822_224755.log`
 
-Both runs passed model/data initialization and multiple optimizer steps without OOM. Concurrent GPU usage stabilized near 46.0 GiB on the 48.5-GiB device.
+Both runs completed 200 epochs without OOM. Concurrent GPU usage stabilized near 46.0 GiB on the 48.5-GiB device.
 
-## Pending decision
+## Epoch-200 quality decision
 
-At epoch 200, compare F0, clean CQ-LR-128, existing CQ-LR-256, S7-A, and S7-B with the fixed manifest, matched reconstruction evaluation, worst field, training cost, memory, and persistent 1M/NFE4 inference. Continue at most the best Stage-7 candidate to epoch 1000 unless the two are essentially tied.
+The controlled fixed-manifest evaluation uses 192 paired rows per checkpoint
+(64 validation layouts x three repeats, RF seed 1729). Full evidence and the
+deterministic reconstruction table are in `screen_200/RESULTS.md`.
 
-No scientific quality/default recommendation is made before the matched epoch-200 evidence exists.
+| Candidate | Epoch-200 RF loss | paired improvement vs F0 | NFE1 mean | NFE4 mean |
+|---|---:|---:|---:|---:|
+| F0-128 | 0.50517 | 0.0% | 0.2915 | 0.3271 |
+| CQ-LR-128 | 0.51974 | -2.9% | 0.3136 | 0.3622 |
+| CQ-LR-256 | 0.44633 | +11.6% | 0.2925 | **0.3248** |
+| S7-A / Cond128 | 0.49926 | +1.2% | 0.3053 | 0.3485 |
+| **S7-B / All256** | **0.40710** | **+19.4%** | **0.2866** | 0.3311 |
+
+S7-B is 18.5% better than S7-A, 8.8% better than CQ-LR-256, and
+19.4% better than F0 in controlled epoch-200 RF loss. It also has the best
+NFE1 reconstruction mean and remains within 1.2% of F0 in NFE4 mean error.
+Its formal cost remains 1.37x faster training, 26.0% lower allocated memory,
+and 1.53x faster persistent 1M/NFE4 inference than F0.
+
+Decision: **continue S7-B only**. S7-A and S7-B are not essentially tied.
+
+## Epoch-1000 continuation
+
+`configs/S7_B_All256_1000ep_resume.yaml` resumed the same timestamped S7-B
+run from epoch 200 on physical GPU 1 on 2026-08-23. The scheduler and EMA
+states resumed in place; pre-resume artifacts are preserved under
+`screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/bk/`.
+
+The final epoch-1000 default-CQ recommendation and the separate MHA-mask vs
+SDPA/fused-AdamW kernel study remain pending completion of this one run.
