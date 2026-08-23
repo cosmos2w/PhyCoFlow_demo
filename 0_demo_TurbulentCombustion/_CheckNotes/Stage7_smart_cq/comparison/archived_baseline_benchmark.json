@@ -1,0 +1,110 @@
+{
+  "protocol": {
+    "device": "cuda:1",
+    "gpu": "NVIDIA RTX 6000 Ada Generation",
+    "batch_size": 128,
+    "query_points": 4096,
+    "condition": "Cond_T",
+    "sensors": 256,
+    "warmup": 1,
+    "repeats": 3,
+    "checkpoint": "last.pt",
+    "inference_grid_points": 40300,
+    "training_timing_scope": "native compute step with one pre-collated batch; includes H2D, condition construction, forward, backward, clipping, optimizer",
+    "inference_timing_scope": "full-grid reconstruction after model load; includes sparse-condition construction and decode, excludes checkpoint/dataset load and CPU result copy",
+    "dataset_caveat": "archived CH4/CO/T/U1/p reference; Stage 7 uses CO/T/U0/U1/p"
+  },
+  "models": {
+    "Senseiver": {
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Senseiver/Cond_T/last.pt",
+      "parameters": {
+        "executable_total": 8339621,
+        "trainable": 8339621
+      },
+      "checkpoint_epoch": 5000,
+      "quality_reference": {
+        "CH4": 0.12090284357144639,
+        "CO": 0.19694622698862205,
+        "T": 0.07493642305048749,
+        "U1": 0.24409382745096697,
+        "p": 0.010016120474045364,
+        "Unobserved_mean": 0.1429897546212702,
+        "common_unobserved_CO_U1_p_mean": 0.1503520583045448,
+        "snapshots": 1000
+      },
+      "inference": {
+        "nfe1": {
+          "median_ms": 16.233365051448345,
+          "samples_ms": [
+            17.153889872133732,
+            16.233365051448345,
+            15.841967426240444
+          ],
+          "peak_allocated_mib": 601.06884765625
+        }
+      },
+      "training": {
+        "median_step_ms": 213.05526327341795,
+        "samples_ms": [
+          215.40337055921555,
+          213.05526327341795,
+          212.7806432545185
+        ],
+        "peak_allocated_mib": 15327.6474609375,
+        "train_snapshots": 9000,
+        "steps_per_epoch": 71,
+        "projected_compute_epoch_s": 15.126923692412674
+      }
+    },
+    "Latent FM": {
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Cond_T/last.pt",
+      "parameters": {
+        "executable_total": 88539525,
+        "trainable": 81014016
+      },
+      "checkpoint_epoch": 5000,
+      "quality_reference": {
+        "CH4": 0.29086677691511514,
+        "CO": 0.5557957152564734,
+        "T": 0.2601954174179416,
+        "U1": 0.9194581480533277,
+        "p": 0.04629478881590247,
+        "Unobserved_mean": 0.45310385726020475,
+        "common_unobserved_CO_U1_p_mean": 0.5071828840419011,
+        "snapshots": 1000
+      },
+      "inference": {
+        "nfe2": {
+          "median_ms": 24.091210216283798,
+          "samples_ms": [
+            24.091210216283798,
+            25.21064691245556,
+            23.645893670618534
+          ],
+          "peak_allocated_mib": 1638.974609375
+        },
+        "nfe4": {
+          "median_ms": 31.009813770651817,
+          "samples_ms": [
+            31.37215692549944,
+            31.009813770651817,
+            30.419223941862583
+          ],
+          "peak_allocated_mib": 1638.974609375
+        }
+      },
+      "training": {
+        "median_step_ms": 356.8024095147848,
+        "samples_ms": [
+          356.8024095147848,
+          373.276031576097,
+          350.39505269378424
+        ],
+        "peak_allocated_mib": 9330.076171875,
+        "train_snapshots": 9000,
+        "steps_per_epoch": 71,
+        "projected_compute_epoch_s": 25.33297107554972
+      }
+    }
+  }
+}

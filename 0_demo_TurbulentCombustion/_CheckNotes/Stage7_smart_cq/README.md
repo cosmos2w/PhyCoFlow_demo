@@ -26,6 +26,7 @@ Both screens retain 128 latents, four latent blocks, K=32, KeOps, learnable sigm
 - `implementation/CORRECTNESS.md`: implementation invariants and test evidence.
 - `configs/`: validated 200-epoch screens and the selected S7-B continuation config.
 - `evaluation_1000/RESULTS.md`: final controlled quality, reconstruction, Pareto, and default recommendation.
+- `comparison/RESULTS.md`: compact Senseiver/latent-FM parameter, cost, NFE, memory, and reconstruction reference comparison.
 - `benchmarks/`: pre-training cost/scaling and persistent-inference output.
 - `benchmarks/attention_kernel_comparison.json`: separate MHA/SDPA/fused-AdamW parity and timing evidence.
 - `screen_200/RESULTS.md`: controlled epoch-200 decision and caveats.

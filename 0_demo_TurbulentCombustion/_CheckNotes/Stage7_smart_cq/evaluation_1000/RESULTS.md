@@ -94,6 +94,29 @@ CQ-LR-128 remains the throughput-first choice when latency matters more than
 quality. F0 is no longer Pareto-optimal under this protocol: Stage7-All256 is
 both higher quality and cheaper. Stage7-All256 is the balanced/default choice.
 
+## Senseiver and latent-FM references
+
+The required compact post-selection comparison is in
+`../comparison/RESULTS.md`, with reproducible JSON/CSV and benchmark scripts.
+At matched B128/Q4096 and 256 T sensors on the same RTX 6000 Ada:
+
+| Model | parameters | step | peak MiB | 40.3k inference | NFE |
+|---|---:|---:|---:|---:|---:|
+| Senseiver | 8.340M | **213.06 ms** | 15,328 | **16.23 ms** | 1 |
+| Latent FM | 88.540M executable | 356.80 ms | **9,330** | 31.01 ms | 4 |
+| **Stage7-All256** | **5.491M** | 397.06 ms | 20,239 | 33.11 ms | 4 |
+
+Senseiver is deterministic supervised one-pass reconstruction; Stage 7 is
+full-function-space generative RF; latent FM evolves a compressed learned
+latent field. Their costs therefore describe different inference semantics,
+not implementation parity failures.
+
+The archived baselines use CH4/CO/T/U1/p and have a 1,000-snapshot Cond-T
+evaluation, whereas Stage 7 uses CO/T/U0/U1/p and its matched reconstruction is
+a fixed-snapshot diagnostic. The comparison reports both evidence sets but does
+not claim a strict cross-dataset quality ranking. This structural reference
+does not change the default recommendation.
+
 ## Separate kernel study
 
 Artifact: `../benchmarks/attention_kernel_comparison.json`. Same selected
@@ -123,5 +146,6 @@ confirmed.
 - `paired_statistics.csv`: paired RF differences and 95% CIs.
 - `convergence.csv`: controlled milestone curves.
 - `matched_reconstruction/summary.json`: deterministic field-level results.
+- `../comparison/`: Senseiver/latent-FM reference cost and reconstruction evidence.
 - `../../../figures/generated/stage7_final_pareto/`: SVG, PDF, PNG, TIFF,
   and figure contract.
