@@ -98,6 +98,18 @@ def build_pointcloud_model(
         "sensor_coord_encoding": str(sensor_coord_encoding),
         "latent_sensor_reinject": latent_sensor_reinject,
         "latent_reinject_every": int(_get(resolved, "latent_reinject_every", 1)),
+        "condition_attention_execution": str(
+            _get(resolved, "condition_attention_execution", "legacy_mha")
+        ),
+        "sensor_attention_padding_mode": str(
+            _get(resolved, "sensor_attention_padding_mode", "full")
+        ),
+        "sensor_attention_buckets": tuple(
+            int(value)
+            for value in _get(
+                resolved, "sensor_attention_buckets", [256, 320, 384]
+            )
+        ),
         "glres_scale_init": glres_scale_init,
     }
     if is_cq:

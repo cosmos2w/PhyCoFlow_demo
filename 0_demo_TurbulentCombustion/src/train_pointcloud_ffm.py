@@ -248,6 +248,25 @@ def parse_args():
                    help="If enabled, latents periodically re-attend to sparse sensor tokens.")
     p.add_argument("--latent-reinject-every", type=int, default=1,
                    help="Re-inject sensor information every N latent blocks when latent_sensor_reinject is enabled.")
+    p.add_argument(
+        "--condition-attention-execution",
+        choices=["legacy_mha", "cached_kv"],
+        default="legacy_mha",
+        help="Execution-only sensor-to-latent attention path.",
+    )
+    p.add_argument(
+        "--sensor-attention-padding-mode",
+        choices=["full", "static_buckets"],
+        default="full",
+        help="Use full padded sensor tensors or fixed sensor-length buckets.",
+    )
+    p.add_argument(
+        "--sensor-attention-buckets",
+        type=int,
+        nargs="+",
+        default=[256, 320, 384],
+        help="Static sensor lengths used when sensor_attention_padding_mode=static_buckets.",
+    )
     p.add_argument("--query-latent-readout", default=None,
                    action=argparse.BooleanOptionalAction,
                    help="If enabled, each query reads global context from latent memory before the final head.")
@@ -1678,6 +1697,9 @@ SOURCE_BASE_CONFIG_KEYS = (
     "sensor_coord_encoding",
     "latent_sensor_reinject",
     "latent_reinject_every",
+    "condition_attention_execution",
+    "sensor_attention_padding_mode",
+    "sensor_attention_buckets",
     "query_latent_readout",
     "query_readout_type",
     "query_readout_scale_init",
@@ -1789,6 +1811,9 @@ def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str
         "learnable_rbf_sigma",
         "sensor_coord_encoding",
         "latent_sensor_reinject",
+        "condition_attention_execution",
+        "sensor_attention_padding_mode",
+        "sensor_attention_buckets",
         "query_latent_readout",
         "query_readout_type",
         "query_readout_scale_init",
@@ -2102,6 +2127,8 @@ def main():
             f"glres_scale_init={glres_scale_init}, "
             f"time_conditioning={args.cq_time_conditioning}, "
             f"measurement_support={args.cq_measurement_support_mode}, "
+            f"condition_attention={args.condition_attention_execution}, "
+            f"sensor_padding={args.sensor_attention_padding_mode}, "
             f"ema={args.model_ema_enabled}, "
             f"ema_decay={args.model_ema_decay}"
         )

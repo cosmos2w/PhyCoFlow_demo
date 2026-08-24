@@ -140,6 +140,12 @@ def test_balanced_public_scientific_flags_match_the_rc1_run_config():
         "dataset_stats_path",
         "save_dir",
         "RELOAD",
+        # Operational evaluation/checkpoint cadence is intentionally user-editable
+        # and does not change the frozen model or RF training mathematics.
+        "benchmark_n_steps",
+        "eval_every",
+        "save_every",
+        "checkpoint_epochs",
     }
     for key, expected in rc1.items():
         if key not in ignored:

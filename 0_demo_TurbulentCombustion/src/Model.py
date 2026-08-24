@@ -309,6 +309,81 @@ class CrossAttentionBlock(nn.Module):
         )
         self.norm_ff = nn.LayerNorm(dim)
         self.ff = FeedForward(dim=dim, ff_mult=ff_mult, dropout=mlp_dropout)
+        # Runtime-only instrumentation. These counters are deliberately not
+        # buffers so Stage-8 execution choices add no state-dict entries.
+        self.kv_projection_calls = 0
+
+    def reset_execution_counters(self) -> None:
+        self.kv_projection_calls = 0
+
+    def prepare_kv(
+        self,
+        kv: torch.Tensor,
+        kv_padding_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        """Normalize/project condition-static K/V once without detaching it."""
+        kv_in = self.norm_kv(kv)
+        dim = self.attn.embed_dim
+        kv_proj = F.linear(
+            kv_in,
+            self.attn.in_proj_weight[dim:],
+            None if self.attn.in_proj_bias is None else self.attn.in_proj_bias[dim:],
+        )
+        key, value = kv_proj.chunk(2, dim=-1)
+        batch_size, source_length, _ = key.shape
+        head_dim = dim // self.attn.num_heads
+        key = key.view(batch_size, source_length, self.attn.num_heads, head_dim)
+        value = value.view(batch_size, source_length, self.attn.num_heads, head_dim)
+        attn_mask = None
+        if kv_padding_mask is not None:
+            attn_mask = torch.zeros(
+                (batch_size, 1, 1, source_length),
+                dtype=key.dtype,
+                device=key.device,
+            ).masked_fill(kv_padding_mask[:, None, None, :].bool(), float("-inf"))
+            # Match MultiheadAttention's canonicalized key-padding-mask layout
+            # so SDPA sees the same explicit per-head strides as the oracle.
+            attn_mask = attn_mask.expand(
+                batch_size, self.attn.num_heads, 1, source_length,
+            ).contiguous()
+        self.kv_projection_calls += 1
+        return {
+            "key": key.transpose(1, 2),
+            "value": value.transpose(1, 2),
+            "attn_mask": attn_mask,
+        }
+
+    def forward_prepared(
+        self,
+        q: torch.Tensor,
+        prepared_kv: Mapping[str, Optional[torch.Tensor]],
+    ) -> torch.Tensor:
+        """Run the original residual/FFN block using preprojected sensor K/V."""
+        q_in = self.norm_q(q)
+        dim = self.attn.embed_dim
+        q_proj = F.linear(
+            q_in,
+            self.attn.in_proj_weight[:dim],
+            None if self.attn.in_proj_bias is None else self.attn.in_proj_bias[:dim],
+        )
+        batch_size, target_length, _ = q_proj.shape
+        head_dim = dim // self.attn.num_heads
+        q_proj = q_proj.view(
+            batch_size, target_length, self.attn.num_heads, head_dim,
+        ).transpose(1, 2)
+        attn_out = F.scaled_dot_product_attention(
+            q_proj,
+            prepared_kv["key"],
+            prepared_kv["value"],
+            attn_mask=prepared_kv["attn_mask"],
+            dropout_p=self.attn.dropout if self.training else 0.0,
+        )
+        attn_out = attn_out.transpose(1, 2).contiguous().view(
+            batch_size, target_length, dim,
+        )
+        attn_out = self.attn.out_proj(attn_out)
+        x = q + attn_out
+        return x + self.ff(self.norm_ff(x))
 
     def forward(
         self,
@@ -319,6 +394,7 @@ class CrossAttentionBlock(nn.Module):
         # Normalize queries and keys/values independently.
         q_in = self.norm_q(q)
         kv_in = self.norm_kv(kv)
+        self.kv_projection_calls += 1
 
         # key_padding_mask: True means "ignore this token".
         attn_out, _ = self.attn(
@@ -788,6 +864,9 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         sensor_coord_encoding: str = "raw",
         latent_sensor_reinject: bool = False,
         latent_reinject_every: int = 1,
+        condition_attention_execution: str = "legacy_mha",
+        sensor_attention_padding_mode: str = "full",
+        sensor_attention_buckets: Sequence[int] = (256, 320, 384),
         query_latent_readout: bool = False,
         query_readout_type: str = "point",
         query_readout_scale_init: float = 0.0,
@@ -808,6 +887,17 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             )
         if latent_reinject_every < 1:
             raise ValueError(f"latent_reinject_every must be >= 1, got {latent_reinject_every}")
+        if condition_attention_execution not in ("legacy_mha", "cached_kv"):
+            raise ValueError(
+                "condition_attention_execution must be 'legacy_mha' or 'cached_kv'."
+            )
+        if sensor_attention_padding_mode not in ("full", "static_buckets"):
+            raise ValueError(
+                "sensor_attention_padding_mode must be 'full' or 'static_buckets'."
+            )
+        normalized_buckets = tuple(sorted({int(value) for value in sensor_attention_buckets}))
+        if not normalized_buckets or normalized_buckets[0] < 1:
+            raise ValueError("sensor_attention_buckets must contain positive lengths.")
 
         self.n_fields = n_fields
         self.coord_dim = coord_dim
@@ -824,6 +914,9 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         self.sensor_coord_encoding = sensor_coord_encoding
         self.latent_sensor_reinject = bool(latent_sensor_reinject)
         self.latent_reinject_every = int(latent_reinject_every)
+        self.condition_attention_execution = str(condition_attention_execution)
+        self.sensor_attention_padding_mode = str(sensor_attention_padding_mode)
+        self.sensor_attention_buckets = normalized_buckets
         self.query_latent_readout_enabled = bool(query_latent_readout)
         self.query_readout_type = query_readout_type
         self.enhanced_head_norm = bool(enhanced_head_norm)
@@ -1082,12 +1175,50 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # key_padding_mask: True means "ignore this token"
         sensor_padding_mask = ~obs_mask.bool()
 
+        bucket_groups = self._sensor_attention_bucket_groups(obs_mask)
+        if bucket_groups is not None:
+            prepared_groups = []
+            for batch_indices, bucket_length in bucket_groups:
+                tokens = sensor_tokens.index_select(0, batch_indices)[:, :bucket_length]
+                padding = sensor_padding_mask.index_select(0, batch_indices)[:, :bucket_length]
+                prepared = (
+                    self.input_cross_attn.prepare_kv(tokens, padding)
+                    if self.condition_attention_execution == "cached_kv"
+                    else None
+                )
+                prepared_groups.append((batch_indices, tokens, padding, prepared))
+
+            def attend(current_latents: torch.Tensor) -> torch.Tensor:
+                output = torch.zeros_like(current_latents)
+                for batch_indices, tokens, padding, prepared in prepared_groups:
+                    group_latents = current_latents.index_select(0, batch_indices)
+                    if prepared is None:
+                        group_output = self.input_cross_attn(
+                            q=group_latents, kv=tokens, kv_padding_mask=padding,
+                        )
+                    else:
+                        group_output = self.input_cross_attn.forward_prepared(
+                            group_latents, prepared,
+                        )
+                    output = output.index_copy(0, batch_indices, group_output)
+                return output
+        elif self.condition_attention_execution == "cached_kv":
+            prepared = self.input_cross_attn.prepare_kv(
+                sensor_tokens, sensor_padding_mask,
+            )
+
+            def attend(current_latents: torch.Tensor) -> torch.Tensor:
+                return self.input_cross_attn.forward_prepared(current_latents, prepared)
+        else:
+            def attend(current_latents: torch.Tensor) -> torch.Tensor:
+                return self.input_cross_attn(
+                    q=current_latents,
+                    kv=sensor_tokens,
+                    kv_padding_mask=sensor_padding_mask,
+                )
+
         # Latents attend to sparse sensor tokens
-        latents = self.input_cross_attn(
-            q=latents,
-            kv=sensor_tokens,
-            kv_padding_mask=sensor_padding_mask,
-        )
+        latents = attend(latents)
 
         # Process in latent space, optionally re-reading sparse sensors between blocks.
         for i, block in enumerate(self.latent_blocks):
@@ -1098,14 +1229,61 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
             ):
                 # Senseiver-style re-injection: latents re-read the sparse measurements.
                 # Cost scales with L*M, not N*M, so this preserves query-side efficiency.
-                latents = self.input_cross_attn(
-                    q=latents,
-                    kv=sensor_tokens,
-                    kv_padding_mask=sensor_padding_mask,
-                )
+                latents = attend(latents)
             latents = block(latents)
 
         return latents
+
+    def _sensor_attention_bucket_groups(
+        self,
+        obs_mask: torch.Tensor,
+    ) -> Optional[list[tuple[torch.Tensor, int]]]:
+        """Return stable batch groups, or None for the exact full-padding path."""
+        if self.sensor_attention_padding_mode != "static_buckets":
+            return None
+        valid = obs_mask.bool()
+        counts = valid.sum(dim=1)
+        positions = torch.arange(valid.shape[1], device=valid.device).unsqueeze(0)
+        if not torch.equal(valid, positions < counts.unsqueeze(1)):
+            return None
+        assigned = []
+        max_length = int(valid.shape[1])
+        for count in counts.tolist():
+            bucket = next(
+                (size for size in self.sensor_attention_buckets if size >= int(count)),
+                max_length,
+            )
+            assigned.append(min(bucket, max_length))
+        bucket_tensor = torch.tensor(assigned, device=valid.device)
+        return [
+            (torch.nonzero(bucket_tensor == bucket, as_tuple=False).flatten(), int(bucket))
+            for bucket in sorted(set(assigned))
+        ]
+
+    def _refine_sensor_tokens(
+        self,
+        sensor_tokens: torch.Tensor,
+        latents: torch.Tensor,
+        obs_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run sensor-back-attention without evaluating known padded tail slots."""
+        bucket_groups = self._sensor_attention_bucket_groups(obs_mask)
+        if bucket_groups is None:
+            return self.sensor_back_attn(
+                q=sensor_tokens, kv=latents, kv_padding_mask=None,
+            )
+        refined = torch.zeros_like(sensor_tokens)
+        max_length = sensor_tokens.shape[1]
+        for batch_indices, bucket_length in bucket_groups:
+            group_refined = self.sensor_back_attn(
+                q=sensor_tokens.index_select(0, batch_indices)[:, :bucket_length],
+                kv=latents.index_select(0, batch_indices),
+                kv_padding_mask=None,
+            )
+            if bucket_length < max_length:
+                group_refined = F.pad(group_refined, (0, 0, 0, max_length - bucket_length))
+            refined = refined.index_copy(0, batch_indices, group_refined)
+        return refined
 
     def _extract_global_summary(self, latents: torch.Tensor) -> torch.Tensor:
         """
@@ -1536,7 +1714,7 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         )
         latents = self._encode_latents(sensor_tokens, obs_mask)
         global_feat = self._extract_global_summary(latents)
-        refined = self.sensor_back_attn(q=sensor_tokens, kv=latents, kv_padding_mask=None)
+        refined = self._refine_sensor_tokens(sensor_tokens, latents, obs_mask)
         refined = refined * obs_mask.unsqueeze(-1)
         refined = self.sensor_out_proj(refined) * obs_mask.unsqueeze(-1)
         if self.gather_mode == "topk_rbf_ptlocal":
@@ -1828,10 +2006,8 @@ class ConditionalPointHybridLocalGlobalRBF(nn.Module):
         # Double-dip refinement:
         # sensor tokens query back into the latent memory
         # -------------------------
-        refined_sensor_tokens = self.sensor_back_attn(
-            q=sensor_tokens,
-            kv=latents,
-            kv_padding_mask=None,
+        refined_sensor_tokens = self._refine_sensor_tokens(
+            sensor_tokens, latents, obs_mask,
         )  # [B, M, D]
 
         # Zero out padded sensor rows again after attention
@@ -1921,6 +2097,9 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
         sensor_coord_encoding: str = "fourier",
         latent_sensor_reinject: bool = True,
         latent_reinject_every: int = 1,
+        condition_attention_execution: str = "legacy_mha",
+        sensor_attention_padding_mode: str = "full",
+        sensor_attention_buckets: Sequence[int] = (256, 320, 384),
         glres_scale_init: float = 1.0e-2,
         cq_query_dim: int = 128,
         cq_readout_mode: str = "lowrank",
@@ -2002,6 +2181,9 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             sensor_coord_encoding=sensor_coord_encoding,
             latent_sensor_reinject=latent_sensor_reinject,
             latent_reinject_every=latent_reinject_every,
+            condition_attention_execution=condition_attention_execution,
+            sensor_attention_padding_mode=sensor_attention_padding_mode,
+            sensor_attention_buckets=sensor_attention_buckets,
             query_latent_readout=True,
             query_readout_type="coord",
             query_readout_scale_init=cq_readout_scale_init,
@@ -2588,6 +2770,9 @@ class ConditionalPointHybridLocalGlobalRBFCQ(ConditionalPointHybridLocalGlobalRB
             "measurement_support_mode": self.cq_measurement_support_mode,
             "measurement_support_normalize": self.cq_measurement_support_normalize,
             "measurement_support_width": raw_feature_dim,
+            "condition_attention_execution": self.condition_attention_execution,
+            "sensor_attention_padding_mode": self.sensor_attention_padding_mode,
+            "sensor_attention_buckets": list(self.sensor_attention_buckets),
             "readout_rank": (self.cq_readout_rank if self.cq_readout_mode == "lowrank" else None),
             "readout_heads": self.cq_readout_heads,
             "point_state_width": self.cq_query_dim,
