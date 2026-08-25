@@ -227,10 +227,10 @@ The intended user flow is:
 
 ```bash
 python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml
-python scripts/reconstruct_pointcloud.py \
+python src/reconstruct_pointcloud.py \
   --config configs/gl_rbf_cq.yaml \
   --checkpoint /path/to/checkpoint.pt
-python scripts/evaluate_fixed_manifest.py \
+python src/evaluate_fixed_manifest.py \
   --config configs/gl_rbf_cq.yaml \
   --checkpoint /path/to/checkpoint.pt
 ```

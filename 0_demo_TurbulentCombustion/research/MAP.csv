@@ -6,7 +6,7 @@ _CheckNotes/Stage7_smart_cq/RESULTS.md,canonical_scientific_result,research inde
 _CheckNotes/Stage7_smart_cq/evaluation_1000/RESULTS.md,canonical_scientific_result,research index,retained,no
 research/benchmarks/benchmark_pointcloud_data_path.py,research_benchmark,research index,archived,no
 research/benchmarks/benchmark_pointcloud_scaling.py,research_benchmark,research index,archived,no
-research/benchmarks/benchmark_pointcloud_reconstruction.py,research_benchmark,scripts/reconstruct_pointcloud.py,archived,no
+research/benchmarks/benchmark_pointcloud_reconstruction.py,research_benchmark,src/reconstruct_pointcloud.py,archived,no
 research/benchmarks/benchmark_pointcloud_query_microbatch.py,research_benchmark,research index,archived,no
 research/benchmarks/benchmark_pointcloud_cq.py,research_benchmark,scripts/benchmark_cleanup_sanity.py,archived,no
 research/benchmarks/benchmark_cq_persistent_topk_cache.py,research_benchmark,research index,archived,no

@@ -5,6 +5,8 @@ Branch: `perf/stage8-attention-optimization`
 Canonical training entry point: `src/train_pointcloud_ffm.py`. It now owns the
 public config validation, `--set`, path overrides, and `--dry-run` behavior;
 there is no separate collaborator-facing training wrapper under `scripts/`.
+The matching reconstruction and fixed-manifest launchers are also exposed in
+`src/`; `scripts/` is reserved for release and research maintenance.
 
 Frozen numerical/checkpoint oracle: `gl-rbf-cq-v0.9.0-rc1` and the portable
 release checkpoint with SHA256

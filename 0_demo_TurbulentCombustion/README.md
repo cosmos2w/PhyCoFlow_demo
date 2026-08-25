@@ -14,11 +14,11 @@ environment:
 ```bash
 python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml
 
-python scripts/reconstruct_pointcloud.py \
+python src/reconstruct_pointcloud.py \
   --config configs/gl_rbf_cq.yaml \
   --checkpoint ReleaseArtifacts/GL_rbf_CQ_rc1/GL_rbf_CQ_v0.9.0-rc1_e1000_ema_resolved_portable.pt
 
-python scripts/evaluate_fixed_manifest.py \
+python src/evaluate_fixed_manifest.py \
   --config configs/gl_rbf_cq.yaml \
   --checkpoint ReleaseArtifacts/GL_rbf_CQ_rc1/GL_rbf_CQ_v0.9.0-rc1_e1000_ema_resolved_portable.pt
 ```

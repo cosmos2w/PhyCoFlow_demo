@@ -27,9 +27,9 @@
 #       --set epochs=200 --set scheduler_t_max=1000 --demo-num 9801 --device-ids 0
 #
 #   Reconstruct or evaluate an existing CQ-LR checkpoint:
-#     python scripts/reconstruct_pointcloud.py --config configs/gl_rbf_cq_fast.yaml \
+#     python src/reconstruct_pointcloud.py --config configs/gl_rbf_cq_fast.yaml \
 #       --checkpoint /path/to/cq_lr_checkpoint.pt --device cuda:0
-#     python scripts/evaluate_fixed_manifest.py --config configs/gl_rbf_cq_fast.yaml \
+#     python src/evaluate_fixed_manifest.py --config configs/gl_rbf_cq_fast.yaml \
 #       --checkpoint /path/to/cq_lr_checkpoint.pt --device cuda:0
 # =============================================================================
 

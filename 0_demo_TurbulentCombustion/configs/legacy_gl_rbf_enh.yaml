@@ -25,7 +25,7 @@
 #       --set epochs=200 --set scheduler_t_max=1000 --demo-num 9802 --device-ids 0
 #
 #   Evaluate an old GL_rbf_ENH checkpoint:
-#     python scripts/evaluate_fixed_manifest.py \
+#     python src/evaluate_fixed_manifest.py \
 #       --config configs/legacy_gl_rbf_enh.yaml \
 #       --checkpoint /path/to/f0_checkpoint.pt --device cuda:0
 # =============================================================================

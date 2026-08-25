@@ -15,6 +15,8 @@ the normal collaborator-facing source surface.
 Compatibility entry points retained:
 
 - `src/train_pointcloud_ffm.py`
+- `src/reconstruct_pointcloud.py`
+- `src/evaluate_fixed_manifest.py`
 - `src/evaluate_pointcloud_fixed_manifest.py`
 - `research/benchmarks/benchmark_pointcloud_reconstruction.py`
 - `Model.ConditionalPointHybridLocalGlobalRBFCQ`

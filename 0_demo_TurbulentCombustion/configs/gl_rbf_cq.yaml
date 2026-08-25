@@ -27,9 +27,9 @@
 #       --demo-num 9800 --device-ids 0
 #
 #   Reconstruct and run the fixed-manifest protocol:
-#     python scripts/reconstruct_pointcloud.py --config configs/gl_rbf_cq.yaml \
+#     python src/reconstruct_pointcloud.py --config configs/gl_rbf_cq.yaml \
 #       --checkpoint /path/to/checkpoint.pt --device cuda:0
-#     python scripts/evaluate_fixed_manifest.py --config configs/gl_rbf_cq.yaml \
+#     python src/evaluate_fixed_manifest.py --config configs/gl_rbf_cq.yaml \
 #       --checkpoint /path/to/checkpoint.pt --device cuda:0
 # =============================================================================
 
