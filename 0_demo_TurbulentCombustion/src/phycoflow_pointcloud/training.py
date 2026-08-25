@@ -73,6 +73,12 @@ def main(argv: list[str] | None = None) -> None:
                     "model_name": config["model_name"],
                     "backbone": config["backbone"],
                     "coord_dim": config["coord_dim"],
+                    "condition_attention_execution": config.get(
+                        "condition_attention_execution", "legacy_mha"
+                    ),
+                    "sensor_attention_padding_mode": config.get(
+                        "sensor_attention_padding_mode", "full"
+                    ),
                     "state_key_count": len(model.state_dict()),
                     "model_schema_sha256": _model_schema_digest(model),
                     "data": config.get("data"),

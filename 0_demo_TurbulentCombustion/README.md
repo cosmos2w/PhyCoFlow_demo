@@ -2,9 +2,11 @@
 
 ## Recommended PointCloudFFM interface
 
-`GL_rbf_CQ` is the public name of the validated balanced Stage-7 model. The
-historical internal name `GL_rbf_ENH_CQ` remains accepted so existing YAML files,
-imports, and checkpoints load without key translation.
+`GL_rbf_CQ` is the public name of the validated balanced model. Stage 7 freezes
+its scientific architecture and release weights; Stage 8 makes cached K/V with
+full sensor padding its preferred execution. The historical internal name
+`GL_rbf_ENH_CQ` remains accepted so existing YAML files, imports, configs, and
+checkpoints load without key translation.
 
 Run these commands from `0_demo_TurbulentCombustion/` in the `phycoflow_env`
 environment:
@@ -28,11 +30,11 @@ starting training.
 
 ### Public profiles
 
-| Profile | Purpose | Key scientific settings |
+| Profile | Purpose | Key settings |
 |---|---|---|
-| `configs/gl_rbf_cq.yaml` | recommended balanced model | latent 256; CQ 128/low-rank-64/additive; EMA; sinusoidal FiLM; measurement/support |
-| `configs/gl_rbf_cq_fast.yaml` | lowest CQ training/inference cost | latent 128; CQ 128/low-rank-64/additive; historical scalar time; no EMA shortcut features |
-| `configs/legacy_gl_rbf_enh.yaml` | F0 reproduction/checkpoint loading | latent 128; full enhanced GL-RBF query path |
+| `configs/gl_rbf_cq.yaml` | recommended balanced model | latent 256; CQ 128/low-rank-64/additive; EMA; sinusoidal FiLM; measurement/support; cached K/V + full padding |
+| `configs/gl_rbf_cq_fast.yaml` | lowest CQ training/inference cost | latent 128; CQ 128/low-rank-64/additive; historical scalar time; no EMA shortcut features; cached K/V + full padding |
+| `configs/legacy_gl_rbf_enh.yaml` | F0 reproduction/checkpoint loading | latent 128; full enhanced GL-RBF query path; historical execution |
 
 All three preserve K=32 Top-K RBF/GLRES semantics and default to the validated
 optimized data path. The binary release checkpoint is intentionally ignored by
@@ -42,6 +44,17 @@ then verify it with:
 ```bash
 python scripts/verify_release_artifacts.py
 ```
+
+New CQ runs use:
+
+```yaml
+condition_attention_execution: cached_kv
+sensor_attention_padding_mode: full
+```
+
+Set `condition_attention_execution: legacy_mha` only for historical
+reproduction, numerical debugging, or compatibility diagnosis. It remains fully
+supported. Static bucketing and dynamic trimming are not release defaults.
 
 The stable Python boundary is `src/phycoflow_pointcloud/`. The older
 `src/train_pointcloud_ffm.py`, `src/evaluate_pointcloud_fixed_manifest.py`, and

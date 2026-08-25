@@ -140,13 +140,15 @@ sensor_coord_encoding: fourier # choices: [raw, fourier]
 latent_sensor_reinject: true
 latent_reinject_every: 1
 
-# Stage-8 execution-only attention controls. The legacy/full pair is the
-# checkpoint-compatible numerical oracle. For an optimized run, compare:
-#   cached_kv + full            (reuse sensor K/V across latent re-injection)
-#   cached_kv + static_buckets  (also skip known padded sensor-tail work)
-condition_attention_execution: legacy_mha  # [legacy_mha, cached_kv]
-sensor_attention_padding_mode: full        # [full, static_buckets]
-sensor_attention_buckets: [256, 320, 384]
+# Stage-8 preferred execution. This reuses sensor K/V across all four latent
+# re-injections without adding parameters or changing checkpoint keys.
+condition_attention_execution: cached_kv
+sensor_attention_padding_mode: full
+
+# Compatibility/debug override for historical MHA execution:
+#   condition_attention_execution: legacy_mha
+# Static bucketing and dynamic trimming are research diagnostics, not public
+# defaults. Keep full padding for the validated release execution.
 
 query_latent_readout: true
 query_readout_type: coord      # coord uses decoder coordinates; point uses x_t features.

@@ -1,0 +1,10 @@
+*
+!.gitignore
+!RESULTS.md
+!comparison.json
+!fixed_manifest.csv
+!fixed_manifest.json
+!rf_comparison.csv
+!reconstruction_comparison.csv
+!ema_comparison.csv
+!matched_reconstruction/

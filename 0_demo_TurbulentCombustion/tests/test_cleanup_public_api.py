@@ -152,6 +152,28 @@ def test_balanced_public_scientific_flags_match_the_rc1_run_config():
             assert public[key] == expected, key
 
 
+def test_public_cq_execution_defaults_and_historical_fallback():
+    for path in ("configs/gl_rbf_cq.yaml", "configs/gl_rbf_cq_fast.yaml"):
+        public = yaml.safe_load((ROOT / path).read_text())
+        assert public["condition_attention_execution"] == "cached_kv"
+        assert public["sensor_attention_padding_mode"] == "full"
+        assert "sensor_attention_buckets" not in public
+
+    historical = _small_cq_config()
+    cached = dict(historical)
+    cached.update(
+        condition_attention_execution="cached_kv",
+        sensor_attention_padding_mode="full",
+    )
+    historical_model = build_pointcloud_model(historical, n_fields=2, device="cpu")
+    cached_model = build_pointcloud_model(cached, n_fields=2, device="cpu")
+    assert historical_model.model.condition_attention_execution == "legacy_mha"
+    assert historical_model.model.sensor_attention_padding_mode == "full"
+    assert cached_model.model.condition_attention_execution == "cached_kv"
+    assert cached_model.model.sensor_attention_padding_mode == "full"
+    assert historical_model.state_dict().keys() == cached_model.state_dict().keys()
+
+
 def test_portable_checkpoint_is_strict_and_matches_the_rc1_resolved_state():
     manifest_path = ROOT / "artifacts/GL_rbf_CQ_v0.9.0-rc1_portable.json"
     if not manifest_path.exists():
@@ -196,6 +218,25 @@ def test_portable_checkpoint_is_strict_and_matches_the_rc1_resolved_state():
         _tensor_digest({"output": output})
         == "63e4e5189f54e659aa84f0fff0552080bee4b5e2dac15dc5e25f9f06761cb90a"
     )
+
+    cached_config = dict(payload["config"])
+    cached_config.update(
+        neighbor_backend="torch",
+        condition_attention_execution="cached_kv",
+        sensor_attention_padding_mode="full",
+    )
+    cached_model = build_pointcloud_model(cached_config, n_fields=5, device="cpu")
+    cached_model.load_state_dict(
+        checkpoint_model_state(payload, model=cached_model), strict=True
+    )
+    cached_model.eval()
+    torch.set_num_threads(1)
+    try:
+        with torch.no_grad():
+            cached_output = cached_model.model(**inputs)
+    finally:
+        torch.set_num_threads(previous_threads)
+    torch.testing.assert_close(cached_output, output, rtol=4e-5, atol=5e-6)
 
 
 def test_training_prior_override_preserves_seeded_factory_state():

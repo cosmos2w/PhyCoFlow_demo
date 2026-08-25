@@ -8,13 +8,16 @@ release checkpoint with SHA256
 
 ## Implementation
 
-Three YAML-controlled execution modes are available without adding parameters
-or state-dict keys:
+The public GL_rbf_CQ default is cached K/V with full padding. The historical MHA
+path remains supported, and unpromoted research modes remain available without
+adding parameters or state-dict keys:
 
 ```yaml
-condition_attention_execution: legacy_mha  # legacy_mha | cached_kv
-sensor_attention_padding_mode: full        # full | static_buckets
-sensor_attention_buckets: [256, 320, 384]
+condition_attention_execution: cached_kv
+sensor_attention_padding_mode: full
+
+# Compatibility/debug override:
+# condition_attention_execution: legacy_mha
 ```
 
 `cached_kv` normalizes and projects sensor K/V plus the padding mask once per
@@ -38,7 +41,7 @@ solver code was changed.
 - All modes strict-load the release checkpoint: 148 keys and schema SHA256
   `f221ee2b26268fe64e116f9f57165d34aac9ff524202e40d225ed17f76dc970e`.
 - Focused Stage-8 suite: 7 passed.
-- Complete regression suite: 161 passed.
+- Final RC2 complete regression suite: 162 passed.
 - Frozen-checkpoint FP32 maximum differences versus legacy/full:
   - cached/full output `3.34e-6`, context `4.29e-6`, gradients `5.07e-7`;
   - cached/bucketed output `5.25e-6`, context `4.29e-6`, gradients `4.77e-7`.
@@ -52,6 +55,11 @@ solver code was changed.
   post-build KNN calls.
 
 Machine-readable evidence: `correctness.json`.
+
+Final default-selection and RC1 checkpoint evidence is in
+`rc2_compatibility.json`. Public-default and historical-fallback focused tests
+pass together with the Stage-8 suite (`19 passed`); the complete RC2 suite is
+`162 passed`.
 
 ## B128/Q4096 benchmark
 
@@ -76,7 +84,7 @@ confirms that fully dynamic per-count execution is unsuitable at B128.
 Evidence: `benchmark.csv/json`, `bucket_comparison.csv/json`, and the best-mode
 Chrome trace in `profiler/B_cached_full.json`.
 
-## Smoke and recommendation
+## Smoke and pre-long-run decision
 
 The three-epoch paired real-data smoke was stable and produced virtually
 identical EMA validation loss. Cached/full was 3.48% faster per training epoch;
@@ -87,8 +95,37 @@ The Stage-8 promotion threshold requires at least 8% whole-step speedup. The
 best mode, cached/full, reaches 6.38% in the controlled benchmark and 3.48% in
 the real-data smoke, so it does **not** qualify for a later long validation run.
 
-Recommendation for the later 1–2 long runs: retain `legacy_mha + full` as the
-validated production execution. Keep `cached_kv + full` as the only promising
-optional Stage-8 mode for short profiling or if the promotion threshold is
-explicitly relaxed. Do not promote static buckets or dynamic trimming on this
-hardware/workload.
+At this intermediate gate, cached/full was the only mode retained for a longer
+quality validation. Static buckets and dynamic trimming were rejected.
+
+## Long cached/full validation through epoch 600
+
+The optional cached/full run was subsequently continued and intentionally
+stopped after its complete epoch-650 validation. Its formal matched endpoint is
+epoch 600. Against Stage7-All256 at epochs 200/400/600:
+
+- fixed-manifest RF is 3.07% worse at epoch 200, 0.53% worse at epoch 400, and
+  0.07% better at epoch 600; the paired epoch-600 95% interval includes zero;
+- matched epoch-600 reconstruction is 2.21% better at Euler NFE1 and 1.67%
+  better at Euler NFE4 on the shared deterministic snapshot;
+- mean real training time over epochs 250–600 is 6.11% lower;
+- the controlled benchmark remains 6.38% faster with 2.41% lower peak
+  allocation;
+- EMA decay, update counts, evaluation selection, and EMA/live contraction
+  match the Stage7 behavior.
+
+This passes the mature-quality, reconstruction, EMA, and directional-efficiency
+checks, but still does not meet the original 8% promotion-speed target. See
+`long_cached/evaluation_0600/RESULTS.md` and its machine-readable companions.
+
+## Final selection
+
+Promote `cached_kv + full` as the recommended/default GL_rbf_CQ execution. The
+long validation confirms that the smaller-than-planned efficiency gain is real
+and does not damage mature RF or reconstruction quality. Keep `legacy_mha +
+full` fully supported for historical reproduction and numerical debugging. Do
+not promote static bucketing or dynamic trimming.
+
+This selection changes no scientific architecture, parameter, state-dict key,
+RF objective, cache semantics, solver behavior, or release weights. The Stage-7
+epoch-1000 portable checkpoint remains the release model artifact.

@@ -22,8 +22,10 @@ Compatibility entry points retained:
 
 | Decision | Status | Evidence/reason |
 |---|---|---|
-| Latent-256 Stage7-All256 as `GL_rbf_CQ` | accepted | best fixed-manifest/reconstruction Pareto at epoch 1000 |
+| Latent-256 scientific architecture as `GL_rbf_CQ` | accepted | best fixed-manifest/reconstruction Pareto at epoch 1000 |
 | Latent-128 CQ-LR as `GL_rbf_CQ-fast` | accepted | lowest validated CQ cost profile |
 | Persistent geometry-only Top-K | accepted | equivalent outputs and zero post-build searches |
+| Cached K/V with full padding | accepted execution default | matched mature RF/reconstruction; 6.1–6.4% faster, 2.41% lower peak allocation |
+| Static bucketing and dynamic trimming | rejected as defaults | neither improves on cached/full for the release workload |
 | Structured-concat 192/224 sweep | rejected as default | did not justify replacing the validated additive CQ path |
 | SDPA/fused optimizer in cleanup | excluded | kernel/optimizer changes are outside behavior-preserving RC cleanup |

@@ -222,7 +222,7 @@ def main() -> None:
                 "persistent Top-K zero post-build KNN",
             ],
         },
-        "full_regression": {"command": "pytest -q", "result": "161 passed"},
+        "full_regression": {"command": "pytest -q", "result": "162 passed"},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
