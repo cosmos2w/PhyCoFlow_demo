@@ -7,13 +7,13 @@ from typing import Any
 
 import torch
 
-from Model import (
+from .portable_core import (
     ConditionalPointHybridLocalGlobalRBF,
     ConditionalPointHybridLocalGlobalRBFCQ,
     PointCloudFFM,
 )
-from phycoflow_pointcloud.config import resolve_model_identity
-from phycoflow_pointcloud.priors import IIDGaussianPrior, RFFGaussianPrior
+from ..config import resolve_model_identity
+from ..priors import IIDGaussianPrior, RFFGaussianPrior
 
 
 def _get(config: Mapping[str, Any], key: str, default: Any) -> Any:

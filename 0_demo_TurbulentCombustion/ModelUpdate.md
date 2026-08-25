@@ -652,3 +652,16 @@ to audit compatibility.
 The scientific model and release weights are frozen at the validated Stage-7
 result. Stage 8 freezes cached/full as the preferred execution baseline; future
 work is release-oriented cleanup and 3-D application work, not model redesign.
+
+## 17. Portable pre-release boundary
+
+The active GL-RBF/CQ, PointCloudFFM, EMA, observation-consistency, prior, and
+persistent-cache implementations now live under `src/phycoflow_pointcloud/`.
+Historical top-level imports re-export those implementations, so checkpoint and
+state-dict names are unchanged. Dataset-specific train/reconstruct/evaluate
+adapters remain outside the portable package.
+
+Downstream projects should merge `configs/gl_rbf_cq_core.yaml` with their own
+field/data/training configuration and follow `GL_rbf_CQ_UPDATE_GUIDE.md`.
+`GL_rbf_CQ_RELEASE_MANIFEST.yaml` is the machine-readable source/file/artifact
+record for this pre-release boundary.

@@ -1,6 +1,6 @@
 """Public CQ aliases; no module or state-dict keys are renamed."""
 
-from Model import ConditionalPointHybridLocalGlobalRBFCQ
+from .portable_core import ConditionalPointHybridLocalGlobalRBFCQ
 
 GLRbfCQ = ConditionalPointHybridLocalGlobalRBFCQ
 GL_rbf_CQ = ConditionalPointHybridLocalGlobalRBFCQ

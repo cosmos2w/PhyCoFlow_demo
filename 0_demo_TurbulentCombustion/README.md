@@ -62,6 +62,18 @@ boundary remains `src/phycoflow_pointcloud/`; `Model.GL_rbf_ENH_CQ` and the
 historical evaluation entry points remain compatibility interfaces. The
 remainder of this README documents the detailed workflow and baselines.
 
+### Portable downstream core
+
+For a project with a different dataset or field layout, use
+`configs/gl_rbf_cq_core.yaml` and the tensor-level APIs in
+`src/phycoflow_pointcloud/`. That package no longer imports `Model.py`, the
+turbulent-combustion loader, visualization, baselines, or research modules.
+Follow `GL_rbf_CQ_UPDATE_GUIDE.md`; the authoritative file/dependency boundary
+and checkpoint hashes are recorded in `GL_rbf_CQ_RELEASE_MANIFEST.yaml`.
+
+The full `configs/gl_rbf_cq.yaml` remains the validated combustion example and
+must not be copied as a universal dataset configuration.
+
 ### Checkpoints and cache lifecycle
 
 Research checkpoints may contain live weights plus EMA state. Validation and

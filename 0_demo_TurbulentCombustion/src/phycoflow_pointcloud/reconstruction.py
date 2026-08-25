@@ -1,147 +1,79 @@
-"""Reconstruct one real snapshot with explicit seeds and protocol metadata."""
+"""Tensor-level reconstruction helpers independent of any dataset or loader."""
 
 from __future__ import annotations
 
-import argparse
-import hashlib
-import json
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Any, Optional, Protocol
 
 import torch
 
-from helpers import TurbulentCombustionH5Dataset, build_sparse_condition
 
-from .checkpointing import resolve_checkpoint_state
-from .config import load_public_config, project_root
-from .models.factory import build_pointcloud_model
+class ReconstructionModel(Protocol):
+    """Minimal sampling protocol implemented by :class:`PointCloudFFM`."""
 
-
-def _digest(tensor: torch.Tensor) -> str:
-    value = tensor.detach().cpu().contiguous()
-    digest = hashlib.sha256()
-    digest.update(str(value.dtype).encode())
-    digest.update(str(tuple(value.shape)).encode())
-    digest.update(value.numpy().tobytes())
-    return digest.hexdigest()
+    def sample(self, **kwargs: Any) -> torch.Tensor: ...
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--sample-index", type=int, default=0)
-    parser.add_argument("--cond-fields", type=int, nargs="+")
-    parser.add_argument("--n-obs", type=int, nargs="+")
-    parser.add_argument("--n-steps", type=int, default=4)
-    parser.add_argument("--solver", choices=["euler", "heun"], default="euler")
-    parser.add_argument("--seed", type=int, default=1729)
-    parser.add_argument("--chunk-size", type=int)
-    parser.add_argument(
-        "--cache-level", choices=["none", "geometry", "static_features"]
+@dataclass(frozen=True)
+class ReconstructionConfig:
+    """Model-generic solver and cache choices for one reconstruction call."""
+
+    n_steps: int = 4
+    ode_solver: str = "euler"
+    obs_consistency_mode: str = "endpoint_smooth"
+    obs_consistency_strength: float = 1.0
+    obs_consistency_sigma: float = 0.05
+    obs_consistency_schedule_power: float = 2.0
+    obs_consistency_final_clamp: bool = True
+    obs_consistency_chunk_size: int = 8192
+    execution_mode: str = "cached_streamed"
+    query_chunk_size: int = 8192
+    cache_level: str = "static_features"
+
+
+@torch.no_grad()
+def reconstruct_from_tensors(
+    model: ReconstructionModel,
+    *,
+    coords: torch.Tensor,
+    obs_coords: torch.Tensor,
+    obs_values: torch.Tensor,
+    obs_mask: torch.Tensor,
+    obs_field_ids: torch.Tensor,
+    obs_indices: Optional[torch.Tensor] = None,
+    config: ReconstructionConfig | None = None,
+    geometry_cache: Any = None,
+) -> torch.Tensor:
+    """Reconstruct from the portable tensor contract.
+
+    Dataset loading, normalization, field naming, sensor selection, and output
+    serialization are intentionally owned by the downstream application.
+    """
+    cfg = config or ReconstructionConfig()
+    return model.sample(
+        coords=coords,
+        obs_coords=obs_coords,
+        obs_values=obs_values,
+        obs_mask=obs_mask,
+        obs_field_ids=obs_field_ids,
+        clamp_indices=obs_indices,
+        n_steps=cfg.n_steps,
+        ode_solver=cfg.ode_solver,
+        obs_consistency_mode=cfg.obs_consistency_mode,
+        obs_consistency_strength=cfg.obs_consistency_strength,
+        obs_consistency_sigma=cfg.obs_consistency_sigma,
+        obs_consistency_schedule_power=cfg.obs_consistency_schedule_power,
+        obs_consistency_final_clamp=cfg.obs_consistency_final_clamp,
+        obs_consistency_chunk_size=cfg.obs_consistency_chunk_size,
+        reconstruction_execution_mode=cfg.execution_mode,
+        reconstruction_query_chunk_size=cfg.query_chunk_size,
+        reconstruction_cache_level=cfg.cache_level,
+        reconstruction_geometry_cache=geometry_cache,
     )
-    parser.add_argument(
-        "--output", type=Path, default=project_root() / "runs/reconstruction/sample.pt"
-    )
-    cli = parser.parse_args(argv)
-    config = load_public_config(cli.config)
-    device = torch.device(cli.device)
-    if device.type == "cuda":
-        torch.cuda.set_device(device)
-    dataset = TurbulentCombustionH5Dataset(
-        config["data"],
-        split="val",
-        train_ratio=float(config.get("train_ratio", 0.9)),
-        seed=int(config.get("seed", 42)),
-        time_stride=int(config.get("time_stride", 1)),
-        field_names=config.get("FIELD_NAMES", config.get("field_names")),
-        stats_path=str(config["dataset_stats_path"]),
-        coord_batch_mode="shared_mesh",
-        defer_field_read=True,
-    )
-    try:
-        sample = dataset.get_full_snapshot(cli.sample_index)
-        coords = sample["coords"].unsqueeze(0).to(device)
-        truth = sample["fields"].unsqueeze(0).to(device)
-        cond_fields = cli.cond_fields or list(
-            config.get("vis_cond_fields", config["cond_fields"])
-        )
-        n_obs = cli.n_obs or list(
-            config.get("vis_n_obs_list", config["n_obs_max_list"])
-        )
-        torch.manual_seed(cli.seed)
-        if device.type == "cuda":
-            torch.cuda.manual_seed_all(cli.seed)
-        obs_coords, obs_values, obs_mask, obs_indices, obs_field_ids = (
-            build_sparse_condition(
-                coords_full=coords,
-                fields_full=truth,
-                cond_fields=cond_fields,
-                n_obs_min=n_obs,
-                n_obs_max=n_obs,
-            )
-        )
-        model = build_pointcloud_model(
-            config, n_fields=dataset.num_fields, device=device
-        )
-        checkpoint = torch.load(cli.checkpoint, map_location="cpu", weights_only=False)
-        resolved = resolve_checkpoint_state(checkpoint, model=model)
-        model.load_state_dict(resolved.state_dict, strict=True)
-        model.eval()
-        torch.manual_seed(cli.seed + 1)
-        if device.type == "cuda":
-            torch.cuda.manual_seed_all(cli.seed + 1)
-        with torch.no_grad():
-            reconstruction = model.sample(
-                coords=coords,
-                obs_coords=obs_coords,
-                obs_values=obs_values,
-                obs_mask=obs_mask,
-                obs_field_ids=obs_field_ids,
-                clamp_indices=obs_indices,
-                n_steps=cli.n_steps,
-                ode_solver=cli.solver,
-                obs_consistency_mode="endpoint_smooth",
-                reconstruction_execution_mode=str(
-                    config.get("reconstruction_execution_mode", "cached_streamed")
-                ),
-                reconstruction_query_chunk_size=int(
-                    cli.chunk_size
-                    or config.get("reconstruction_query_chunk_size", 8192)
-                ),
-                reconstruction_cache_level=str(
-                    cli.cache_level
-                    or config.get("reconstruction_cache_level", "static_features")
-                ),
-            )
-        metadata = {
-            "format_version": 1,
-            "model_name": config["model_name"],
-            "checkpoint": str(cli.checkpoint.resolve()),
-            "checkpoint_selection": resolved.selection,
-            "sample_index": cli.sample_index,
-            "condition_seed": cli.seed,
-            "rf_seed": cli.seed + 1,
-            "condition_sha256": _digest(torch.cat([obs_coords, obs_values], dim=-1)),
-            "reconstruction_sha256": _digest(reconstruction),
-            "field_names": list(dataset.field_names),
-            "n_steps": cli.n_steps,
-            "solver": cli.solver,
-        }
-        cli.output.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "reconstruction": reconstruction.cpu(),
-                "truth": truth.cpu(),
-                "coords": coords.cpu(),
-                "obs_indices": obs_indices.cpu(),
-                "metadata": metadata,
-            },
-            cli.output,
-        )
-        cli.output.with_suffix(".json").write_text(
-            json.dumps(metadata, indent=2) + "\n"
-        )
-        print(json.dumps(metadata, indent=2))
-    finally:
-        dataset.close()
+
+
+__all__ = [
+    "ReconstructionConfig",
+    "ReconstructionModel",
+    "reconstruct_from_tensors",
+]
