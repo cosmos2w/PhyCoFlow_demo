@@ -50,7 +50,7 @@ trajectory, rather than eight times.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 conda run --no-capture-output -n phycoflow_env \
-  python src/benchmark_pointcloud_reconstruction.py \
+  python research/benchmarks/benchmark_pointcloud_reconstruction.py \
   --config _CheckNotes/Round1_runs/optimized/ffm_tc_pointcloud_DemoN9012_20260820_175500/run_config.yaml \
   --checkpoint _CheckNotes/Round1_runs/optimized/ffm_tc_pointcloud_DemoN9012_20260820_175500/best.pt \
   --stats-path Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538/dataset_stats.pt \

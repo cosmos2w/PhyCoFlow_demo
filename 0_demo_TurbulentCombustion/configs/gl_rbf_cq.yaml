@@ -13,14 +13,14 @@
 # Quick demonstrations (run from 0_demo_TurbulentCombustion/):
 #
 #   Validate paths and model construction without starting training:
-#     python scripts/train_pointcloud.py --config configs/gl_rbf_cq.yaml --dry-run
+#     python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml --dry-run
 #
 #   Train on GPU 0 with the defaults below:
-#     CUDA_VISIBLE_DEVICES=0 python scripts/train_pointcloud.py \
+#     CUDA_VISIBLE_DEVICES=0 python src/train_pointcloud_ffm.py \
 #       --config configs/gl_rbf_cq.yaml
 #
 #   Override portable paths or a run identifier without editing this file:
-#     python scripts/train_pointcloud.py --config configs/gl_rbf_cq.yaml \
+#     python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml \
 #       --data /path/to/Merged_COTU0U1P.h5 \
 #       --dataset-stats-path /path/to/dataset_stats.pt \
 #       --save-dir /path/to/runs/GL_rbf_CQ \

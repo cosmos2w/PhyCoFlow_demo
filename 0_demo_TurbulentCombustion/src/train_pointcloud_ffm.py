@@ -13,11 +13,13 @@ With this patch:
 
 import argparse
 import csv
+import hashlib
 import yaml
 import shutil
 import json
 import math
 import os
+import sys
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -69,12 +71,43 @@ from direct_coherence_loss import (
 from model_finetune import find_source_run_dir, load_source_config
 from model_ema import ModelEMA
 from phycoflow_pointcloud.checkpointing import checkpoint_model_state
-from phycoflow_pointcloud.config import resolve_model_identity
+from phycoflow_pointcloud.config import load_public_config, resolve_model_identity
 from phycoflow_pointcloud.models.factory import build_pointcloud_model
 from phycoflow_pointcloud.priors import IIDGaussianPrior, RFFGaussianPrior
 
 
-def parse_args():
+def _yaml_value(value: str):
+    return yaml.safe_load(value)
+
+
+def _set_overrides(entries: Sequence[str]) -> dict:
+    overrides = {}
+    for entry in entries:
+        if "=" not in entry:
+            raise ValueError(f"Expected KEY=YAML_VALUE for --set, got {entry!r}.")
+        key, value = entry.split("=", 1)
+        overrides[key] = _yaml_value(value)
+    return overrides
+
+
+def _option_was_supplied(argv: Sequence[str], *names: str) -> bool:
+    return any(
+        token == name or token.startswith(f"{name}=")
+        for token in argv
+        for name in names
+    )
+
+
+def _model_schema_digest(model: nn.Module) -> str:
+    digest = hashlib.sha256()
+    for key, value in model.state_dict().items():
+        digest.update(key.encode())
+        digest.update(str(value.dtype).encode())
+        digest.update(str(tuple(value.shape)).encode())
+    return digest.hexdigest()
+
+
+def parse_args(argv: Optional[Sequence[str]] = None):
 
     p = argparse.ArgumentParser("Train a starter conditional point-cloud FFM on turbulent combustion HDF5 data.")
 
@@ -84,7 +117,7 @@ def parse_args():
                    help="Public model name; historical backbone remains authoritative for compatibility.")
     p.add_argument("--coord-dim", type=int, default=3,
                    help="Coordinate-channel count (the turbulent-combustion profile uses 3).")
-    p.add_argument("--Demo-Num", type=int, 
+    p.add_argument("--Demo-Num", "--demo-num", dest="Demo_Num", type=int,
                    default=0, help="Demo ID tag for saving directories")
     p.add_argument("--device-ids", type=int, nargs="+", default=[0])
 
@@ -100,6 +133,18 @@ def parse_args():
     p.add_argument("--field-names", dest="field_names", nargs="+", default=None)
     p.add_argument("--save-dir", type=str, 
                    default=f"Save_TrainedModel/ffm_tc_pointcloud")
+    p.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=YAML_VALUE",
+        help="Override any recognized YAML value after loading the config.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate the resolved config and model schema without reading data.",
+    )
     p.add_argument("--RELOAD", action="store_true",
                    help="If set, try to reload the latest matching checkpoint and continue training.")
     p.add_argument("--training-mode", dest="training_mode", type=str, default="standard",
@@ -464,7 +509,7 @@ def parse_args():
     p.add_argument("--coherence-weight-warmup-epochs", dest="coherence_weight_warmup_epochs",
                    type=int, default=0)
 
-    return p.parse_args()
+    return p.parse_args(argv)
 
 def set_seed(seed: int) -> None:
     np.random.seed(seed)
@@ -1849,28 +1894,64 @@ def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str
     return "\n".join(lines)
 
 
-def main():
+def main(argv: Optional[Sequence[str]] = None):
 
-    args = parse_args()
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parse_args(raw_argv)
     script_dir = os.path.dirname(os.path.realpath(__file__))
     demo_dir = os.path.dirname(script_dir) # Go up one level to \demo
+
+    # Public command-line overrides are deliberately applied after YAML. This
+    # preserves the historical YAML-first engine while making the default
+    # entry point convenient and unambiguous for collaborators.
+    overrides = _set_overrides(args.set)
+    dedicated_overrides = {
+        "data": ("--data",),
+        "dataset_stats_path": ("--dataset-stats-path",),
+        "save_dir": ("--save-dir",),
+        "device_ids": ("--device-ids",),
+        "Demo_Num": ("--Demo-Num", "--demo-num"),
+    }
+    for key, names in dedicated_overrides.items():
+        if _option_was_supplied(raw_argv, *names):
+            overrides[key] = getattr(args, key)
     
     # YAML Loading and Backup
-    config_path = os.path.join(demo_dir, args.config)
+    config_path = Path(args.config).expanduser()
+    if not config_path.is_absolute():
+        config_path = Path(demo_dir) / config_path
+    config_path = config_path.resolve()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    config_snapshot_path = None
+    config_snapshot_payload = None
     
-    if os.path.exists(config_path):
+    if config_path.exists():
         print(f"\n[*] Starting:... I found config file at: {config_path}\n")
-        with open(config_path, "r") as f:
-            yaml_config = yaml.safe_load(f)
+        with config_path.open("r", encoding="utf-8") as f:
+            source_yaml = yaml.safe_load(f) or {}
+        if not isinstance(source_yaml, dict):
+            raise TypeError(f"Expected a YAML mapping in {config_path}.")
+
+        candidate = dict(source_yaml)
+        candidate.update(overrides)
+        is_gl_profile = candidate.get("model_name") is not None or candidate.get(
+            "backbone"
+        ) in {"GL_rbf", "GL_rbf_ENH", "GL_rbf_ENH_CQ"}
+        if is_gl_profile:
+            yaml_config = load_public_config(
+                config_path,
+                overrides=overrides,
+                root=demo_dir,
+            )
+        else:
+            yaml_config = candidate
         
         # Overwrite default args with YAML values
-        if yaml_config is not None:
-            for key, value in yaml_config.items():
-                if hasattr(args, key):
-                    setattr(args, key, value)
-                else:
-                    print(f"Warning: YAML key '{key}' is not a recognized argument. Ignoring.")
+        for key, value in yaml_config.items():
+            if hasattr(args, key):
+                setattr(args, key, value)
+            elif key != "config_source":
+                print(f"Warning: YAML key '{key}' is not a recognized argument. Ignoring.")
         args = normalize_conditioning_args(args)
         if args.model_name is not None or args.backbone in {
             "GL_rbf", "GL_rbf_ENH", "GL_rbf_ENH_CQ"
@@ -1883,11 +1964,46 @@ def main():
         backup_dir = os.path.join(demo_dir, "Save_config", "pointcloud_ffm")
         os.makedirs(backup_dir, exist_ok=True)
         backup_filename = f"config_pointcloud_ffm_DemoN{args.Demo_Num}_{timestamp}.yaml"
-        shutil.copy(config_path, os.path.join(backup_dir, backup_filename))
-        print(f"[*] Config backed up to: {os.path.join(backup_dir, backup_filename)}\n")
+        config_snapshot_path = Path(backup_dir) / backup_filename
+        config_snapshot_payload = yaml_config
     else:
         print(f"\n[Warning: !] Config file not found at {config_path}. Using default parameters.\n")
         args.Demo_Num = 0  # Force Demo_Num to 0 as default
+
+    if args.dry_run:
+        build_config = dict(vars(args))
+        build_config["neighbor_backend"] = "torch"
+        torch.manual_seed(int(args.seed))
+        model = build_pointcloud_model(build_config, n_fields=5, device="cpu")
+        print(
+            json.dumps(
+                {
+                    "status": "valid",
+                    "model_name": args.model_name,
+                    "backbone": args.backbone,
+                    "coord_dim": args.coord_dim,
+                    "Demo_Num": args.Demo_Num,
+                    "device_ids": args.device_ids,
+                    "epochs": args.epochs,
+                    "scheduler_t_max": args.scheduler_t_max,
+                    "condition_attention_execution": args.condition_attention_execution,
+                    "sensor_attention_padding_mode": args.sensor_attention_padding_mode,
+                    "state_key_count": len(model.state_dict()),
+                    "model_schema_sha256": _model_schema_digest(model),
+                    "data": args.data,
+                    "dataset_stats_path": args.dataset_stats_path,
+                    "save_dir": args.save_dir,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    if config_snapshot_path is not None:
+        config_snapshot_path.write_text(
+            yaml.safe_dump(config_snapshot_payload, sort_keys=False), encoding="utf-8"
+        )
+        print(f"[*] Resolved config backed up to: {config_snapshot_path}\n")
     
     # Setup the Dynamic Directories with Demo_Num
     set_seed(args.seed)
@@ -1994,8 +2110,10 @@ def main():
     # Save the final parsed args to a JSON in the model folder just to be safe
     with open(save_dir / "args.json", "w") as f:
         json.dump(vars(args), f, indent=2)
-    if os.path.exists(config_path):
-        config_copied = copy_file_if_different(config_path, save_dir / "run_config.yaml")
+    if config_snapshot_path is not None:
+        config_copied = copy_file_if_different(
+            config_snapshot_path, save_dir / "run_config.yaml"
+        )
         if not config_copied:
             print("[*] Config already lives in run folder; skipping run_config.yaml copy.")
 

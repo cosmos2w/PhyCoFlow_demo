@@ -12,7 +12,7 @@ Run these commands from `0_demo_TurbulentCombustion/` in the `phycoflow_env`
 environment:
 
 ```bash
-python scripts/train_pointcloud.py --config configs/gl_rbf_cq.yaml
+python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml
 
 python scripts/reconstruct_pointcloud.py \
   --config configs/gl_rbf_cq.yaml \
@@ -56,10 +56,11 @@ Set `condition_attention_execution: legacy_mha` only for historical
 reproduction, numerical debugging, or compatibility diagnosis. It remains fully
 supported. Static bucketing and dynamic trimming are not release defaults.
 
-The stable Python boundary is `src/phycoflow_pointcloud/`. The older
-`src/train_pointcloud_ffm.py`, `src/evaluate_pointcloud_fixed_manifest.py`, and
-`Model.GL_rbf_ENH_CQ` paths remain compatibility entry points. The remainder of
-this README describes those historical and baseline interfaces.
+`src/train_pointcloud_ffm.py` is now the single canonical training command for
+both public profiles and historical YAML files. The stable reusable Python
+boundary remains `src/phycoflow_pointcloud/`; `Model.GL_rbf_ENH_CQ` and the
+historical evaluation entry points remain compatibility interfaces. The
+remainder of this README documents the detailed workflow and baselines.
 
 ### Checkpoints and cache lifecycle
 

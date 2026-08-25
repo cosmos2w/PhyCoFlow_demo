@@ -6,9 +6,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+STAGE7 = ROOT / "research" / "stages" / "stage7"
+if str(STAGE7) not in sys.path:
+    sys.path.insert(0, str(STAGE7))
 
 from analyze_stage7_screen import main
 

@@ -12,6 +12,8 @@ from pathlib import Path
 import torch
 import yaml
 
+import _bootstrap  # noqa: F401  # adds the runtime src/ directory
+
 from evaluate_pointcloud_fixed_manifest import build_gl_rbf_ffm
 from helpers import TurbulentCombustionH5Dataset, build_sparse_condition
 from train_pointcloud_ffm import checkpoint_model_state

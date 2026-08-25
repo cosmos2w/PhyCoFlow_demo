@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+BENCHMARKS = ROOT / "research" / "benchmarks"
+if str(BENCHMARKS) not in sys.path:
+    sys.path.insert(0, str(BENCHMARKS))
 
 from benchmark_pointcloud_cq import make_inputs
 from benchmark_pointcloud_stage7 import (

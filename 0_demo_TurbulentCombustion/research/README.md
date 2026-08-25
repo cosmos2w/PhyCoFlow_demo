@@ -1,20 +1,22 @@
 # Research provenance index
 
-The collaborator-facing runtime is in `src/phycoflow_pointcloud/`, `scripts/`,
-and `configs/`. Stage-specific reports and exact-run configurations remain in
+The collaborator-facing training runtime is `src/train_pointcloud_ffm.py`, with
+reusable code in `src/phycoflow_pointcloud/` and public profiles in `configs/`.
+Stage-specific reports and exact-run configurations remain in
 their original tracked `_CheckNotes/` paths for link stability and tag-level
 recovery. They are indexed by `MAP.csv` rather than moved in the same revision
 that introduces their replacements.
 
-This is deliberate: several benchmark scripts import one another by historical
-top-level module name, and canonical reports cite the existing paths. Moving or
-deleting them is a Phase-6 candidate after a separate link/import review.
+Completed Stage 2–7 benchmark programs are archived under
+`research/benchmarks/`; the Stage-7 decision analyzer is under
+`research/stages/stage7/`. They remain runnable and tested, but are not part of
+the normal collaborator-facing source surface.
 
 Compatibility entry points retained:
 
 - `src/train_pointcloud_ffm.py`
 - `src/evaluate_pointcloud_fixed_manifest.py`
-- `src/benchmark_pointcloud_reconstruction.py`
+- `research/benchmarks/benchmark_pointcloud_reconstruction.py`
 - `Model.ConditionalPointHybridLocalGlobalRBFCQ`
 - YAML `backbone: GL_rbf_ENH_CQ`
 

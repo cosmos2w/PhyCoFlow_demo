@@ -2,6 +2,10 @@
 
 Branch: `perf/stage8-attention-optimization`
 
+Canonical training entry point: `src/train_pointcloud_ffm.py`. It now owns the
+public config validation, `--set`, path overrides, and `--dry-run` behavior;
+there is no separate collaborator-facing training wrapper under `scripts/`.
+
 Frozen numerical/checkpoint oracle: `gl-rbf-cq-v0.9.0-rc1` and the portable
 release checkpoint with SHA256
 `2516ffeb45775d4e6b8d88b4b24d927aac28665a2a90102583e07deaca78f64d`.
@@ -42,6 +46,7 @@ solver code was changed.
   `f221ee2b26268fe64e116f9f57165d34aac9ff524202e40d225ed17f76dc970e`.
 - Focused Stage-8 suite: 7 passed.
 - Final RC2 complete regression suite: 162 passed.
+- Post-RC2 canonical-entry-point/archive regression suite: 163 passed.
 - Frozen-checkpoint FP32 maximum differences versus legacy/full:
   - cached/full output `3.34e-6`, context `4.29e-6`, gradients `5.07e-7`;
   - cached/bucketed output `5.25e-6`, context `4.29e-6`, gradients `4.77e-7`.

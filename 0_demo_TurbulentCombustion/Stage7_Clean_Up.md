@@ -169,7 +169,6 @@ be rewritten as part of GL_rbf_CQ cleanup.
 │           ├── timestep.py
 │           └── ema.py
 ├── scripts/
-│   ├── train_pointcloud.py
 │   ├── reconstruct_pointcloud.py
 │   ├── evaluate_fixed_manifest.py
 │   └── benchmark_pointcloud.py
@@ -227,7 +226,7 @@ not silently select a different architecture.
 The intended user flow is:
 
 ```bash
-python scripts/train_pointcloud.py --config configs/gl_rbf_cq.yaml
+python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml
 python scripts/reconstruct_pointcloud.py \
   --config configs/gl_rbf_cq.yaml \
   --checkpoint /path/to/checkpoint.pt

@@ -47,7 +47,7 @@ post-update absolute delta is `5.8e-6`. The test uses this measured FP32 bound.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 conda run --no-capture-output -n phycoflow_env \
-  python src/benchmark_pointcloud_query_microbatch.py \
+  python research/benchmarks/benchmark_pointcloud_query_microbatch.py \
   --config _CheckNotes/Round1_runs/optimized/ffm_tc_pointcloud_DemoN9012_20260820_175500/run_config.yaml \
   --checkpoint _CheckNotes/Round1_runs/optimized/ffm_tc_pointcloud_DemoN9012_20260820_175500/best.pt \
   --device cuda:0 --n-query 4096 16384 65536 --microbatch 4096 8192 \

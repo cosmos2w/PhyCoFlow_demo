@@ -30,7 +30,7 @@ therefore sweeps `N_full` and `N_query` independently.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 /usr/bin/time -v conda run --no-capture-output -n phycoflow_env \
-  python src/benchmark_pointcloud_data_path.py \
+  python research/benchmarks/benchmark_pointcloud_data_path.py \
   --config Save_config/config_pointcloud_ffm.yaml \
   --stats-path Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538/dataset_stats.pt \
   --output _CheckNotes/Stage2_data_path/optimized_fullnorm.csv \
@@ -38,7 +38,7 @@ CUDA_VISIBLE_DEVICES=0 /usr/bin/time -v conda run --no-capture-output -n phycofl
   --n-obs 256 --iterations 8 --warmup 2 --num-workers 0 --device cuda:0
 
 CUDA_VISIBLE_DEVICES=0 /usr/bin/time -v conda run --no-capture-output -n phycoflow_env \
-  python src/benchmark_pointcloud_data_path.py \
+  python research/benchmarks/benchmark_pointcloud_data_path.py \
   --config Save_config/config_pointcloud_ffm.yaml \
   --stats-path Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538/dataset_stats.pt \
   --output _CheckNotes/Stage2_data_path/optimized_selectednorm.csv \

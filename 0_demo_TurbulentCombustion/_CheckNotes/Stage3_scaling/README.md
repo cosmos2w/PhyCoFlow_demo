@@ -57,14 +57,14 @@ exclusive-GPU absolutes. CUDA peak numbers are process-local.
 See the command blocks below; both used the project `phycoflow_env` and GPU 0.
 
 ```bash
-python src/benchmark_pointcloud_scaling.py --config Save_config/config_pointcloud_ffm.yaml \
+python research/benchmarks/benchmark_pointcloud_scaling.py --config Save_config/config_pointcloud_ffm.yaml \
   --stats-path Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538/dataset_stats.pt \
   --classes data --n-full 40300 250000 1000000 --n-query 4096 16384 65536 \
   --n-obs 256 512 1024 --data-batch-size 4 --iterations 3 --warmup 1 \
   --device cuda:0 --output-csv _CheckNotes/Stage3_scaling/data_scaling.csv \
   --output-json _CheckNotes/Stage3_scaling/data_scaling.json
 
-python src/benchmark_pointcloud_scaling.py --config Save_config/config_pointcloud_ffm.yaml \
+python research/benchmarks/benchmark_pointcloud_scaling.py --config Save_config/config_pointcloud_ffm.yaml \
   --stats-path Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538/dataset_stats.pt \
   --classes model --n-query 4096 16384 65536 --n-obs 256 512 1024 \
   --model-batch-size 1 --iterations 3 --warmup 1 --device cuda:0 \

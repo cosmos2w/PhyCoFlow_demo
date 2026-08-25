@@ -26,6 +26,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "research" / "benchmarks"))
 
 from benchmark_pointcloud_cq import make_inputs, sync
 from evaluate_pointcloud_fixed_manifest import build_gl_rbf_ffm

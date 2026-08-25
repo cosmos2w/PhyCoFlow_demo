@@ -24,6 +24,7 @@ from phycoflow_pointcloud.checkpointing import (
 from phycoflow_pointcloud.config import load_public_config, resolve_model_identity
 from phycoflow_pointcloud.models import GL_rbf_CQ, GL_rbf_ENH_CQ, build_pointcloud_model
 from phycoflow_pointcloud.priors import RFFGaussianPrior
+from train_pointcloud_ffm import main as train_pointcloud_main
 
 
 def _tensor_digest(state: dict[str, torch.Tensor]) -> str:
@@ -172,6 +173,36 @@ def test_public_cq_execution_defaults_and_historical_fallback():
     assert cached_model.model.condition_attention_execution == "cached_kv"
     assert cached_model.model.sensor_attention_padding_mode == "full"
     assert historical_model.state_dict().keys() == cached_model.state_dict().keys()
+
+
+def test_canonical_training_cli_resolves_public_overrides_and_dry_run(capsys):
+    train_pointcloud_main(
+        [
+            "--config",
+            str(ROOT / "configs/gl_rbf_cq.yaml"),
+            "--demo-num",
+            "9876",
+            "--device-ids",
+            "0",
+            "--set",
+            "epochs=2",
+            "--dry-run",
+        ]
+    )
+    output = capsys.readouterr().out
+    payload = json.loads(output[output.index('{\n  "status"') :])
+    assert payload["status"] == "valid"
+    assert payload["model_name"] == "GL_rbf_CQ"
+    assert payload["backbone"] == "GL_rbf_ENH_CQ"
+    assert payload["Demo_Num"] == 9876
+    assert payload["device_ids"] == [0]
+    assert payload["epochs"] == 2
+    assert payload["condition_attention_execution"] == "cached_kv"
+    assert payload["sensor_attention_padding_mode"] == "full"
+    assert payload["state_key_count"] == 148
+    assert payload["model_schema_sha256"] == (
+        "f221ee2b26268fe64e116f9f57165d34aac9ff524202e40d225ed17f76dc970e"
+    )
 
 
 def test_portable_checkpoint_is_strict_and_matches_the_rc1_resolved_state():

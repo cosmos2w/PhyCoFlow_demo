@@ -16,6 +16,8 @@ from typing import Any, Mapping, Sequence
 import torch
 import yaml
 
+import _bootstrap  # noqa: F401  # adds the runtime src/ directory
+
 from helpers import TurbulentCombustionH5Dataset
 from Model import ConditionalPointHybridLocalGlobalRBF
 from pointcloud_data_path import (

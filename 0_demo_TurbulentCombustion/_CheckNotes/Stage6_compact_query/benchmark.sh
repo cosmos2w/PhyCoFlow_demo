@@ -19,4 +19,4 @@ nvidia-smi -i "$gpu_id"   --query-gpu=index,uuid,name,memory.total,memory.used,u
 
 export CUDA_VISIBLE_DEVICES="$gpu_id"
 export KEOPS_CACHE_FOLDER="/tmp/keops_stage6_cq_benchmark_gpu${gpu_id}"
-conda run --no-capture-output -n phycoflow_env   python src/benchmark_pointcloud_cq.py   --device cuda:0   --query-sizes 4096 16384 65536   --n-obs 256   --iterations 5   --warmup 2   --component-iterations 5   --million-query-count 1000000   --million-chunk-size 8192   --output "$package/benchmarks/cost_benchmark.json"   2>&1 | tee "$package/benchmarks/cost_benchmark_${timestamp}.log"
+conda run --no-capture-output -n phycoflow_env   python research/benchmarks/benchmark_pointcloud_cq.py   --device cuda:0   --query-sizes 4096 16384 65536   --n-obs 256   --iterations 5   --warmup 2   --component-iterations 5   --million-query-count 1000000   --million-chunk-size 8192   --output "$package/benchmarks/cost_benchmark.json"   2>&1 | tee "$package/benchmarks/cost_benchmark_${timestamp}.log"

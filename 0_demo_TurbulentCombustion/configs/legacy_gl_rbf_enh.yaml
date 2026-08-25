@@ -14,14 +14,14 @@
 # Quick demonstrations (run from 0_demo_TurbulentCombustion/):
 #
 #   Validate the legacy public profile without reading data:
-#     python scripts/train_pointcloud.py --config configs/legacy_gl_rbf_enh.yaml --dry-run
+#     python src/train_pointcloud_ffm.py --config configs/legacy_gl_rbf_enh.yaml --dry-run
 #
 #   Train the clean F0 control on GPU 0:
-#     CUDA_VISIBLE_DEVICES=0 python scripts/train_pointcloud.py \
+#     CUDA_VISIBLE_DEVICES=0 python src/train_pointcloud_ffm.py \
 #       --config configs/legacy_gl_rbf_enh.yaml
 #
 #   Launch a 200-epoch convergence screen with the same 1000-epoch LR horizon:
-#     python scripts/train_pointcloud.py --config configs/legacy_gl_rbf_enh.yaml \
+#     python src/train_pointcloud_ffm.py --config configs/legacy_gl_rbf_enh.yaml \
 #       --set epochs=200 --set scheduler_t_max=1000 --demo-num 9802 --device-ids 0
 #
 #   Evaluate an old GL_rbf_ENH checkpoint:

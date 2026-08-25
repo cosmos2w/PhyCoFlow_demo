@@ -596,6 +596,9 @@ checkpoints remain loadable without adding YAML keys.
 - Kernel experiments are separate from the scientific architecture result.
 - Public CQ configs select `cached_kv + full`; missing historical execution
   keys still resolve to `legacy_mha + full` through the compatibility path.
+- `src/train_pointcloud_ffm.py` is the single training entry point for new
+  public profiles and historical YAML files. It accepts `--set`, portable path
+  overrides, `--demo-num`/`--Demo-Num`, and `--dry-run` directly.
 
 ### Known limitations
 
@@ -611,8 +614,9 @@ checkpoints remain loadable without adding YAML keys.
   the corrected loader for exact frozen-buffer semantics.
 - Senseiver and Latent FM have different inference semantics and field/dataset
   archives; their cost numbers are reference context, not strict quality ranks.
-- The code remains concentrated in large source files and exposes historical
-  experiment flags. Cleanup is planned separately and has not been performed.
+- The frozen training engine remains intentionally concentrated to avoid an
+  RNG-sensitive refactor. Completed milestone benchmarks are isolated under
+  `research/benchmarks/` instead of occupying the runtime `src/` surface.
 
 ### Intended use
 
