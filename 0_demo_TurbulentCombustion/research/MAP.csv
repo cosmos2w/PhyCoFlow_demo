@@ -1,0 +1,16 @@
+current_path,classification,public_replacement,status,phase6_candidate
+_CheckNotes/Stage1_5_Efficiency_GoalMode.md,canonical_stage_report,research index,retained,no
+_CheckNotes/Stage6_Codex_CQ_Balanced_Quality_Recovery_GoalMode.md,canonical_stage_report,research index,retained,no
+_CheckNotes/Codex_Stage7_Smart_CQ_GoalMode.md,canonical_stage_report,research index,retained,no
+_CheckNotes/Stage7_smart_cq/RESULTS.md,canonical_scientific_result,research index,retained,no
+_CheckNotes/Stage7_smart_cq/evaluation_1000/RESULTS.md,canonical_scientific_result,research index,retained,no
+research/benchmarks/benchmark_pointcloud_data_path.py,research_benchmark,research index,archived,no
+research/benchmarks/benchmark_pointcloud_scaling.py,research_benchmark,research index,archived,no
+research/benchmarks/benchmark_pointcloud_reconstruction.py,research_benchmark,src/reconstruct_pointcloud.py,archived,no
+research/benchmarks/benchmark_pointcloud_query_microbatch.py,research_benchmark,research index,archived,no
+research/benchmarks/benchmark_pointcloud_cq.py,research_benchmark,scripts/benchmark_cleanup_sanity.py,archived,no
+research/benchmarks/benchmark_cq_persistent_topk_cache.py,research_benchmark,research index,archived,no
+research/benchmarks/benchmark_pointcloud_stage7.py,research_benchmark,scripts/benchmark_cleanup_sanity.py,archived,no
+research/stages/stage7/analyze_stage7_screen.py,research_analyzer,research index,archived,no
+Save_config/pointcloud_ffm/,exact_run_config_history,configs/,retained,review external archive
+src/_OlderVersion/,legacy_baseline_source,legacy profile and Git tags,retained,review checkpoint dependency first

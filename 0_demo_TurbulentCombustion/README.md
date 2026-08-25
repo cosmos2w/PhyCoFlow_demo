@@ -1,5 +1,81 @@
 # Turbulent Combustion Demo
 
+## Recommended PointCloudFFM interface
+
+`GL_rbf_CQ` is the public name of the validated balanced model. Stage 7 freezes
+its scientific architecture and release weights; Stage 8 makes cached K/V with
+full sensor padding its preferred execution. The historical internal name
+`GL_rbf_ENH_CQ` remains accepted so existing YAML files, imports, configs, and
+checkpoints load without key translation.
+
+Run these commands from `0_demo_TurbulentCombustion/` in the `phycoflow_env`
+environment:
+
+```bash
+python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml
+
+python src/reconstruct_pointcloud.py \
+  --config configs/gl_rbf_cq.yaml \
+  --checkpoint ReleaseArtifacts/GL_rbf_CQ_rc1/GL_rbf_CQ_v0.9.0-rc1_e1000_ema_resolved_portable.pt
+
+python src/evaluate_fixed_manifest.py \
+  --config configs/gl_rbf_cq.yaml \
+  --checkpoint ReleaseArtifacts/GL_rbf_CQ_rc1/GL_rbf_CQ_v0.9.0-rc1_e1000_ema_resolved_portable.pt
+```
+
+Use `--data`, `--dataset-stats-path`, `--save-dir`, `--device-ids`, or
+`--set KEY=VALUE` with the training command to override portable defaults.
+`--dry-run` validates identity, paths, and model shape without reading data or
+starting training.
+
+### Public profiles
+
+| Profile | Purpose | Key settings |
+|---|---|---|
+| `configs/gl_rbf_cq.yaml` | recommended balanced model | latent 256; CQ 128/low-rank-64/additive; EMA; sinusoidal FiLM; measurement/support; cached K/V + full padding |
+| `configs/gl_rbf_cq_fast.yaml` | lowest CQ training/inference cost | latent 128; CQ 128/low-rank-64/additive; historical scalar time; no EMA shortcut features; cached K/V + full padding |
+| `configs/legacy_gl_rbf_enh.yaml` | F0 reproduction/checkpoint loading | latent 128; full enhanced GL-RBF query path; historical execution |
+
+All three preserve K=32 Top-K RBF/GLRES semantics and default to the validated
+optimized data path. The binary release checkpoint is intentionally ignored by
+Git; obtain or generate it according to [the artifact manifest](artifacts/MANIFEST.md),
+then verify it with:
+
+```bash
+python scripts/verify_release_artifacts.py
+```
+
+New CQ runs use:
+
+```yaml
+condition_attention_execution: cached_kv
+sensor_attention_padding_mode: full
+```
+
+Set `condition_attention_execution: legacy_mha` only for historical
+reproduction, numerical debugging, or compatibility diagnosis. It remains fully
+supported. Static bucketing and dynamic trimming are not release defaults.
+
+`src/train_pointcloud_ffm.py` is now the single canonical training command for
+both public profiles and historical YAML files. The stable reusable Python
+boundary remains `src/phycoflow_pointcloud/`; `Model.GL_rbf_ENH_CQ` and the
+historical evaluation entry points remain compatibility interfaces. The
+remainder of this README documents the detailed workflow and baselines.
+
+### Checkpoints and cache lifecycle
+
+Research checkpoints may contain live weights plus EMA state. Validation and
+reconstruction select EMA when the checkpoint requests it and repair historical
+EMA shadows with live frozen parameters/buffers. The portable release instead
+contains one already-resolved `model` state and is inference-only; use the
+research checkpoint to resume training.
+
+Persistent Top-K geometry is valid only for the same query/sensor coordinate
+tensors and observation mask (including shape, storage identity/version,
+device, and dtype). Rebuild it whenever those change. Sensor values may change
+while reusing geometry. At `static_features` cache level, the validated path
+performs no new KNN search after geometry construction.
+
 This demo currently contains two related but distinct pipelines:
 
 - the main conditional point-cloud flow-matching workflow for turbulent combustion field reconstruction

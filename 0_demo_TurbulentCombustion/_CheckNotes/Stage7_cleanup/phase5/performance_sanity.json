@@ -1,0 +1,96 @@
+{
+  "device": "cuda:0",
+  "gpu_name": "NVIDIA RTX 6000 Ada Generation",
+  "torch_version": "2.5.1+cu121",
+  "protocol": {
+    "training": "B128/Q4096, query microbatch 2048, EMA, AdamW",
+    "inference": "1M queries, 256 observations, persistent static_features, Euler NFE4"
+  },
+  "rc1_source": "_CheckNotes/Stage7_smart_cq/benchmarks/pretraining_cost.json",
+  "rc1_training": {
+    "label": "Stage7-All256",
+    "status": "ok",
+    "batch_size": 128,
+    "N_query": 4096,
+    "forward_ms": 171.95748388767242,
+    "backward_ms": 214.37035985291004,
+    "grad_clip_ms": 2.189483493566513,
+    "optimizer_ms": 2.6145735755562782,
+    "ema_update_ms": 3.551359288394451,
+    "full_step_ms": 397.0565140247345,
+    "query_microbatch_size": 2048.0,
+    "peak_allocated_mb": 20239.46728515625,
+    "peak_reserved_mb": 22858.0,
+    "full_step_samples_ms": [
+      403.075385838747,
+      397.4307030439377,
+      394.29839979857206,
+      393.2144418358803,
+      397.26363960653543
+    ]
+  },
+  "cleanup_training": {
+    "forward_ms": 164.918290451169,
+    "backward_ms": 210.59221271425486,
+    "grad_clip_ms": 0.9711470454931259,
+    "optimizer_ms": 1.4842387288808823,
+    "ema_update_ms": 2.3848731070756912,
+    "full_step_ms": 381.27855118364096,
+    "query_microbatch_size": 2048.0,
+    "peak_allocated_mb": 20196.53125,
+    "peak_reserved_mb": 22818.0,
+    "full_step_samples_ms": [
+      380.16408775001764,
+      381.7668342962861,
+      380.3300326690078,
+      383.51988326758146,
+      380.6119179353118
+    ]
+  },
+  "rc1_persistent": {
+    "label": "Stage7-All256",
+    "status": "ok",
+    "N_query": 1000000,
+    "N_obs": 256,
+    "solver": "euler",
+    "cache_level": "static_features",
+    "geometry_build_s": 0.056028339080512524,
+    "geometry_cache_mb": 396.728515625,
+    "steady_nfe2_s": 0.20340640284121037,
+    "steady_nfe2_peak_allocated_mb": 3459.39208984375,
+    "steady_nfe2_peak_reserved_mb": 4152.0,
+    "steady_nfe2_condition_context_mb": 0.35302734375,
+    "steady_nfe2_static_query_cache_mb": 1747.13134765625,
+    "steady_nfe4_s": 0.2856589835137129,
+    "steady_nfe4_peak_allocated_mb": 3459.39208984375,
+    "steady_nfe4_peak_reserved_mb": 4152.0,
+    "steady_nfe4_condition_context_mb": 0.35302734375,
+    "steady_nfe4_static_query_cache_mb": 1747.13134765625
+  },
+  "cleanup_persistent": {
+    "label": "GL_rbf_CQ-cleanup",
+    "status": "ok",
+    "N_query": 1000000,
+    "N_obs": 256,
+    "solver": "euler",
+    "cache_level": "static_features",
+    "geometry_build_s": 0.05753213167190552,
+    "geometry_cache_mb": 396.728515625,
+    "steady_nfe2_s": 0.20451780688017607,
+    "steady_nfe2_peak_allocated_mb": 3394.578125,
+    "steady_nfe2_peak_reserved_mb": 4004.0,
+    "steady_nfe2_condition_context_mb": 0.35302734375,
+    "steady_nfe2_static_query_cache_mb": 1747.13134765625,
+    "steady_nfe4_s": 0.2833575149998069,
+    "steady_nfe4_peak_allocated_mb": 3394.578125,
+    "steady_nfe4_peak_reserved_mb": 4004.0,
+    "steady_nfe4_condition_context_mb": 0.35302734375,
+    "steady_nfe4_static_query_cache_mb": 1747.13134765625
+  },
+  "comparison": {
+    "train_step_ratio_cleanup_over_rc1": 0.9602626772668672,
+    "train_memory_ratio_cleanup_over_rc1": 0.9978785985544323,
+    "persistent_nfe4_ratio_cleanup_over_rc1": 0.9919433007651394,
+    "persistent_memory_ratio_cleanup_over_rc1": 0.9812643484287213
+  }
+}

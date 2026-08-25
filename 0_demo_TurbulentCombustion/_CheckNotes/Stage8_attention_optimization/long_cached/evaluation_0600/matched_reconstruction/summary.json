@@ -1,0 +1,220 @@
+{
+  "protocol": {
+    "snapshot_index": 0,
+    "cond_fields": [
+      1
+    ],
+    "n_obs": [
+      256
+    ],
+    "nfe": [
+      1,
+      4
+    ],
+    "ode_solver": "euler",
+    "obs_consistency_mode": "default_hard",
+    "obs_seed": 42,
+    "rf_seed": 1729,
+    "shared_sparse_condition_checksum_sha256": "34a28c7c91bf36425ed86d22927ac03d1bb2053d8d50d71024ee0c84ec570eb3"
+  },
+  "candidates": {
+    "S7B-e200": {
+      "config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/.worktrees/pointcloud-smart-cq-stage7/0_demo_TurbulentCombustion/_CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/run_config.yaml",
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/.worktrees/pointcloud-smart-cq-stage7/0_demo_TurbulentCombustion/_CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_0200.pt",
+      "epoch": 200,
+      "weights": "ema",
+      "prior_checksum_sha256": "bd2a5d9eb7cc1339b97648048110650a0121ba874fc13da87c6917cecd32cd1a",
+      "nfe": {
+        "1": {
+          "field_relative_l2": {
+            "CO": 0.411977618932724,
+            "T": 0.16919063031673431,
+            "U_0": 0.14431731402873993,
+            "U_1": 0.6858626008033752,
+            "p": 0.0217489805072546
+          },
+          "mean_field_relative_l2": 0.2866194289177656,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.6858626008033752
+        },
+        "4": {
+          "field_relative_l2": {
+            "CO": 0.4287743866443634,
+            "T": 0.20101343095302582,
+            "U_0": 0.140092670917511,
+            "U_1": 0.8587873578071594,
+            "p": 0.02667958475649357
+          },
+          "mean_field_relative_l2": 0.33106948621571064,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.8587873578071594
+        }
+      }
+    },
+    "Cached-e200": {
+      "config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage8_attention_optimization/long_cached/Stage8_Cached_GL_rbf_CQ_1K_B128_DemoN9890_20260824_150502/run_config.yaml",
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage8_attention_optimization/long_cached/Stage8_Cached_GL_rbf_CQ_1K_B128_DemoN9890_20260824_150502/epoch_0200.pt",
+      "epoch": 200,
+      "weights": "ema",
+      "prior_checksum_sha256": "bd2a5d9eb7cc1339b97648048110650a0121ba874fc13da87c6917cecd32cd1a",
+      "nfe": {
+        "1": {
+          "field_relative_l2": {
+            "CO": 0.4104118049144745,
+            "T": 0.17426440119743347,
+            "U_0": 0.1381068080663681,
+            "U_1": 0.678825318813324,
+            "p": 0.022954968735575676
+          },
+          "mean_field_relative_l2": 0.28491266034543516,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.678825318813324
+        },
+        "4": {
+          "field_relative_l2": {
+            "CO": 0.42926257848739624,
+            "T": 0.2001161277294159,
+            "U_0": 0.1401621401309967,
+            "U_1": 0.8152036070823669,
+            "p": 0.027383247390389442
+          },
+          "mean_field_relative_l2": 0.32242554016411307,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.8152036070823669
+        }
+      }
+    },
+    "S7B-e400": {
+      "config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/.worktrees/pointcloud-smart-cq-stage7/0_demo_TurbulentCombustion/_CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/run_config.yaml",
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/.worktrees/pointcloud-smart-cq-stage7/0_demo_TurbulentCombustion/_CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_0400.pt",
+      "epoch": 400,
+      "weights": "ema",
+      "prior_checksum_sha256": "bd2a5d9eb7cc1339b97648048110650a0121ba874fc13da87c6917cecd32cd1a",
+      "nfe": {
+        "1": {
+          "field_relative_l2": {
+            "CO": 0.3785802125930786,
+            "T": 0.15779545903205872,
+            "U_0": 0.11023177951574326,
+            "U_1": 0.5448271036148071,
+            "p": 0.014230053871870041
+          },
+          "mean_field_relative_l2": 0.24113292172551154,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.5448271036148071
+        },
+        "4": {
+          "field_relative_l2": {
+            "CO": 0.3918212652206421,
+            "T": 0.17909584939479828,
+            "U_0": 0.1056884303689003,
+            "U_1": 0.6399322152137756,
+            "p": 0.01662028580904007
+          },
+          "mean_field_relative_l2": 0.26663160920143125,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.6399322152137756
+        }
+      }
+    },
+    "Cached-e400": {
+      "config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage8_attention_optimization/long_cached/Stage8_Cached_GL_rbf_CQ_1K_B128_DemoN9890_20260824_150502/run_config.yaml",
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage8_attention_optimization/long_cached/Stage8_Cached_GL_rbf_CQ_1K_B128_DemoN9890_20260824_150502/epoch_0400.pt",
+      "epoch": 400,
+      "weights": "ema",
+      "prior_checksum_sha256": "bd2a5d9eb7cc1339b97648048110650a0121ba874fc13da87c6917cecd32cd1a",
+      "nfe": {
+        "1": {
+          "field_relative_l2": {
+            "CO": 0.3870726525783539,
+            "T": 0.16078145802021027,
+            "U_0": 0.11652878671884537,
+            "U_1": 0.5194758176803589,
+            "p": 0.013983487151563168
+          },
+          "mean_field_relative_l2": 0.2395684404298663,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.5194758176803589
+        },
+        "4": {
+          "field_relative_l2": {
+            "CO": 0.3955634832382202,
+            "T": 0.18066927790641785,
+            "U_0": 0.11339491605758667,
+            "U_1": 0.6535657644271851,
+            "p": 0.016553888097405434
+          },
+          "mean_field_relative_l2": 0.27194946594536307,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.6535657644271851
+        }
+      }
+    },
+    "S7B-e600": {
+      "config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/.worktrees/pointcloud-smart-cq-stage7/0_demo_TurbulentCombustion/_CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/run_config.yaml",
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/.worktrees/pointcloud-smart-cq-stage7/0_demo_TurbulentCombustion/_CheckNotes/Stage7_smart_cq/screen_200/runs/S7_B_All256_200ep_B128_DemoN9702_20260822_224830/epoch_0600.pt",
+      "epoch": 600,
+      "weights": "ema",
+      "prior_checksum_sha256": "bd2a5d9eb7cc1339b97648048110650a0121ba874fc13da87c6917cecd32cd1a",
+      "nfe": {
+        "1": {
+          "field_relative_l2": {
+            "CO": 0.35794496536254883,
+            "T": 0.14823578298091888,
+            "U_0": 0.09378780424594879,
+            "U_1": 0.4952266216278076,
+            "p": 0.012851670384407043
+          },
+          "mean_field_relative_l2": 0.22160936892032623,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.4952266216278076
+        },
+        "4": {
+          "field_relative_l2": {
+            "CO": 0.37405192852020264,
+            "T": 0.1673671156167984,
+            "U_0": 0.09349406510591507,
+            "U_1": 0.5856654047966003,
+            "p": 0.014545459300279617
+          },
+          "mean_field_relative_l2": 0.2470247946679592,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.5856654047966003
+        }
+      }
+    },
+    "Cached-e600": {
+      "config": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage8_attention_optimization/long_cached/Stage8_Cached_GL_rbf_CQ_1K_B128_DemoN9890_20260824_150502/run_config.yaml",
+      "checkpoint": "/home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage8_attention_optimization/long_cached/Stage8_Cached_GL_rbf_CQ_1K_B128_DemoN9890_20260824_150502/epoch_0600.pt",
+      "epoch": 600,
+      "weights": "ema",
+      "prior_checksum_sha256": "bd2a5d9eb7cc1339b97648048110650a0121ba874fc13da87c6917cecd32cd1a",
+      "nfe": {
+        "1": {
+          "field_relative_l2": {
+            "CO": 0.3696003258228302,
+            "T": 0.14636379480361938,
+            "U_0": 0.09725924581289291,
+            "U_1": 0.45757654309272766,
+            "p": 0.012723106890916824
+          },
+          "mean_field_relative_l2": 0.2167046032845974,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.45757654309272766
+        },
+        "4": {
+          "field_relative_l2": {
+            "CO": 0.3824407756328583,
+            "T": 0.16639189422130585,
+            "U_0": 0.09536229074001312,
+            "U_1": 0.555747926235199,
+            "p": 0.014599346555769444
+          },
+          "mean_field_relative_l2": 0.24290844667702913,
+          "worst_field": "U_1",
+          "worst_field_relative_l2": 0.555747926235199
+        }
+      }
+    }
+  }
+}

@@ -16,8 +16,7 @@ from typing import Any, Callable
 import torch
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+from _bootstrap import ROOT
 
 from evaluate_pointcloud_fixed_manifest import build_gl_rbf_ffm
 from train_pointcloud_ffm import checkpoint_model_state

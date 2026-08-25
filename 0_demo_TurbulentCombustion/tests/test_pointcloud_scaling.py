@@ -5,9 +5,9 @@ from pathlib import Path
 
 import torch
 
-SRC = Path(__file__).resolve().parents[1] / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+BENCHMARKS = Path(__file__).resolve().parents[1] / "research" / "benchmarks"
+if str(BENCHMARKS) not in sys.path:
+    sys.path.insert(0, str(BENCHMARKS))
 
 from benchmark_pointcloud_scaling import SCALING_COLUMNS, add_derived_metrics, tensor_megabytes
 

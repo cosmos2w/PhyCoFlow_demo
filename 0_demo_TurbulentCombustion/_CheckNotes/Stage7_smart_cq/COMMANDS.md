@@ -20,7 +20,7 @@ The command intentionally refuses to run with less than 30 GiB free unless expli
 ```bash
 CUDA_VISIBLE_DEVICES=1 KEOPS_CACHE_FOLDER=/tmp/keops_stage7_benchmark_gpu1 \
 conda run --no-capture-output -n phycoflow_env \
-python src/benchmark_pointcloud_stage7.py \
+python research/benchmarks/benchmark_pointcloud_stage7.py \
   --device cuda:0 \
   --f0-config _CheckNotes/Stage6_formal_baseline/F0_frozen_current.yaml \
   --f0-checkpoint /home/wanglz/Desktop/src/PhyCoFlow/0_demo_TurbulentCombustion/_CheckNotes/Stage6_formal_baseline/runs/F0_frozen_current_DemoN9300_20260821_075633/best.pt \

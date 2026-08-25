@@ -55,7 +55,7 @@ printf 'stage=reconstruction_benchmark\n' > "$package/pipeline_status.env"
 stats="Save_TrainedModel/ffm_tc_pointcloud_DemoN51_20260718_083538/dataset_stats.pt"
 CUDA_VISIBLE_DEVICES="$old_gpu" KEOPS_CACHE_FOLDER="/tmp/keops_cq_topk_ab_bench_old_gpu${old_gpu}" \
   conda run --no-capture-output -n phycoflow_env \
-  python "$current_project/src/benchmark_cq_persistent_topk_cache.py" \
+  python "$current_project/research/benchmarks/benchmark_cq_persistent_topk_cache.py" \
   --config "$old_run/run_config.yaml" --checkpoint "$old_run/epoch_0200.pt" \
   --stats-path "$stats" --device cuda:0 --n-points 250000 1000000 \
   --nfe 1 2 4 8 --n-obs 256 --chunk-size 8192 --repeats 3 --warmup-repeats 1 \
@@ -66,7 +66,7 @@ old_bench_pid=$!
 
 CUDA_VISIBLE_DEVICES="$new_gpu" KEOPS_CACHE_FOLDER="/tmp/keops_cq_topk_ab_bench_new_gpu${new_gpu}" \
   conda run --no-capture-output -n phycoflow_env \
-  python "$current_project/src/benchmark_cq_persistent_topk_cache.py" \
+  python "$current_project/research/benchmarks/benchmark_cq_persistent_topk_cache.py" \
   --config "$new_run/run_config.yaml" --checkpoint "$new_run/epoch_0200.pt" \
   --stats-path "$stats" --device cuda:0 --n-points 250000 1000000 \
   --nfe 1 2 4 8 --n-obs 256 --chunk-size 8192 --repeats 3 --warmup-repeats 1 \

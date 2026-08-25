@@ -11,6 +11,8 @@ from pathlib import Path
 import torch
 import yaml
 
+import _bootstrap  # noqa: F401  # adds the runtime src/ directory
+
 from helpers import TurbulentCombustionH5Dataset, build_sparse_condition_legacy
 from pointcloud_data_path import PointCloudBatchCollator, resolve_data_path_config
 

@@ -369,6 +369,15 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
                 cfg, "latent_sensor_reinject", True
             ),
             latent_reinject_every=cfg.get("latent_reinject_every", 1),
+            condition_attention_execution=cfg.get(
+                "condition_attention_execution", "legacy_mha"
+            ),
+            sensor_attention_padding_mode=cfg.get(
+                "sensor_attention_padding_mode", "full"
+            ),
+            sensor_attention_buckets=cfg.get(
+                "sensor_attention_buckets", [256, 320, 384]
+            ),
             glres_scale_init=_cfg_get_not_none(cfg, "glres_scale_init", 1e-2),
             cq_query_dim=cfg.get("cq_query_dim", 128),
             cq_readout_mode=cfg.get("cq_readout_mode", "lowrank"),
@@ -434,6 +443,15 @@ def _build_model(cfg: dict, dataset) -> torch.nn.Module:
             sensor_coord_encoding=sensor_coord_encoding,
             latent_sensor_reinject=latent_sensor_reinject,
             latent_reinject_every=cfg.get("latent_reinject_every", 1),
+            condition_attention_execution=cfg.get(
+                "condition_attention_execution", "legacy_mha"
+            ),
+            sensor_attention_padding_mode=cfg.get(
+                "sensor_attention_padding_mode", "full"
+            ),
+            sensor_attention_buckets=cfg.get(
+                "sensor_attention_buckets", [256, 320, 384]
+            ),
             query_latent_readout=query_latent_readout,
             query_readout_type=query_readout_type,
             query_readout_scale_init=query_readout_scale_init,

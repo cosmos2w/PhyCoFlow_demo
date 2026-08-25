@@ -19,6 +19,8 @@ from typing import Any
 import torch
 import yaml
 
+import _bootstrap  # noqa: F401  # adds the runtime src/ directory
+
 from helpers import TurbulentCombustionH5Dataset
 from persistent_topk_geometry_cache import (
     build_persistent_topk_geometry_cache,

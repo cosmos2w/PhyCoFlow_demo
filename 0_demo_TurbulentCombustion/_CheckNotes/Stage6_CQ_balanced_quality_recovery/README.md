@@ -61,7 +61,7 @@ Run batch-1 scaling and persistent inference:
 ```bash
 CUDA_VISIBLE_DEVICES=0 KEOPS_CACHE_FOLDER=/tmp/keops_stage6_cq_balanced_gpu0 \
 conda run --no-capture-output -n phycoflow_env \
-python src/benchmark_pointcloud_cq.py \
+python research/benchmarks/benchmark_pointcloud_cq.py \
   --device cuda:0 --query-sizes 4096 16384 65536 --batch-size 1 \
   --n-obs 256 --iterations 5 --warmup 2 --component-iterations 5 \
   --million-query-count 1000000 --million-chunk-size 8192 \

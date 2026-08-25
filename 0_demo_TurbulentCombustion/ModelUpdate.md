@@ -1,6 +1,7 @@
 # GL_rbf_CQ model update
 
-Release candidate: `GL_rbf_CQ v0.9.0-rc1`  
+Execution release candidate: `GL_rbf_CQ v0.9.0-rc2`  
+Release model artifact: unchanged Stage-7 epoch-1000 RC1 weights  
 Frozen internal backbone identifier: `GL_rbf_ENH_CQ`  
 Scope: PointCloud Flow Matching for sparse multi-field turbulent-combustion reconstruction
 
@@ -49,6 +50,11 @@ The public recommendation is therefore:
 - **`GL_rbf_CQ-fast`** for latency-first CQ-LR-128 use where the validated
   quality penalty is acceptable; and
 - **`GL_rbf_ENH`** only as the legacy/reference profile.
+
+The preferred GL_rbf_CQ execution is cached sensor K/V with full sensor
+padding. It preserves the Stage-7 parameter schema and release weights while
+reducing four repeated K/V projections to one. `legacy_mha` remains a supported
+compatibility/debug execution.
 
 ![Architecture and evolution](figures/generated/gl_rbf_cq_rc1_architecture/gl_rbf_cq_rc1_architecture.svg)
 
@@ -373,6 +379,28 @@ identity and gradients, cached/microbatched execution, raw measurement/support
 hand calculations, latent 128/256, persistent geometry, zero-extra-KNN, and
 monolithic-versus-query-microbatch equivalence.
 
+### Stage 8 — preferred condition-attention execution
+
+Stage 8 changes execution only. The validated public path is:
+
+```yaml
+condition_attention_execution: cached_kv
+sensor_attention_padding_mode: full
+```
+
+The epoch-600 controlled RF means are `0.276424` for historical full-padding
+MHA execution and `0.276226` for cached/full; their paired 95% difference
+interval is `[-0.00255, 0.00215]`. On the matched reconstruction snapshot,
+cached/full improves the epoch-600 mean relative L2 by 2.21% at Euler NFE1 and
+1.67% at Euler NFE4. Over epochs 250–600 it reduces mean training time by
+6.11%; the isolated B128/Q4096 benchmark reports 6.38% faster steps and 2.41%
+lower peak allocation, with K/V projections reduced from four to one.
+
+EMA decay, update counts, checkpoint selection, and resume behavior remain
+unchanged. Static bucketing and dynamic trimming are not promoted. The existing
+epoch-1000 portable checkpoint remains the release model artifact and strict-
+loads under both cached and legacy execution.
+
 ![Convergence and fixed-manifest quality](figures/generated/gl_rbf_cq_rc1_convergence/gl_rbf_cq_rc1_convergence.svg)
 
 ## 11. Accepted and rejected decisions
@@ -388,6 +416,9 @@ monolithic-versus-query-microbatch equivalence.
 | Structured-concat 224-D fallback | Rejected before training | Slower than F0 and missed memory gate. No larger sweep opened. |
 | Stage 7 Cond128 | Rejected as default | Fast, but did not show a clear quality improvement over F0 at epoch 200. |
 | Stage 7 All256 | Accepted as `GL_rbf_CQ` | Best balanced quality/cost point; exact e1000 milestone selected. |
+| Cached K/V + full padding | Accepted execution default | Mature RF quality matched; 6.1–6.4% faster and 2.41% lower peak allocation. |
+| Static sensor bucketing | Rejected as default | Slower than cached/full despite reduced padded arithmetic. |
+| Dynamic sensor trimming | Rejected | Per-count dispatch was substantially slower. |
 | Explicit SDPA attention rewrite | Rejected as default | Numerical parity passed, but it was 0.7% slower than current MHA-mask execution. |
 | Fused AdamW | Optional only | 1.8% step improvement and one-step parity; not mixed into scientific comparison. |
 | Senseiver / Latent FM modification | Out of scope | Kept as reference baselines with different inference semantics. |
@@ -496,6 +527,9 @@ model_ema_enabled: true
 model_ema_decay: 0.999
 model_ema_eval: true
 
+condition_attention_execution: cached_kv
+sensor_attention_padding_mode: full
+
 gather_mode: topk_rbf_glres
 gather_topk: 32
 neighbor_backend: keops
@@ -560,6 +594,11 @@ checkpoints remain loadable without adding YAML keys.
   KeOps, learned sigma, and GLRES are frozen for the public CQ presets.
 - Persistent geometry and static-feature caches remain condition/query-static.
 - Kernel experiments are separate from the scientific architecture result.
+- Public CQ configs select `cached_kv + full`; missing historical execution
+  keys still resolve to `legacy_mha + full` through the compatibility path.
+- `src/train_pointcloud_ffm.py` is the single training entry point for new
+  public profiles and historical YAML files. It accepts `--set`, portable path
+  overrides, `--demo-num`/`--Demo-Num`, and `--dry-run` directly.
 
 ### Known limitations
 
@@ -575,8 +614,9 @@ checkpoints remain loadable without adding YAML keys.
   the corrected loader for exact frozen-buffer semantics.
 - Senseiver and Latent FM have different inference semantics and field/dataset
   archives; their cost numbers are reference context, not strict quality ranks.
-- The code remains concentrated in large source files and exposes historical
-  experiment flags. Cleanup is planned separately and has not been performed.
+- The frozen training engine remains intentionally concentrated to avoid an
+  RNG-sensitive refactor. Completed milestone benchmarks are isolated under
+  `research/benchmarks/` instead of occupying the runtime `src/` surface.
 
 ### Intended use
 
@@ -591,6 +631,8 @@ to audit compatibility.
 - Worktree/evidence audit: `_CheckNotes/GL_rbf_CQ_RC1_WORKTREE_AUDIT.md`
 - Freeze record: `_CheckNotes/GL_rbf_CQ_RC1_FREEZE.md`
 - Stage 7 final result: `_CheckNotes/Stage7_smart_cq/evaluation_1000/RESULTS.md`
+- Stage 8 final execution result:
+  `_CheckNotes/Stage8_attention_optimization/long_cached/evaluation_0600/RESULTS.md`
 - Machine-readable Stage 7 summary:
   `_CheckNotes/Stage7_smart_cq/evaluation_1000/final_summary.json`
 - Three-snapshot reconstruction:
@@ -607,6 +649,6 @@ to audit compatibility.
 - Figure contracts and vector/source data:
   `figures/generated/gl_rbf_cq_rc1_*/`
 
-The Stage 7 implementation is frozen here as a validated RC. The subsequent
-cleanup should improve public structure and portability while proving numerical
-and checkpoint compatibility against this tag.
+The scientific model and release weights are frozen at the validated Stage-7
+result. Stage 8 freezes cached/full as the preferred execution baseline; future
+work is release-oriented cleanup and 3-D application work, not model redesign.
