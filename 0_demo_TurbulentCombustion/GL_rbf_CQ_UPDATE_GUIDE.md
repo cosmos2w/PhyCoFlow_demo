@@ -64,6 +64,17 @@ The lightweight `Model.py` shim serves GL-RBF/CQ directly. It lazily references
 `_legacy_model_full.py` only for obsolete MLP/Perceiver/FNO symbols. A GL-only
 downstream project does not need that legacy baseline file or `neuralop`.
 
+## Portable snapshot integrity
+
+The manifest-declared portable core is a byte-level vendored snapshot, not a
+source tree to reformat. Copy every `portable_core_files` entry at its exact
+relative path, then compare each source/destination with `cmp` and SHA256
+before importing it; record the manifest hash and the per-file hashes in the
+migration evidence. A missing or changed byte is a failed gate. Exclude the
+vendored `src/phycoflow_pointcloud` snapshot from Ruff, Black, and other
+rewrite/format tools, while continuing to lint and format the downstream
+adapter and integration code.
+
 ## Tensor-level integration contract
 
 The downstream project owns loading, normalization, field order, sampling, and
@@ -96,6 +107,34 @@ Rules:
 
 The core has no field-name table and no HDF5 assumption.
 
+## Semantic checkpoint and data identity
+
+Tensor shapes and state-dict keys are necessary but not sufficient for loading
+release weights. Before calling `load_state_dict(..., strict=True)`, validate
+the semantic contract from checkpoint metadata and the downstream dataset:
+
+- Compare the exact ordered field identity list (`field_names` in the release
+  checkpoint or `data_spec.field_names` in a native checkpoint) with the
+  downstream `DataSpec.field_names`, and verify `n_fields`. Equal channel
+  counts do not make a different name or order safe; reject that checkpoint
+  before loading any state tensor.
+- Compare the normalization contract, including method, training-split
+  provenance/dataset fingerprint when present, and the exact per-field
+  offsets/scales or digest. The release checkpoint's `mean`/`std` metadata
+  must match the downstream verified normalizer; missing semantic metadata is
+  not evidence of compatibility.
+- Also verify model/backbone identity, coordinate convention, and the
+  expected state schema/checksum. These checks precede the strict tensor load.
+
+On any semantic mismatch, reject the release checkpoint; do not permute
+channels, remap keys, or use `strict=False`. A documented fresh-start
+downstream benchmark is allowed when the downstream field schema or
+normalization intentionally differs: construct the model from that downstream
+contract and train from scratch. The portable package and state-schema gates
+remain strict, and execution-variant arms (for example B/C) must still use
+the same seed/config and pass their matched seeded-initialization identity
+check before training.
+
 ## Old-to-new mapping
 
 | Older project symbol/config | Portable target |
@@ -110,6 +149,32 @@ The core has no field-name table and no HDF5 assumption.
 | new GL_rbf_CQ run | explicitly `cached_kv + full` |
 
 Historical checkpoint keys are unchanged. Do not write a key-renaming migration.
+
+## Generic trainer and evaluator lifecycle
+
+Keep lifecycle behavior model-agnostic; register optional hooks instead of
+branching on a model name. For an adapter that supports query microbatching:
+
+- The generic trainer calls
+  `training_backward(batch, *, loss_scale, start_phase=None, end_phase=None)`
+  when present. The adapter owns the bridge, condition-context preparation,
+  and query-chunk forward/backward loop; when configured, it reuses one
+  condition context across query chunks, weights each chunk by the total
+  element count, and performs exactly one backward per chunk. Phase callbacks
+  must bracket bridge/context preparation and each forward/backward segment;
+  the trainer must not call `training_loss().backward()` a second time.
+- `loss_scale` is applied exactly once. The generic trainer clears gradients,
+  checks finite loss/gradients, and clips; the adapter must explicitly reject
+  unsupported scale or adaptive-scaling requests. The B/C contract is
+  `loss_scale=1` with adaptive scaling disabled.
+- After a successful optimizer update, call `after_optimizer_step()`. Put
+  resumable EMA state in `training_aux_state_dict()` and restore it through
+  `load_training_aux_state_dict(state)` with strict presence/schema checks.
+  The evaluator uses `evaluation_weight_context()` for configured weights;
+  expose an explicit `configured` versus `live` selection, where `live`
+  bypasses EMA and `configured` follows the model's EMA-evaluation setting.
+  Do not special-case `GL_rbf_CQ` (or any other model name) in the trainer or
+  evaluator.
 
 ## Minimal config patch
 
@@ -145,24 +210,32 @@ counts, split ratios, batch size, or demo identifiers from the combustion YAML.
    persistent-cache helpers. Do not change the loader yet.
 3. Copy the manifest-declared portable package as a unit. Do not copy only
    `gl_rbf_cq.py`; it depends on the package-local attention, cache, prior,
-   observation, checkpoint, and RF components.
+   observation, checkpoint, and RF components. Verify byte identity and
+   checksums for every copied manifest file, and configure formatters/linters
+   to exclude the vendored snapshot.
 4. Add `gl_rbf_cq_core.yaml` and implement an explicit config merge where
    downstream dataset/training values override model defaults.
 5. Replace model construction with
    `build_pointcloud_model(merged_config, n_fields=len(downstream_fields))`.
 6. Adapt the existing batch into the tensor contract above. Keep the existing
    field order and normalization exactly unchanged.
-7. Strict-load the old checkpoint. Stop if there are missing or unexpected
-   state keys; do not add a permissive loader.
-8. Compare old/new seeded forward output and gradients in FP32 using the same
-   tensors and loss.
-9. Compare monolithic and query-microbatched RF loss/gradients using one shared
-   random bridge seed.
-10. Compare legacy and cached-streamed reconstruction with identical prior RNG,
+7. Before any checkpoint load, apply the semantic field-identity and
+   normalization checks above. Stop on a same-count field reorder/name change,
+   normalization mismatch, or missing identity metadata.
+8. If the semantic gate passes, strict-load the checkpoint and stop on any
+   missing or unexpected state keys; do not add a permissive loader. If the
+   downstream contract intentionally differs, record the rejected release
+   checkpoint and use the documented fresh-start path instead.
+9. For a compatible checkpoint, compare old/new seeded forward output and
+   gradients in FP32 using the same tensors and loss. For a fresh-start
+   execution comparison, verify the matched B/C seeded initial state first.
+10. Compare monolithic and query-microbatched RF loss/gradients using one
+    shared random bridge seed and the exact configured loss scale.
+11. Compare legacy and cached-streamed reconstruction with identical prior RNG,
     solver, NFE, observation mode, and query tensors.
-11. Build persistent Top-K once, instrument `_get_topk_neighbors`, and prove
+12. Build persistent Top-K once, instrument `_get_topk_neighbors`, and prove
     zero additional KNN calls during cached reconstruction.
-12. Only after all gates pass should the downstream training/evaluation wrapper
+13. Only after all gates pass should the downstream training/evaluation wrapper
     select the new public model name. Keep a `legacy_mha` debug override.
 
 ## Required verification gates
@@ -173,12 +246,20 @@ counts, split ratios, batch size, or demo identifiers from the combustion YAML.
 - At least two supported field counts, including the downstream count.
 - Mixed valid sensor counts in one padded batch.
 - Cached-K/V execution and `legacy_mha` diagnostic construction.
-- Strict checkpoint load and identical state schema.
+- Byte-identical/checksum-verified portable snapshot with formatters excluded.
+- Semantic field identity/order and normalization validation before strict load;
+  equal `n_fields` with different positional meaning must fail explicitly.
+- Strict checkpoint load and identical state schema when the semantic contract
+  matches, or a recorded fresh-start gate when it intentionally does not.
 - Seeded old/new forward, loss, every parameter gradient, and reconstruction
   within the established RC tolerances.
 - Monolithic/query-microbatch RF equivalence.
 - Persistent geometry/static-feature equivalence and zero post-build KNN calls.
-- EMA save/load/resume and evaluation selection if downstream training uses EMA.
+- Exact loss-scale behavior, query-condition reuse, and no-double-backward
+  lifecycle integration.
+- EMA save/load/resume and configured/live evaluation selection without
+  model-name branching.
+- Matched seeded B/C initialization identity for execution-variant benchmarks.
 - Full downstream regression suite.
 
 Record torch, CUDA, KeOps, dtype, device, seeds, and solver/NFE in evidence.
@@ -186,7 +267,12 @@ Record torch, CUDA, KeOps, dtype, device, seeds, and solver/NFE in evidence.
 ## Explicit do-not-do list
 
 - Do not retrain to hide a migration mismatch.
-- Do not rename state-dict keys or load with `strict=False`.
+- Do not reuse release weights after a field-identity/order or normalization
+  mismatch, even when `n_fields` and tensor shapes match; use the documented
+  fresh-start path and record the reason.
+- Do not rename state-dict keys, permute channels, or load with `strict=False`.
+- Do not edit, format, or rewrite the byte-identical vendored portable snapshot;
+  exclude it from downstream rewrite tools.
 - Do not widen CQ, change latent count/blocks, K, sigma, FiLM, measurement/support,
   RF objective, prior, EMA semantics, or solver behavior.
 - Do not make condition latents or static caches time-dependent.
@@ -194,6 +280,8 @@ Record torch, CUDA, KeOps, dtype, device, seeds, and solver/NFE in evidence.
 - Do not promote static buckets or dynamic trimming.
 - Do not copy the combustion HDF5 loader, field names, normalization, sampling,
   visualization, or research scripts into a different project by default.
+- Do not apply model-name branches in generic trainer/evaluator lifecycle code;
+  use the optional hook contract and explicit configured/live selection.
 - Do not mix optimizer/kernel experiments into the portability comparison.
 - Do not modify the downstream project until its own migration task begins.
 
