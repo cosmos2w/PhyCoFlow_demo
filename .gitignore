@@ -18,6 +18,9 @@ Save_PhyCoEval/
 /datagen/
 /figures/
 
+# Standalone repository retained in-place locally
+/Proj_MultiFieldReconstruction/
+
 # Python and test caches
 __pycache__/
 *.py[cod]
