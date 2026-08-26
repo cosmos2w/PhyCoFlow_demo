@@ -1,4 +1,0 @@
-model,checkpoint_epoch,representation,executable_parameters,trainable_parameters,train_batch,train_queries,train_step_ms,projected_compute_epoch_s,train_peak_allocated_mib,inference_points,inference_nfe,inference_ms,inference_peak_allocated_mib,reconstruction_scope,reconstruction_primary_mean,common_unobserved_CO_U1_p_mean
-Senseiver,5000,deterministic_one_pass,8339621,8339621,128,4096,213.055263,15.126924,15327.647461,40300,1,16.233365,601.068848,archived_1000_snapshot_CH4_CO_T_U1_p_unobserved_mean,0.142990,0.150352
-Latent FM,5000,compressed_latent_RF,88539525,81014016,128,4096,356.802410,25.332971,9330.076172,40300,4,31.009814,1638.974609,archived_1000_snapshot_CH4_CO_T_U1_p_unobserved_mean,0.453104,0.507183
-Stage7-All256,1000,full_function_space_RF,5490617,5490617,128,4096,397.056514,28.191012,20239.467285,40300,4,33.109277,374.311523,fixed_one_snapshot_CO_T_U0_U1_p_five_field_mean,0.234270,0.308279

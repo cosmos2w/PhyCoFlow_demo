@@ -12,12 +12,11 @@
 Save_PhyCoEval/
 /.agents/
 
-# Dataset-generation source code, notebooks, tests, and Markdown under
-# datagen/ are versioned. Only the machine-local storage link is ignored;
-# it points to the large raw/processed datasets under /data/wanglz/.
-/datagen/data
-/datagen/**/outputs/
-/datagen/**/.ipynb_checkpoints/
+# Local-only project trees not tracked on this branch
+/0_demo_TurbulentCombustion/
+/1_SubTask_SuperResolution/
+/datagen/
+/figures/
 
 # Python and test caches
 __pycache__/
@@ -27,7 +26,6 @@ __pycache__/
 .ruff_cache/
 
 # Generated figures and trained-model directories
-/figures/generated/
 Save_TrainedModel/
 
 # Large numerical datasets, checkpoints, and archives

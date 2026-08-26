@@ -1,8 +1,0 @@
-# Local linked worktrees live outside this checkout's tracked source tree.
-.worktrees/
-
-# Transient run coordination and high-volume append logs.
-**/active*.env
-**/pipeline_status.env
-**/data_path_diagnostics.jsonl
-**/*gpu_monitor.stderr

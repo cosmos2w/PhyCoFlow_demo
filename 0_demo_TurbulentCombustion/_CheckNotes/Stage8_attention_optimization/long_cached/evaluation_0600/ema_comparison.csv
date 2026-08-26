@@ -1,7 +1,0 @@
-epoch,global_step,ema_num_updates,ema_decay,ema_enabled,ema_eval,best_selection_weights,shadow_tensors,ema_live_relative_l2,candidate
-200,14200,14200,0.999,True,True,ema,148,0.013953650711056432,Stage7-All256
-200,14200,14200,0.999,True,True,ema,148,0.01400549704918006,Stage8-Cached
-400,28400,28400,0.999,True,True,ema,148,0.007867296203723896,Stage7-All256
-400,28400,28400,0.999,True,True,ema,148,0.007996512817820831,Stage8-Cached
-600,42600,42600,0.999,True,True,ema,148,0.004095626257055343,Stage7-All256
-600,42600,42600,0.999,True,True,ema,148,0.004109085229819208,Stage8-Cached
