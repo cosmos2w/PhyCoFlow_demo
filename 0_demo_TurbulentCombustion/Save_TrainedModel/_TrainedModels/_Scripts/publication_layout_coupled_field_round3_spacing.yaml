@@ -1,0 +1,119 @@
+# Native full-page layout for coupled-field reconstruction validation.
+# All dimensions and selections are deliberately editable without code changes.
+name: CoupledFieldReconstruction
+# Reference values only.  Runtime width is strictly COMPOSITE_WIDTH_IN and
+# runtime height is derived from physical content rows/margins/gaps in
+# global_style.py; changing this YAML cannot create chapter-to-chapter drift.
+width_in: 7.2
+height_in: 9.1
+# ABSOLUTE LOWER-ROW HEIGHT CONTROL (inches). Panel b receives this complete
+# physical height; the combined Panel-c + Panel-d column automatically receives
+# the same height. The overall canvas height grows or shrinks by the same amount,
+# while Panel a and the strict 7.2-in canvas width remain unchanged.
+lower_row_content_height_in: 5.35
+# Panel e (joint PDFs) is retained for supplementary use but is intentionally
+# removed from this main publication composition.  Panel a's physical height,
+# top margin, and protected lower gap are now locked in PANEL_A_LAYOUT at the
+# front of 91_assemble_coupled_field_publication.py.  Only this structural
+# b-versus-(c,d) width allocation remains panel-specific.
+outer_middle_width_ratios: [0.34, 0.66]
+# The right column is split at runtime using PANEL_C_D_HEIGHT_RATIOS in
+# global_style.py. Panel c's top and Panel d's bottom match the corresponding
+# full-height Panel-b boundaries exactly for any chosen ratio. Each master
+# panel owns its internal rows while both reuse identical column spacing.
+
+qualitative:
+  snapshot_index: 0
+  # Informational mirror only: the runtime authority is
+  # PANEL_A_LAYOUT['main_fields'] in the assembly script.
+  fields: [CH4, p, U1]
+
+  conditions: [Cond_T, Cond_TU1, Cond_COTU1P]
+  proposed_model: DMF-Gen
+  generative_preference: [Latent FM, SiT]
+  deterministic_preference: [Senseiver, Geo-FNO]
+  # Optional T-only SiT column placed immediately after the representative
+  # generative model.  Keep false to reproduce the current seven-image-column
+  # Panel-A layout exactly; true uses the assembler's compact eight-column mode.
+  include_sit_comparison: true
+  x_compression: 0.45
+  contour_levels: 25
+  # Field and absolute-error colormaps are centralized in COLORMAP_CONFIG in
+  # the assembly script so Panel a and its SI panels cannot drift apart.
+  # Physical reconstruction limits are truth-derived and robustly clipped;
+  # values outside the range use the colourbar edge colours.
+  value_percentiles: [1.0, 99.0]
+  robust_error_percentile: 99.0
+  # Equal image boxes keep reconstruction and absolute-error maps visually
+  # comparable; the reduced panel allocation leaves deliberate inter-field air.
+  reconstruction_to_error_height: [1.0, 1.0]
+
+# Round-1 revision relative to the exact baseline reproduction. The added
+# Panel-a height is propagated into the adaptive composite canvas, leaving the
+# fixed 5-inch lower validation row unchanged.
+panel_a_layout_overrides:
+  content_height_in: 2.68
+  prediction_error_hspace: 0.16
+  colorbar_extend: neither
+  colorbar_title_loc: right
+  master_lower_gap_in: 0.30
+  grid_wspace: 0.065
+  sit_enabled_grid_wspace: 0.055
+  composite_right_pad_ratio: 0.020
+
+# Round-2 typography hierarchy: a moderate increase from the baseline, kept
+# well below the failed 7--8.5 pt dense-text experiment.
+typography_overrides_pt:
+  size_panel_label: 9.0
+  size_subplot_title: 6.6
+  size_axis_label: 6.1
+  size_tick_label: 5.9
+  size_legend: 5.8
+  size_annotation: 5.4
+
+# Reclaim horizontal room for larger labels without changing the 7.2-inch
+# composite width or the internal logic of Panels b--d.
+composite_layout_overrides:
+  panel_wspace_in: 0.50
+  bottom_margin_in: 0.33
+  composite_margin_left_in: 0.29
+  composite_margin_right_in: 0.06
+  panel_c_d_gap_in: 0.55
+
+panel_b_layout_overrides:
+  condition_hspace: 0.16
+
+panel_c_layout_overrides:
+  grid_hspace: 0.30
+
+panel_d_layout_overrides:
+  x_label_pad: 3.0
+  row_hspace: 0.21
+  cond_t_xlabel: "JSD of joint PDF; conditioned on 256 T sensors (0.62% coverage)"
+  dmf_first_at_top: true
+
+spectral:
+  condition: Cond_T
+  snapshot_index: 0
+  x_label: "Wavenumber; conditioned on 256 T sensors (0.62% coverage)"
+  # Change only field_selection to switch the complete paired bar/spectrum
+  # triplet.  The former Y_CO column remains a reproducible backup option.
+  field_selection: main
+  field_options:
+    main: [CH4, p, U1]
+    y_co_backup: [CH4, CO, U1]
+  show_all_models_in_lsd: true
+
+joint_pdf:
+  condition: Cond_T
+  pair: T-U1
+  snapshot_mode: fixed_random_aggregate
+  snapshot_count: 5
+  snapshot_seed: 42
+  fixed_columns: [Ground truth, DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+
+export:
+  formats: [pdf, svg, png]
+  png_dpi: 600
+  # Preserve figure-coordinate panel letters and group headings safely.
+  tight_pad_inches: 0.10

@@ -1,0 +1,49 @@
+
+#----------------------------------------------------------
+
+# Notes: Changing to V1 version: multi-field sparse encoding
+
+#----------------------------------------------------------
+
+Demo_Num: 3
+
+data: "Dataset/Merged_CH4COTU1P.h5"
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+seed : 42
+epochs : 5000
+batch_size : 128
+lr : 2.0e-4
+weight_decay : 1.0e-6
+train_ratio : 0.9
+time_stride : 1
+num_workers : 4
+
+hidden_dim : 256
+cond_dim : 128
+field_embed_dim : 128
+sigma_min : 1.0e-4
+rbf_sigma : 0.05
+
+n_query_points : 4096
+prior : "rff"   # choices=["iid", "rff"], idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
+rff_features : 256
+rff_lengthscale : 0.15
+
+eval_every : 5
+save_every : 50
+n_steps_generation : 100
+
+# From older version in V0 ---------------------------
+n_obs_min : 128
+n_obs_max : 512
+cond_field : 2  # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+# ----------------------------------------------
+
+# ===== generalized training conditioning for V1 =====
+cond_fields :   [2, 3]      # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+n_obs_min_list: [128, 128]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
+n_obs_max_list: [512, 512]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
+
+vis_cond_fields:           # help="Visualization conditioned fields. Defaults to cond_fields if None
+vis_n_obs_list:            # Visualization exact sensors per field. Defaults to n_obs_max_list.

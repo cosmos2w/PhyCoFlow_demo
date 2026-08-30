@@ -1,0 +1,183 @@
+# ------------------------------------------------------------
+# RAM fine-tuning config for PointCloudFFM in TurbulentCombustion
+# Model architecture is loaded from source_run_dir/run_config.yaml.
+
+# RAM is endpoint sampling + scalar reward + analytic re-noising + detached
+# velocity MSE target. It keeps the base PhyCoFlow convention:
+#   x_t = (1 - t) * z + t * x
+#   target velocity = x - z
+#
+# Batch structure:
+# - B * G endpoints are sampled per train batch, where B=batch_size and
+#   G=num_samples_per_condition.
+# - B * G * K noised velocity targets are used per train batch, where
+#   K=num_loss_targets_per_endpoint.
+
+# ------------------------------------------------------------
+
+Demo_Num: 3
+seed: 42
+device_ids: [2]
+
+# Source pretrained run.
+# If source_run_dir is null, train_finetune.py finds the latest source_Demo_Num run.
+source_run_dir: null
+source_Demo_Num: 15
+source_checkpoint: "last"
+
+data: "Dataset/Merged_CH4COTU1P.h5"
+train_ratio: 0.9
+# Fine-tuning epoch downsampling. The train/val/test split still uses
+# train_ratio above; this only draws a fresh random fraction of train cases each
+# RAM epoch to shorten fine-tuning passes.
+train_ratio_downsample: 0.10
+time_stride: 1
+num_workers: 4
+
+save_dir: "Save_TrainedModel/ram_tc_pointcloud"
+
+# Sparse observations. If null, inherit from source config.
+cond_fields: null
+n_obs_min_list: null
+n_obs_max_list: null
+
+# Fine-tuning modes:
+#   head_glres             = full-copy safe adaptation for GL_rbf/topk_rbf_glres
+#   all                    = full-copy full model fine-tuning
+#   lora_head_glres        = memory-efficient GL_rbf RAM mode
+#   lora_all_linear_glrbf  = LoRA on all Linear layers under model.model
+finetune_mode: "lora_all_linear_glrbf"
+
+# LoRA parameters used only when finetune_mode starts with "lora_".
+# LoRA target scope is derived from finetune_mode:
+#   lora_head_glres        -> head_glres
+#   lora_all_linear_glrbf  -> all_linear_glrbf
+# Keep lora_target_scope null unless you want a backward-compatible sanity
+# check that must match the selected finetune_mode.
+lora_rank: 8
+lora_alpha: 16
+lora_target_scope: null
+
+# Eval EMA memory control for non-LoRA full-copy mode.
+# LoRA mode uses an evaluation adapter and does not create a separate eval model.
+use_eval_ema: true
+eval_ema_device: "cpu"
+
+# Endpoint sampling from old EMA policy.
+ram_endpoint_steps: 4
+ode_solver: "euler"
+# For reconstruction RAM, keep RAM endpoint sampling and rollout sampling on
+# the same sparse-observation consistency rule unless explicitly disabled below.
+ram_obs_consistency_mode: "endpoint_smooth" # choices=["none", "default_hard", "endpoint", "endpoint_smooth"]
+align_ram_and_rollout_obs_consistency: true
+obs_consistency_strength: 1.0
+obs_consistency_sigma: 0.05
+obs_consistency_schedule_power: 2.0
+obs_consistency_final_clamp: true
+
+# RAM batch structure.
+ram_epochs: 10000
+max_train_batches: null
+batch_size: 32
+# num_samples_per_condition controls 
+# how many competing generated samples RAM compares under the same condition
+num_samples_per_condition: 8
+# num_loss_targets_per_endpoint controls how many training targets we
+# create per generated endpoint by re-noising 
+num_loss_targets_per_endpoint: 4
+
+# RAM memory controls.
+# Endpoint sampling produces full-grid x_end. Reward/coherence can optionally
+# use a uniform point subset below, while velocity matching uses a query subset
+# like base PointCloudFFM training.
+ram_n_query_points: 1024
+ram_query_sampling: "obs_mix"
+ram_query_sample_near_ratio: 0.25
+ram_query_sample_far_ratio: 0.25
+ram_query_sample_sigma_ratio: 0.05
+# Increase these two if GPU memory allows. The endpoint microbatch is typically the main bottleneck, as it processes full-grid samples and feeds them into the reward model.
+ram_endpoint_microbatch_size: 72  # This controls the full-field endpoint generation stage.
+ram_loss_microbatch_size: 144 # This controls how many noised velocity targets to process in one model call group
+
+# Reward point subsampling. null means full-grid reward; uniform uses the same
+# random point subset for x_end and x_ref before scalar coherence is computed.
+# This downsampling may only be applicable to GlobalDistCoherence !!!
+ram_reward_n_points: 4096
+ram_reward_sampling: "uniform"
+reward_subsample_seed: 1234
+fixed_reward_points_for_eval: true
+fixed_reward_points_for_rollout: true
+rollout_reward_point_path: null
+
+# PhyCoFlow convention: t=0 source/noise, t=1 clean.
+# mirrored_weighted samples p(t)=2(1-t), emphasizing noisy/source-side states.
+timestep_sampling: "mirrored_weighted"
+t_eps: 1.0e-3
+
+# Reward/coherence.
+# reward_mode choices:
+#   global_dist    = full global distributional coherence
+#   marginal_only  = debug mode with marginal terms only, no joint/pairwise
+#   field_l2       = debug mode using direct field relative L2 as cost
+reward_mode: "global_dist"
+reward_multiplier: 1.0
+# reward_scaling choices:
+#   running_epoch_std = pooled std reset every epoch, historical default
+#   ema_std           = persistent std EMA across epochs
+#   batch_std         = current batch std after group-mean subtraction
+#   group             = per-condition group std
+#   none              = unscaled group-relative advantage
+reward_scaling: "ema_std"
+reward_std_ema_decay: 0.95
+reward_eps: 1.0e-4
+adv_clip_abs: 3.0
+coherence_use_denorm: false
+
+# Global distributional coherence.
+global_lambda_marg: 1.0
+global_lambda_joint: 1.0
+global_num_directions: 32
+global_joint_top_frac: 0.10
+# Pairwise SWD is useful but expensive across many full-grid endpoints. Keep it
+# off testing RAM runs & enable only after the core RAM signal is stable.
+global_include_pairwise: true
+global_lambda_pairwise: 0.25
+global_include_pairwise_in_score: false
+
+# Optimizer.
+lr: 2.0e-5
+weight_decay: 1.0e-4
+beta1: 0.9
+beta2: 0.95
+grad_clip: 1.0
+
+# EMA policies.
+old_ema_decay: 0.9
+eval_ema_decay: 0.9
+
+# Logging / validation.
+save_history_json: false   # Keep history/metric logs as CSV by default; args.json is still saved.
+val_loss_rel_l2_weight: 1.0
+val_loss_coherence_weight: 0.1
+eval_every: 5
+save_every: 20
+n_steps_generation_eval: 4
+eval_num_batches: 2
+
+# Optional fixed clean rollout monitor. Runs at epoch 0 before fine-tuning.
+rollout_eval_enabled: true
+rollout_eval_every: 20
+rollout_eval_split: "test"
+rollout_eval_snapshot_index: 0
+rollout_eval_n_steps: 2
+rollout_eval_obs_consistency_mode: "endpoint_smooth" # choices=["none", "default_hard", "endpoint", "endpoint_smooth"]
+rollout_eval_num_sensors: null
+rollout_eval_save_fields: true
+
+# Keep the exact same sparse rollout sensors across epochs. This makes
+# rollout_metrics.csv/png comparable and removes sensor resampling noise.
+rollout_eval_fixed_condition: true
+rollout_eval_condition_path: null
+# Also monitor the raw policy model beside the eval EMA model. Eval metrics stay
+# in rollout_metrics.csv; policy metrics go to rollout_metrics_policy.csv.
+rollout_eval_policy_model: true

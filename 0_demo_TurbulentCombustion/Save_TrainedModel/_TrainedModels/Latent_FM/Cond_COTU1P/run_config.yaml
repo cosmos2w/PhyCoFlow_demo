@@ -1,0 +1,93 @@
+baseline_model: latent_fm
+training_stage: 2
+shared:
+  demo_num: 11
+  seed: 42
+  device_ids:
+  - 0
+  reload: false
+  paths:
+    data_path: Dataset/Merged_CH4COTU1P.h5
+    save_root: Save_TrainedModel/turbulent_combustion
+    config_backup_root: Save_config/turbulent_combustion/latent_fm
+  data:
+    dataset_name: turbulent_combustion
+    train_ratio: 0.9
+    time_stride: 1
+    num_workers: 4
+    num_x: 403
+    num_y: 100
+  conditioning:
+    cond_fields:
+    - 1
+    - 2
+    - 3
+    - 4
+    n_obs_min_list:
+    - 192
+    - 192
+    - 192
+    - 192
+    n_obs_max_list:
+    - 384
+    - 384
+    - 384
+    - 384
+    vis_cond_fields:
+    - 1
+    - 2
+    - 3
+    - 4
+    vis_n_obs_list:
+    - 256
+    - 256
+    - 256
+    - 256
+  logging:
+    eval_every: 5
+    save_every: 200
+  overrides:
+    epochs: null
+    batch_size: null
+    learning_rate: null
+    weight_decay: null
+latent_fm_params:
+  stage1:
+    architecture:
+      base_ch: 64
+      latent_ch: 256
+      n_levels: 3
+    training:
+      epochs: 5000
+      batch_size: 64
+      learning_rate: 0.0001
+      weight_decay: 1.0e-06
+      eval_every: 5
+      save_every: 200
+  stage2:
+    architecture:
+      base_ch: 256
+      ch_mult:
+      - 1
+      - 2
+      num_res_blocks: 2
+      num_heads: 8
+      ema_decay: 0.999
+    conditioning:
+      cond_mode: image
+      pointnet_hidden_mult: 1.0
+    training:
+      epochs: 5000
+      batch_size: 128
+      learning_rate: 0.0001
+      weight_decay: 1.0e-06
+      eval_every: 5
+      save_every: 200
+    sampling:
+      ode_solver: euler
+      benchmark_n_steps:
+      - 2
+      - 4
+      - 8
+      - 16
+    stage1_checkpoint: Save_TrainedModel/turbulent_combustion/Baseline_latent_fm_Stage1_DemoN1_20260506_134833/best.pt

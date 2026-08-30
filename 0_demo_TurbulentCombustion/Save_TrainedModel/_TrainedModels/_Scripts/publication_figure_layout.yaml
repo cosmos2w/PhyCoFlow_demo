@@ -1,0 +1,71 @@
+# Vector-first, double-column publication layout for coupled-field validation.
+# Build source panels with --formats pdf svg png, then run:
+# python 90_assemble_figure.py --run-id <id> --layout publication_figure_layout.yaml --formats pdf svg png --vector-pdf
+name: CoupledFieldReconstruction_publication
+rows: 5
+cols: 2
+width_mm: 183
+height_mm: 238
+wspace: 0.06
+hspace: 0.08
+height_ratios: [0.45, 0.45, 0.45, 1.55, 1.30]
+panels:
+  # Representative unobserved CH4 reconstruction as channels increase.
+  - type: contour_grid
+    label: a
+    row: 0
+    col: 0
+    colspan: 2
+    model: DMFGen
+    condition: Cond_T
+    snapshot: 0
+    fields: [CH4]
+    kinds: [GT, Rec, Err]
+    extension: pdf
+    contour_run_id: "{run_id}"
+  - type: contour_grid
+    label: b
+    row: 1
+    col: 0
+    colspan: 2
+    model: DMFGen
+    condition: Cond_TU1
+    snapshot: 0
+    fields: [CH4]
+    kinds: [GT, Rec, Err]
+    extension: pdf
+    contour_run_id: "{run_id}"
+  - type: contour_grid
+    label: c
+    row: 2
+    col: 0
+    colspan: 2
+    model: DMFGen
+    condition: Cond_COTU1P
+    snapshot: 0
+    fields: [CH4]
+    kinds: [GT, Rec, Err]
+    extension: pdf
+    contour_run_id: "{run_id}"
+  - label: d
+    row: 3
+    col: 0
+    path: ../_Process_Figures/FieldL2/FieldL2_heatmap_{run_id}.pdf
+    missing_text: Missing full-test Field-L2 export
+  - label: e
+    row: 3
+    col: 1
+    path: ../_Process_Figures/Spectral/Composite/SpectralValidationComposite_Cond_T_s0000_{run_id}.pdf
+    missing_text: Missing spectral validation export
+  - label: f
+    row: 4
+    col: 0
+    # A compact, selected-method contact sheet; the all-method sheet is still
+    # exported separately for supplementary inspection.
+    path: ../_Process_Figures/JointPDF/JointPDF_contact_sheet_main_{run_id}.pdf
+    missing_text: Missing joint-PDF export
+  - label: g
+    row: 4
+    col: 1
+    path: ../_Process_Figures/JointPDF_JSD/JointPDF_JSD_violin_{run_id}.pdf
+    missing_text: Missing JSD distribution export

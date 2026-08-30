@@ -1,0 +1,73 @@
+# Native full-page layout for coupled-field reconstruction validation.
+# All dimensions and selections are deliberately editable without code changes.
+name: CoupledFieldReconstruction
+# Reference values only.  Runtime width is strictly COMPOSITE_WIDTH_IN and
+# runtime height is derived from physical content rows/margins/gaps in
+# global_style.py; changing this YAML cannot create chapter-to-chapter drift.
+width_in: 7.2
+height_in: 9.1
+# ABSOLUTE LOWER-ROW HEIGHT CONTROL (inches). Panel b receives this complete
+# physical height; the combined Panel-c + Panel-d column automatically receives
+# the same height. The overall canvas height grows or shrinks by the same amount,
+# while Panel a and the strict 7.2-in canvas width remain unchanged.
+lower_row_content_height_in: 5.0
+# Panel e (joint PDFs) is retained for supplementary use but is intentionally
+# removed from this main publication composition.  Panel a's physical height,
+# top margin, and protected lower gap are now locked in PANEL_A_LAYOUT at the
+# front of 91_assemble_coupled_field_publication.py.  Only this structural
+# b-versus-(c,d) width allocation remains panel-specific.
+outer_middle_width_ratios: [0.34, 0.66]
+# The right column is split at runtime using PANEL_C_D_HEIGHT_RATIOS in
+# global_style.py. Panel c's top and Panel d's bottom match the corresponding
+# full-height Panel-b boundaries exactly for any chosen ratio. Each master
+# panel owns its internal rows while both reuse identical column spacing.
+
+qualitative:
+  snapshot_index: 0
+  # Informational mirror only: the runtime authority is
+  # PANEL_A_LAYOUT['main_fields'] in the assembly script.
+  fields: [CH4, p, U1]
+  conditions: [Cond_T, Cond_TU1, Cond_COTU1P]
+  proposed_model: DMF-Gen
+  generative_preference: [Latent FM, SiT]
+  deterministic_preference: [Senseiver, Geo-FNO]
+  # Optional T-only SiT column placed immediately after the representative
+  # generative model.  Keep false to reproduce the current seven-image-column
+  # Panel-A layout exactly; true uses the assembler's compact eight-column mode.
+  include_sit_comparison: true
+  x_compression: 0.45
+  contour_levels: 25
+  # Field and absolute-error colormaps are centralized in COLORMAP_CONFIG in
+  # the assembly script so Panel a and its SI panels cannot drift apart.
+  # Physical reconstruction limits are truth-derived and robustly clipped;
+  # values outside the range use the colourbar edge colours.
+  value_percentiles: [1.0, 99.0]
+  robust_error_percentile: 99.0
+  # Equal image boxes keep reconstruction and absolute-error maps visually
+  # comparable; the reduced panel allocation leaves deliberate inter-field air.
+  reconstruction_to_error_height: [1.0, 1.0]
+
+spectral:
+  condition: Cond_T
+  snapshot_index: 0
+  # Change only field_selection to switch the complete paired bar/spectrum
+  # triplet.  The former Y_CO column remains a reproducible backup option.
+  field_selection: main
+  field_options:
+    main: [CH4, p, U1]
+    y_co_backup: [CH4, CO, U1]
+  show_all_models_in_lsd: true
+
+joint_pdf:
+  condition: Cond_T
+  pair: T-U1
+  snapshot_mode: fixed_random_aggregate
+  snapshot_count: 5
+  snapshot_seed: 42
+  fixed_columns: [Ground truth, DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+
+export:
+  formats: [pdf, svg, png]
+  png_dpi: 600
+  # Preserve figure-coordinate panel letters and group headings safely.
+  tight_pad_inches: 0.10

@@ -1,0 +1,253 @@
+workflow_label: mixed_resolution_unified_v2
+
+figure:
+  output_name: MixedResolution_unified_v2
+  panel_letters: [a, b, c, d, e, f]
+  # Composite-only offsets relative to the shared global panel-label anchor.
+  # Panel c is lifted slightly to separate it from its nearby header text.
+  composite_panel_label_y_offsets:
+    c: 0.004
+
+# =============================================================================
+# EXACT PHYSICAL COMPOSITION USER TUNING API
+# =============================================================================
+# TUNE ONLY THIS BLOCK FOR PANEL/CANVAS GEOMETRY.
+#
+# For each row:
+#   * height_mm sets the shared standalone/composite panel height;
+#   * horizontal_gap_mm is subtracted from the canvas before widths are made;
+#   * width_fractions split the remaining width and are normalized automatically
+#     (both [0.54, 0.46] and [54, 46] are valid);
+#   * a single-panel row needs no gap or fractions.
+#
+# Composite height is derived automatically as:
+#   sum(row height_mm * row_height_scale) + row_gap_mm * (number of rows - 1)
+# Use gap_after_mm inside a row only when that one vertical gap needs an override.
+# minimum_row_gap_mm is a user-controlled floor, not a hidden fixed constant.
+# A value of 0 permits fully compact rows; export-time panel-boundary and
+# cross-panel text audits still reject actual overlap.
+# Standalone pages are derived from the same rows, so no duplicate sizes exist.
+physical_layout:
+  canvas_width_mm: 183.0
+  row_height_scale: 1.0
+  minimum_row_gap_mm: 0.0
+  row_gap_mm: 1.10
+  rows:
+    - panels: [a, b]
+      height_mm: 55.5
+      # Panel a remains exactly 98.28 mm wide. Reducing only this gutter lets
+      # panel b expand leftward while its right edge stays at 183 mm.
+      horizontal_gap_mm: 0.3
+      width_fractions: [98.28, 84.42]
+    - panels: [c]
+      # Reference height at panel_c_tuning.IMAGE_ROW_GAP = 0.25. The tuning
+      # adapter scales this height with IMAGE_ROW_GAP so image-cell size stays
+      # fixed while panel/canvas height absorbs the added vertical spacing.
+      # A modest height increase lets the equal-aspect field cells grow into
+      # the horizontally compacted grid instead of leaving width unused.
+      height_mm: 58.0
+    - panels: [d]
+      height_mm: 40.0
+    - panels: [e, f]
+      height_mm: 60.0
+      horizontal_gap_mm: 1.0
+      width_fractions: [0.46, 0.54]
+  # [left, bottom, width, height] inside each physical panel page. These safe
+  # bounds reserve room for ticks, row labels, legends, and colorbar text. The
+  # same values are used in standalone and composite rendering.
+  content_bounds:
+    a: [0.060, 0.085, 0.905, 0.805]
+    b: [0.140, 0.120, 0.835, 0.825]
+    c: [0.020, 0.010, 0.964, 0.980]
+    d: [0.005, 0.015, 0.983, 0.975]
+    e: [0.000, 0.010, 0.985, 0.980]
+    f: [0.000, 0.010, 0.985, 0.980]
+
+# Qualitative panels resolve their snapshot explicitly. A null per-panel value
+# inherits the shared snapshot; set an integer only for a deliberate override.
+# This selection reads existing reconstruction caches and never runs inference.
+representative_snapshots:
+  default_mode: shared
+  shared_snapshot_index: 50
+  selection_rule: explicit shared qualitative snapshot configured in publication layout
+  overrides:
+    c: null
+    e: null
+# =============================================================================
+# END EXACT PHYSICAL COMPOSITION USER TUNING API
+# =============================================================================
+
+recipes:
+  order: [1_H_only, 2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  short_labels:
+    1_H_only: H-only
+    2_H_limited: H-limited
+    3_Mixed_HML: Mixed-HML
+    4_ZeroH_Balanced: Zero-H-balanced
+    5_ZeroH_MRich: Zero-H-M-rich
+  markers:
+    1_H_only: D
+    2_H_limited: o
+    3_Mixed_HML: o
+    4_ZeroH_Balanced: s
+    5_ZeroH_MRich: s
+
+panel_b:
+  # Select the finalized sensor-sweep slice used by the all-recipe L2 panel.
+  sensor_count: 512
+  yscale: log
+  marker_size: 5.0
+  group_offset: 0.14
+  legend_columns: 3
+
+panel_c:
+  default_version: 2
+  alternate_version: 1
+  snapshot_block: questionA
+  sensor_count: 256
+  roi_fraction: 0.25
+  contour_levels: 16
+  compact_layout:
+    grid_left: 0.030
+    grid_right: 0.925
+    grid_bottom: 0.045
+    grid_top: 0.875
+    header_y: 0.895
+    header_y_composite: 0.990
+    model_header_fontsize: 6.0
+    scheme_header_fontsize: 6.0
+    scheme_header_pad: 2.0
+    side_label_fontsize: 5.5
+    colorbar_label_fontsize: 5.5
+    colorbar_tick_fontsize: 5.5
+    colorbar_width_ratio: 0.085
+    column_gap: 0.045
+  version_1:
+    strips:
+      - models: [DMFGen, FFM_Perceiver]
+        recipes: [2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+      - models: [Senseiver, MLP_RBF]
+        recipes: [2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  version_2:
+    strips:
+      - models: [DMFGen, FFM_Perceiver, Senseiver]
+        recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+
+panel_d:
+  recipes: [1_H_only, 2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  sensor_counts: [64, 128, 256, 384, 512]
+  yscale: log
+  formal_sensor_count: 256
+  layout:
+    # All values are fractions of panel d's physical rectangle.
+    # Align the first y-axis label with the panel-d tag instead of reserving an
+    # unused left gutter.
+    left: 0.048
+    right: 0.995
+    column_gap: 0.016
+    axis_bottom: 0.220
+    axis_height: 0.600
+    legend_y: 0.995
+    title_pad_pt: 1.5
+
+panel_e:
+  display_mode: "raw_truth_and_residual"
+  recipe: "5_ZeroH_MRich"
+  models:
+    truth: "Ground truth"
+    proposed: "DMFGen"
+    baseline: "Senseiver"
+  gt_rms_epsilon: 1.0e-12
+  component_percentile: 99.5
+  residual_percentile: 99.5
+  # Display raw density components and signed raw density residuals. Each row
+  # has its own symmetric linear limits, shared by its two residual columns.
+  residual_norm: "linear"
+  residual_cmap: "berlin" # BrBG / RdBu_r / seismic / berlin
+  contour_levels_truth: 5
+  contour_levels_residual: 0
+  row_label_rotation: 90
+  width_fraction: 0.46
+  layout:
+    left: 0.055
+    right: 0.800
+    bottom: 0.025
+    top: 0.910
+    column_gap: 0.012
+    row_gap: 0.012
+    header_y: 0.995
+    # Rotated row labels use the global axis-label size. Their anchor is
+    # inset within the existing left gutter so font size is never used as an
+    # automatic boundary-avoidance mechanism.
+    row_label_x: 0.027
+    residual_colorbar_left: 0.835
+    residual_colorbar_width: 0.018
+    residual_colorbar_height_fraction: 0.75
+    colorbar_label_pad_pt: 6.0
+
+panel_f:
+  plot_type: "stacked_heatmaps"
+  statistic: "median"
+  recipes:
+    - "3_Mixed_HML"
+    - "4_ZeroH_Balanced"
+    - "5_ZeroH_MRich"
+  models:
+    - "DMFGen"
+    - "FFM_Perceiver"
+    - "Senseiver"
+    - "MLP_RBF"
+  correlation_range: [-0.10, 1.0]
+  bias_robust_percentile: 99.0
+  annotate_cells: true
+  width_fraction: 0.54
+  layout:
+    heat_left: 0.170
+    # Extend the heatmap/colorbar block rightward as one unit while preserving
+    # the 0.035 gap between the heatmaps and colorbars.
+    heat_right: 0.845
+    top_bounds: [0.170, 0.545, 0.675, 0.400]
+    bottom_bounds: [0.170, 0.055, 0.675, 0.400]
+    model_label_x_axis: -0.258
+    recipe_header_y: 0.995
+    colorbar_left: 0.880
+    colorbar_width: 0.014
+    colorbar_tick_pad_pt: 2.0
+    colorbar_label_pad_pt: 8.0
+    colorbar_tick_fontsize: 5.5
+  si_size_mm: [150, 108]
+
+multiscale_wavelet:
+  wavelet: "db2"
+  level: 4
+  boundary_mode: "auto"
+  groups:
+    large:
+      approximation: true
+      detail_levels: [4]
+    intermediate:
+      detail_levels: [3]
+    fine:
+      detail_levels: [1, 2]
+  reconstruction_tolerance: 1.0e-6
+  identity_metric_tolerance: 1.0e-6
+  epsilon: 1.0e-12
+  sensor_count: 256
+  workers: 8
+  representative_snapshot_mode: "median_fine_variance_fraction"
+  qualitative_recipe: "zero_h_rich"
+  qualitative_baseline_selection: "best_non_dmf_by_mean_physical_l2"
+  quantitative_recipes:
+    - "3_Mixed_HML"
+    - "4_ZeroH_Balanced"
+    - "5_ZeroH_MRich"
+  correlation_ylim: [-0.05, 1.02]
+  variance_bias_robust_percentile: 99.0
+  bootstrap_samples: use_project_default
+
+source_policy:
+  base_data_run_id: 2026-07-13_14-55
+  canonical_run_id: formal_20260712
+  cache_manifest: ReconstructionCache_manifest_formal_20260712.csv
+  immutable: true
+  incremental_device: cuda:2

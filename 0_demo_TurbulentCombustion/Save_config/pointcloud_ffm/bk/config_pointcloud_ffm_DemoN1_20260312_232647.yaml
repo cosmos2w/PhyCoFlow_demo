@@ -1,0 +1,30 @@
+
+Demo_Num: 1
+
+data: "Dataset/Merged_CH4COTU1P.h5"
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+seed : 42
+epochs : 5000
+batch_size : 128
+lr : 2.0e-4
+weight_decay : 1.0e-6
+train_ratio : 0.9
+time_stride : 1
+num_workers : 4
+
+hidden_dim : 256
+cond_dim : 128
+field_embed_dim : 128
+sigma_min : 1.0e-4
+rbf_sigma : 0.05
+
+n_query_points : 4096
+n_obs_min : 128
+n_obs_max : 512
+cond_field : 2  # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+prior : "rff"   # choices=["iid", "rff"]
+rff_features : 256
+rff_lengthscale : 0.15
+eval_every : 5
+save_every : 50

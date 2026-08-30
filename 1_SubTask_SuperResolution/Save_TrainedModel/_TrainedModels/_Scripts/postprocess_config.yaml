@@ -1,0 +1,212 @@
+dataset:
+  mode: pdebench_multires
+  name: CFD
+  processed_root: Dataset/PDE_Bench/Processed
+  selected_field_idx_raw: 0
+  eval_resolution: H
+  split: test
+  train_ratio: 0.9
+  case_truncate_ratio: 0.25
+
+models:
+  # Mirrored from global_style.py; apply_style() also validates/resolves aliases.
+  - {key: DMFGen, directory: DMF_Gen, label: DMF-Gen, color: '#E63946'}
+  - {key: FFM_Perceiver, directory: FFM_Perceiver, label: FFM-Perceiver, color: '#457B9D'}
+  - {key: Senseiver, directory: Senseiver, label: Senseiver, color: '#8D99AE'}
+  - {key: MLP_RBF, directory: MLP_RBF, label: MLP-RBF, color: '#2A9D8F'}
+
+recipes:
+  1_H_only: {label: H-only, expected_ratio: '0:0:1', expected_case_fraction: 1.0}
+  2_H_limited: {label: H-limited, expected_ratio: '0:0:1', expected_case_fraction: 0.33, fraction_tolerance: 0.03}
+  3_Mixed_HML: {label: Mixed-HML, expected_ratio: '1:1:1', expected_case_fraction: 1.0}
+  4_ZeroH_Balanced: {label: Zero-H-balanced, expected_ratio: '1:1:0', expected_case_fraction: 1.0}
+  5_ZeroH_MRich:
+    label: Zero-H-M-rich
+    expected_ratio: '1:2:0'
+    expected_case_fraction: 1.0
+    directory_aliases: [5_ZeroH_LRich]
+
+canonical_test:
+  max_snapshots: 300
+  selection_strategy: stratified_unique_cases
+  selection_seed: 42
+  require_common_time_window: true
+  representative_snapshot: 0
+
+sensor_plan:
+  counts: [64, 128, 256, 384, 512, 768, 1024]
+  default_count: 256
+  seed: 42
+  plan_id: canonical_h_nested_v1
+
+cache:
+  checkpoint: last
+  allow_checkpoint_fallback: false
+  device: cuda:2
+  cpu_fallback: true
+  n_steps: 2
+  ode_solver: euler
+  consistency_mode: endpoint_smooth
+  consistency_mode_overrides:
+    DMFGen: default_hard
+  generation_seed: 42
+  compressed: true
+  storage_mode: compact_shared_v1
+  array_dtype: float32
+  require_results_symlink: true
+  minimum_free_space_gb: 50
+  warn_gpu_utilization_percent: 20
+  manifest_flush_every: 25
+
+rendering:
+  default_resolution_mode: native_scatter
+  default_comparison_mode: smooth
+  default_zero_h_mode: hybrid
+  equal_physical_panel_size: true
+  proportional_panel_size: false
+  scatter_marker_size: 3.0
+  cmap: RdBu_r
+  sequential_cmap: cividis
+  error_cmap: magma
+  contour_color: '#F2F0EB'
+  contour_levels: 12
+  contour_linewidth: 0.35
+  sensor_color: '#2E9E44'
+  sensor_marker_size: 2.4
+  native_scatter_edgecolor: '#F2F2F2'
+  native_scatter_edgewidth: 0.08
+  native_zoom:
+    enabled: false
+    fraction: 0.25
+
+resolution_protocol:
+  zoom_fraction: 0.18
+  zoom_factor: 2.0
+  grid_linewidth: {L: 0.10, M: 0.06, H: 0.0}
+  grid_alpha: {L: 0.55, M: 0.30, H: 0.0}
+  title_font_size: 6.0
+  title_y: 1.045
+  image_layout: {left: 0.015, bottom: 0.49, width: 0.31, height: 0.43, horizontal_step: 0.326}
+  legend_y: 0.355
+  bar_bounds: [0.055, 0.035, 0.91, 0.245]
+  composite_layout:
+    title_y: 1.10
+    image_layout: {left: 0.015, bottom: 0.52, width: 0.31, height: 0.45, horizontal_step: 0.326}
+    legend_y: 0.455
+    bar_bounds: [0.055, 0.025, 0.91, 0.36]
+
+questionA:
+  recipes: [2_H_limited, 3_Mixed_HML]
+  reference_recipe: 1_H_only
+  show_snapshot_points: false
+  bootstrap_samples: 2000
+  qualitative_model: DMFGen
+  qualitative_models: [DMFGen, FFM_Perceiver, Senseiver]
+  qualitative_models_standalone: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  annotate_percent_improvement: false
+
+coarse_detail:
+  projector_resolution: M
+  optional_cutoff: L
+  recipes: [2_H_limited, 3_Mixed_HML]
+  log_y: false
+
+questionB:
+  recipes: [1_H_only, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  reference_recipe: 1_H_only
+  bootstrap_samples: 2000
+  qualitative_models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  qualitative_recipe: 4_ZeroH_Balanced
+  roi_fraction: 0.25
+  qualitative_roi_selection: model_contrast
+  qualitative_roi_models: [DMFGen, Senseiver]
+  qualitative_roi_min_gradient_quantile: 0.5
+  observed_marker_size: 10.0
+  qualitative_l2_scope: full_field
+  annotate_transfer_penalty: false
+
+frequency_error:
+  recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  epsilon: 1.0e-12
+  main_models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+
+gradient_error:
+  quantile_bins: 8
+  recipes: [4_ZeroH_Balanced, 5_ZeroH_MRich]
+
+sensor_sweep:
+  counts: [64, 128, 256, 384, 512, 768, 1024]
+  recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  bootstrap_samples: 2000
+  main_models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+
+figure_style:
+  dimensions_mm: {single: 89, double: 183}
+  # Exact semantic hierarchy mirrored from global_style.py. Do not derive
+  # smaller composite-only values in individual panel drawers.
+  font_sizes: {body: 5.5, title: 6.0, axis: 5.5, tick: 5.5, legend: 5.5, panel: 8.5, block: 6.0, annotation: 5.0}
+  line_width: 1.0
+  default_dpi: 150
+  paper_dpi: 600
+  default_formats: [svg, pdf, png]
+  paper_formats: [svg, pdf, png]
+  missing_facecolor: '#D8D8D8'
+  condition_colors:
+    1_H_only: '#484878'
+    2_H_limited: '#B4C0E4'
+    3_Mixed_HML: '#C97998'
+    4_ZeroH_Balanced: '#7884B4'
+    5_ZeroH_MRich: '#D6A8BA'
+
+assembly:
+  publication:
+    output_name: MixedResolution_zeroH_publication
+    width_mm: 183
+    height_mm: 210
+    panel_width_ratios:
+      top: [0.645, 0.355]
+      middle: [0.645, 0.355]
+      transfer: [0.33, 0.67]
+      bottom: [0.5, 0.5]
+    row_height_ratios: [1.30, 1.85, 1.75, 1.35]
+    compact_gutter: 0.10
+    standalone_sizes_mm:
+      a: [118, 74]
+      b: [65, 72]
+      c: [118, 96]
+      d: [65, 72]
+      e: [89, 72]
+      f: [122, 92]
+      g: [122, 72]
+      h: [122, 72]
+    block_titles: ["I  Value of lower-resolution training data", "II  Zero-H transfer"]
+    panels:
+      - {label: a, role: resolution_protocol}
+      - {label: b, role: questionA_estimates}
+      - {label: c, role: questionA_contours}
+      - {label: d, role: scale_decomposition}
+      - {label: e, role: questionB_estimates}
+      - {label: f, role: zeroH_qualitative}
+      - {label: g, role: frequency_error}
+      - {label: h, role: sensor_sweep}
+  main:
+    output_name: MixedResolution_main
+    width_mm: 183
+    height_mm: 210
+    panels:
+      - {label: a, source: ResolutionProtocol}
+      - {label: b, source: QuestionA_DataBenefit}
+      - {label: c, source: _Contours/questionA}
+      - {label: d, source: QuestionB_ZeroH}
+      - {label: e, source: _Contours/questionB}
+      - {label: f, source: FrequencyError}
+  si:
+    output_name: MixedResolution_extended_data
+    width_mm: 183
+    height_mm: 230
+    panels:
+      - {label: a, source: CoarseDetail}
+      - {label: b, source: SensorSweep}
+      - {label: c, source: GradientError}
+      - {label: d, source: _Contours/all_models}

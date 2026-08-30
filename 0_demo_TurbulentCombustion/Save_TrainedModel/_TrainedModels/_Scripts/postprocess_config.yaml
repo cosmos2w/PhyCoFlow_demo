@@ -1,0 +1,86 @@
+schema_version: 1
+methods:
+  # Compatibility copies of global_style.MODEL_COLORS. apply_style() enforces
+  # the Python palette at runtime so copying global_style.py to another chapter
+  # remains sufficient to preserve model identity.
+  - {name: DMF-Gen, directory: DMF_Gen, aliases: [DMFGen, DMF_Gen], color: '#004488'}
+  - {name: FFM-FNO, directory: FFM_FNO, aliases: [FFMFNO], color: '#EE7733'}
+  - {name: FFM-Perceiver, directory: FFM_Perceiver, aliases: [FFMPerceiver], color: '#88CCEE'}
+  - {name: Latent FM, directory: Latent_FM, aliases: [LatentFM], color: '#AA4499'}
+  - {name: SiT, directory: SiT, aliases: [], color: '#CC6677'}
+  - {name: MLP-RBF, directory: MLP_RBF, aliases: [MLPRBF], color: '#44AA99'}
+  - {name: Geo-FNO, directory: GeoFNO, aliases: [GeoFNO], color: '#DDCC77'}
+  - {name: Senseiver, directory: Senseiver, aliases: [], color: '#999999'}
+conditions:
+  Cond_T: {cond_fields: [2], n_obs: [256], label: T}
+  Cond_TU1: {cond_fields: [2, 3], n_obs: [256, 256], label: 'T + U1'}
+  Cond_COTU1P: {cond_fields: [1, 2, 3, 4], n_obs: [256, 256, 256, 256], label: 'CO + T + U1 + p'}
+fields:
+  - {index: 0, key: CH4, label: '$Y_{CH_4}$', unit: '', cmap: magma}
+  - {index: 1, key: CO, label: '$Y_{CO}$', unit: '', cmap: magma}
+  - {index: 2, key: T, label: '$T$', unit: K, cmap: inferno}
+  - {index: 3, key: U1, label: '$U_1$', unit: 'm s$^{-1}$', cmap: coolwarm}
+  - {index: 4, key: p, label: '$p$', unit: Pa, cmap: viridis}
+defaults:
+  split: test
+  snapshot_index: 0
+  checkpoint: last
+  n_steps: 2
+  ode_solver: euler
+  obs_consistency: endpoint_smooth
+  seed: 20260711
+  pdf_bins: 64
+  pdf_pseudocount: 1.0e-12
+  robust_quantiles: [0.005, 0.995]
+  error_quantile: 0.99
+method_inference_overrides:
+  # Paper-cache policy: DMF-Gen uses the canonical pointwise hard observation
+  # replacement during reconstruction.  Other point-cloud FFM methods retain
+  # the global endpoint_smooth default unless explicitly overridden.
+  DMF-Gen: {obs_consistency: default_hard}
+  # SiT uses the canonical benchmark setting for paper comparisons.  A global
+  # --n-steps CLI value still overrides this setting deliberately.
+  SiT: {n_steps: 4}
+style:
+  # Deprecated compatibility metadata.  global_style.py is authoritative for
+  # typography, line widths, dimensions, spacing, palette, and missing colors.
+  font_family: Arial
+  font_sizes: {body: 5.0, axis: 5.8, tick: 5.0, legend: 5.0, title: 6.5, panel: 9.5}
+  line_width: 1.0
+  panel_label_style: {weight: bold, case: lower}
+  dimensions_mm: {single: 89, double: 183}
+  missing: {facecolor: '#D8D8D8', textcolor: '#606060', hatch: '///'}
+export:
+  formats: [png]
+  default_dpi: 150
+  publication_dpi: 600
+spectral:
+  # The all-snapshot LSD exporter batches all channels and uses CUDA when it
+  # is available. Set to cpu for strict CPU-only or cuda:N for a chosen GPU.
+  compute_device: auto
+  representative_condition: Cond_T
+  representative_snapshot: 0
+  conditions: [Cond_T, Cond_TU1, Cond_COTU1P]
+  channels: [0, 1, 2, 3, 4]
+  preprocessing:
+    remove_mean: true
+    window: none
+    coordinate_mode: auto
+    spacing_tolerance: 0.02
+  radial_average:
+    shell_spacing: native
+    use_isotropic_cutoff: true
+    min_shell_count: 4
+  lsd:
+    paper_metric: db
+    relative_epsilon: 1.0e-12
+    export_natural_log_metric: true
+  plotting:
+    xscale: log
+    yscale: log
+    show_snapshot_points: true
+    show_band_background: false
+    # Compatibility copy; apply_style() resets this to MODEL_COLORS['DMF-Gen'].
+    dmf_gen_accent: '#004488'
+assembly:
+  layout_file: example_layout.yaml

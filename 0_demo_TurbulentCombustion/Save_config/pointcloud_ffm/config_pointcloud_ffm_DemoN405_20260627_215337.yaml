@@ -1,0 +1,280 @@
+# ==========================================================
+# PointCloudFFM Direct Coherence Post-Training Template
+# ==========================================================
+# Main idea:
+#   Load a normal PointCloudFFM checkpoint, write a NEW run folder, and continue
+#   training with RF data loss plus differentiable physical coherence loss.
+#
+# Reading order:
+#   1) Post-training controls are first and are usually what you tune.
+#   2) Base model/data/conditioning fallback values are last.
+#   3) If pretrained_use_source_base_config=true, source args.json/run_config
+#      overrides those fallback base values whenever keys exist.
+
+# NOTE: this 405 run tries initialization: "pretrained", coherence_weight_warmup_epochs: 0
+# gradient_balance_mode: "config" & config_coherence_grad_scale: 0.20
+# To see if the model can learn the coherence constraints from a pretrained model via config mode.
+
+# ==========================================================
+# A) NEW run identity and device
+# ==========================================================
+# Demo_Num controls the new output folder, not the source checkpoint.
+Demo_Num: 405
+device_ids: [2]
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+
+# ==========================================================
+# B) Post-training mode and source checkpoint
+# ==========================================================
+# training_mode choices:
+#   "standard"          = original base training path
+#   "direct_coherence"  = RF data loss plus scheduled direct coherence loss
+training_mode: "direct_coherence"
+
+# initialization choices:
+#   "pretrained" = load source checkpoint below, then write a NEW run folder
+#   "scratch"    = train a new model from random initialization
+# Command-line --RELOAD overrides this and resumes the latest current run.
+initialization: "pretrained"
+
+# Use either explicit pretrained_run_dir OR pretrained_source_Demo_Num.
+# Explicit pretrained_run_dir wins.
+pretrained_run_dir: "Save_TrainedModel/ffm_tc_pointcloud_DemoN17_20260510_082814"
+pretrained_source_Demo_Num: null
+pretrained_checkpoint: "best"      # usually "best" or "last"
+pretrained_load_optimizer: false   # normally false for post-training
+pretrained_strict: true            # true catches architecture mismatches
+
+# Recommended true:
+#   inherit source base model/data/conditioning keys from args.json/run_config.
+# False:
+#   use fallback base values in sections I-M exactly.
+pretrained_use_source_base_config: true
+
+
+# ==========================================================
+# C) Post-training optimizer and epoch size
+# ==========================================================
+# These remain from this template even when source base config is inherited.
+seed : 42
+epochs : 10000
+batch_size : 96
+lr : 1.0e-4
+weight_decay : 1.0e-6
+num_workers : 4
+
+# Fresh fraction of the training split used each epoch.
+# 1.0 = full training split. Lower values reduce coherence rollout cost.
+train_ratio_downsample: 0.25
+
+
+# ==========================================================
+# D) Main loss weights
+# ==========================================================
+# weighted_sum mode uses:
+#   data_loss_weight * L_RF + coherence_loss_weight * L_coherence
+direct_coherence_enabled: true
+data_loss_weight: 0.1
+coherence_loss_weight: 1.0
+
+# Optional linear warmup after coherence_start_epoch. 0 disables warmup.
+coherence_weight_warmup_epochs: 0
+
+
+# ==========================================================
+# E) Coherence schedule and compute budget
+# ==========================================================
+# coherence_every_n_steps:
+#   1 = every optimizer step, 4 = one rollout every four global steps.
+# coherence_interval_rescale can multiply coherence by the interval to preserve
+# average strength when using sparse schedules.
+coherence_every_n_steps: 1
+coherence_start_epoch: 1
+coherence_interval_rescale: false
+
+# coherence_batch_size limits how many batch items enter the expensive rollout.
+# coherence_downsample:
+#   true  = uniformly use at most coherence_n_points per selected field
+#   false = use the full point set; coherence_n_points is ignored
+coherence_batch_size: 24
+coherence_downsample: true
+coherence_n_points: 4096
+
+
+# ==========================================================
+# F) Differentiable clean rollout for coherence
+# ==========================================================
+# This is NOT model.sample(), which is no_grad. It is a differentiable RF ODE
+# rollout. endpoint_smooth is recommended for point-subset rollouts because it
+# uses sensor coordinates instead of full-grid indices.
+coherence_rollout_steps: 2
+coherence_rollout_solver: "euler"                 # choices: "euler", "heun"
+coherence_obs_consistency_mode: "endpoint_smooth" # choices: "none", "endpoint_smooth", "endpoint", "default_hard"
+coherence_obs_consistency_strength: 1.0
+coherence_obs_consistency_sigma: 0.05
+coherence_obs_consistency_schedule_power: 2.0
+coherence_obs_consistency_final_clamp: true
+
+
+# ==========================================================
+# G) Physical coherence loss decomposition: 
+# These are ONLY for Global Distribution Coherence
+# ==========================================================
+# self   = per-field marginal 1-D W2^2
+# mutual = pairwise two-field sliced-Wasserstein over channel pairs
+# cross  = joint all-field fixed-bank top-k sliced-Wasserstein
+# Set any component weight to 0.0 to skip its computation.
+coherence_self_weight: 1.0
+coherence_mutual_weight: 1.0
+coherence_cross_weight: 1.0
+coherence_channel_weights: null  # optional list of per-channel weights
+
+# Cross/all-field top-k sliced-Wasserstein projection bank.
+coherence_cross_num_directions: 32
+coherence_cross_top_frac: 0.10
+coherence_cross_seed: 1234
+coherence_cross_include_axes: true
+coherence_cross_qmc: true
+
+# Mutual/pairwise 2-D sliced-Wasserstein projection bank.
+coherence_mutual_num_directions: 16
+coherence_mutual_seed: 1234
+
+# false = normalized model space. true = physical units using dataset mean/std.
+# Normalized is usually safer when channels have very different scales.
+coherence_use_denorm: false
+
+
+# ==========================================================
+# H) Gradient balancing
+# ==========================================================
+# gradient_balance_mode Choices:
+#   "weighted_sum" = simple weighted sum; easiest to tune
+#   "config"       = ConFIG conflict-free two-objective update
+# ConFIG requires: pip install conflictfree
+gradient_balance_mode: "config"
+config_missing_behavior: "error"  # choices: "error", "weighted_sum"
+
+# Used only by gradient_balance_mode: "config" as extra multipliers on top of
+# data_loss_weight and the scheduled/warmed-up coherence_loss_weight.
+config_data_grad_scale: 1.0
+config_coherence_grad_scale: 0.20
+
+# Example ConFIG switch:
+# gradient_balance_mode: "config"
+# config_missing_behavior: "weighted_sum"
+
+
+# ==========================================================
+# I) Base data/split fallback values
+# ==========================================================
+# If pretrained_use_source_base_config=true, data/train_ratio/time_stride are
+# inherited from source when present. These are fallback values.
+data: "Dataset/Merged_CH4COTU1P.h5"
+train_ratio : 0.9
+time_stride : 1
+
+
+# ==========================================================
+# J) Backbone architecture fallback values
+# ==========================================================
+# If pretrained_use_source_base_config=true, these are normally inherited from
+# source args.json/run_config. Keep this block for old source runs or scratch.
+# Choices include: "mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH".
+backbone: "GL_rbf"
+
+hidden_dim : 256
+cond_dim : 128
+field_embed_dim : 128
+sigma_min : 1.0e-4
+rbf_sigma : 0.05
+
+USE_FOURIER_PE: true
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
+
+latent_dim: 256
+num_latents: 128
+num_heads: 8
+num_latent_blocks: 4
+ff_mult: 4
+attn_dropout: 0.0
+mlp_dropout: 0.0
+decode_chunk_size: 4096
+share_query_proj: false
+
+summary_type: "mean"          # choices: "mean", "cls"
+gather_mode: "topk_rbf_glres" # choices: "rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal", "topk_rbf_glres"
+gather_topk: 32
+sensor_local_topk: 16
+gather_query_chunk_size: 2048
+learnable_rbf_sigma: true
+neighbor_backend: "keops"     # choices: "torch", "keops", "auto"
+sensor_local_dropout: 0.0
+
+# Enhanced GL_rbf knobs. null lets train_pointcloud_ffm.py resolve defaults:
+#   GL_rbf     -> legacy-compatible defaults
+#   GL_rbf_ENH -> enhanced defaults
+sensor_coord_encoding: null
+latent_sensor_reinject: null
+latent_reinject_every: 1
+query_latent_readout: null
+query_readout_type: null
+query_readout_scale_init: null
+enhanced_head_norm: null
+glres_scale_init: null
+
+
+# ==========================================================
+# K) FNO-only architecture fallback values
+# ==========================================================
+# Used only when backbone: "fno".
+Num_x: 403
+Num_y: 100
+fno_modes_x: 24
+fno_modes_y: 12
+fno_hidden_channels: 96
+fno_n_layers: 4
+condition_blur: true
+condition_blur_kernel: 11
+condition_blur_sigma: 1.75
+
+
+# ==========================================================
+# L) Base RF query/prior fallback values
+# ==========================================================
+# Data loss still uses the ordinary RF convention:
+#   x_t = (1 - t) * x0 + t * x1, target velocity = x1 - x0.
+# query_sampling choices:
+#   "uniform" = unbiased point subset
+#   "obs_mix" = emphasizes regions near/far from sensors
+n_query_points : 4096
+query_sampling: "uniform"
+query_sample_near_ratio: 0.25
+query_sample_far_ratio: 0.25
+query_sample_sigma_ratio: 0.05
+
+# Source prior for x0. Choices: "rff" for smooth Gaussian fields, "iid" for
+# independent Gaussian noise.
+prior : "rff"
+rff_features : 256
+rff_lengthscale : 0.15
+
+
+# ==========================================================
+# M) Sparse conditioning / validation fallback values
+# ==========================================================
+# Field ids: 0=CH4, 1=CO, 2=T, 3=U_1, 4=p.
+cond_fields :   [2]
+n_obs_min_list: [256]
+n_obs_max_list: [256]
+
+vis_cond_fields: [2]
+vis_n_obs_list: [256]
+
+eval_every : 5
+save_every : 500
+n_steps_generation : 32
+ode_solver : "euler"          # choices: "euler", "heun"
+benchmark_n_steps : [2, 4, 8]

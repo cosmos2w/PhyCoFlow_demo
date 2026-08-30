@@ -1,0 +1,95 @@
+
+#----------------------------------------------------------
+
+# Notes: Changing to V3 version: multi-field sparse encoding + Rectified Flow + Perceiver backbone
+
+#----------------------------------------------------------
+
+Demo_Num: 7
+device_ids: [2]
+
+data: "Dataset/Merged_CH4COTU1P.h5"
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+seed : 42
+epochs : 5000
+batch_size : 128
+lr : 1.0e-4
+weight_decay : 1.0e-6
+train_ratio : 0.9
+time_stride : 1
+num_workers : 4
+
+# ----------------------------------------------------------
+# Backbone selection
+# ----------------------------------------------------------
+backbone: "fno" # Selection in ["mlp_rbf", "perceiver", "fno"]
+
+# ----------------------------------------------------------
+# Hyperparameters for mlp_rbf backbone
+# ----------------------------------------------------------
+hidden_dim : 512
+cond_dim : 256
+field_embed_dim : 256
+sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
+rbf_sigma : 0.05
+
+# ----------------------------------------------------------
+# Hyperparameters for Perceiver backbone
+# ----------------------------------------------------------
+latent_dim: 256
+num_latents: 128
+num_heads: 8
+num_latent_blocks: 4
+ff_mult: 4
+attn_dropout: 0.0
+mlp_dropout: 0.0
+decode_chunk_size: 4096
+share_query_proj: false
+
+# ----------------------------------------------------------
+# Regular-grid specification required by the FNO baseline
+# These MUST be provided and must match the dataset, otherwise
+# training will warn and exit.
+# ----------------------------------------------------------
+Num_x: 403
+Num_y: 100
+# ----------------------------------------------------------
+# Hyperparameters for FNO backbone
+# The tensor fed to FNO is shaped [B, C, Num_y, Num_x], so modes are specified separately along x and y.
+# ----------------------------------------------------------
+fno_modes_x: 32
+fno_modes_y: 8
+fno_hidden_channels: 64
+fno_n_layers: 4
+
+
+# ----------------------------------------------------------
+# These are hyperparameters for the training process
+# ----------------------------------------------------------
+n_query_points : 4096    # Number of query points to be evaluated in training process
+prior : "rff"            # choices=["iid", "rff"]; idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
+rff_features : 256
+rff_lengthscale : 0.15
+
+eval_every : 5
+save_every : 100         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
+n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
+
+# Setting up the conditioning process
+cond_fields :   [2, 3]      # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+n_obs_min_list: [128, 128]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
+n_obs_max_list: [512, 512]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
+
+vis_cond_fields:            # help="Visualization conditioned fields. Defaults to cond_fields if None
+vis_n_obs_list: [256, 256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
+
+# ===== Rectified Flow generation controls =====
+ode_solver : "euler"
+benchmark_n_steps : [2, 4, 16]
+
+# From older version in V0 ---------------------
+n_obs_min : 128
+n_obs_max : 512
+cond_field : 2  # "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+# ----------------------------------------------

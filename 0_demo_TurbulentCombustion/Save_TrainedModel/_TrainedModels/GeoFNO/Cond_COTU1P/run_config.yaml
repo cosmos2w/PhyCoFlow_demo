@@ -1,0 +1,112 @@
+baseline_model: geofno
+training_stage: 1
+shared:
+  demo_num: 11
+  seed: 42
+  device_ids:
+  - 0
+  reload: false
+  paths:
+    data_path: Dataset/Merged_CH4COTU1P.h5
+    save_root: Save_TrainedModel
+    config_backup_root: Save_config/det_baseline
+  data:
+    dataset_name: turbulent_combustion
+    train_ratio: 0.9
+    time_stride: 1
+    num_workers: 4
+    num_x: 403
+    num_y: 100
+  conditioning:
+    cond_fields:
+    - 1
+    - 2
+    - 3
+    - 4
+    n_obs_min_list:
+    - 192
+    - 192
+    - 192
+    - 192
+    n_obs_max_list:
+    - 384
+    - 384
+    - 384
+    - 384
+    vis_cond_fields:
+    - 1
+    - 2
+    - 3
+    - 4
+    vis_n_obs_list:
+    - 256
+    - 256
+    - 256
+    - 256
+  logging:
+    eval_every: 5
+    save_every: 500
+  overrides:
+    epochs: null
+    batch_size: null
+    learning_rate: null
+    weight_decay: null
+mlp_rbf_params:
+  training:
+    epochs: 10000
+    batch_size: 384
+    learning_rate: 0.0001
+    weight_decay: 1.0e-06
+    eval_every: 5
+    save_every: 500
+    n_query_points: 4096
+  architecture:
+    coord_dim: 3
+    hidden_dim: 256
+    cond_dim: 128
+    field_embed_dim: 128
+    rbf_sigma: 0.05
+    use_fourier_pe: true
+    fourier_pe_num_bands: 32
+    fourier_pe_max_freq: 64.0
+senseiver_params:
+  training:
+    epochs: 10000
+    batch_size: 512
+    learning_rate: 0.0001
+    weight_decay: 1.0e-06
+    eval_every: 5
+    save_every: 500
+    n_query_points: 4096
+  architecture:
+    coord_dim: 2
+    num_latents: 128
+    latent_dim: 128
+    num_encoder_layers: 3
+    num_self_attn_per_block: 3
+    num_cross_attn_heads: 8
+    num_self_attn_heads: 8
+    dec_num_cross_attn_heads: 8
+    field_embed_dim: 32
+    space_bands: 32
+    max_freq: 64.0
+    ff_mult: 4
+    dropout: 0.0
+geofno_params:
+  training:
+    epochs: 10000
+    batch_size: 192
+    learning_rate: 0.0001
+    weight_decay: 1.0e-06
+    eval_every: 5
+    save_every: 500
+  architecture:
+    geofno_variant: fno
+    fno_modes_x: 24
+    fno_modes_y: 12
+    fno_hidden_channels: 64
+    fno_n_layers: 4
+    latent_Nx: 64
+    latent_Ny: 64
+    gno_radius: 0.1
+    gno_transform_type: linear

@@ -1,0 +1,32 @@
+name: CoupledFieldReconstruction_smoke
+rows: 2
+cols: 2
+width_mm: 183
+height_mm: 112
+wspace: 0.08
+hspace: 0.10
+panels:
+  - label: a
+    row: 0
+    col: 0
+    path: ../_Process_Figures/ConditionMatrix/ConditionMatrix_{run_id}.png
+  - label: b
+    row: 0
+    col: 1
+    path: ../_Process_Figures/FieldL2/FieldL2_heatmap_{run_id}.png
+    missing_text: Run the heatmap plotter first
+  - type: contour_grid
+    label: c
+    row: 1
+    col: 0
+    colspan: 2
+    model: DMFGen
+    condition: Cond_T
+    snapshot: 0
+    # Select any subset of CH4, CO, T, U1, p. Use all five for a full plate.
+    fields: [T]
+    kinds: [GT, Rec, Err]
+    contour_run_id: "{run_id}"
+    missing_text: Missing
+    wspace: 0.03
+    hspace: 0.05

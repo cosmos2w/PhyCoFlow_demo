@@ -1,0 +1,51 @@
+
+# ===========================================================================
+# GeoFNO Supervised Regression Baseline — elasticity (41x41).
+# ===========================================================================
+
+Demo_Num: 0
+device_ids: [0]
+
+dataset: "elasticity"
+data: "Dataset/elasticity"
+save_dir: "Save_TrainedModel/elasticity/geofno_supervised"
+
+seed: 42
+epochs: 10000
+batch_size: 128
+lr: 2.0e-4
+weight_decay: 1.0e-6
+train_ratio: 0.8
+time_stride: 1
+num_workers: 4
+
+geofno_variant: "fno"
+
+Num_x: 41
+Num_y: 41
+
+fno_modes_x: 16
+fno_modes_y: 16
+fno_hidden_channels: 64
+fno_n_layers: 4
+
+latent_Nx: 32
+latent_Ny: 32
+gno_radius: 0.1
+gno_transform_type: "linear"
+
+eval_every: 5
+save_every: 200
+
+cond_fields: [0]
+n_obs_min_list: [16]
+n_obs_max_list: [32]
+
+vis_cond_fields: [0]
+vis_n_obs_list:  [16]
+
+n_obs_min: 16
+n_obs_max: 32
+cond_field: 0
+
+RELOAD: false

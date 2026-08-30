@@ -1,0 +1,55 @@
+
+#----------------------------------------------------------
+# Senseiver baseline on elasticity (per plan).
+# Capacity: D=64, N=2*2=4, H=2, L=32, FF=4. head_dim = D/H = 32.
+#----------------------------------------------------------
+
+Demo_Num: 0
+device_ids: [0]
+
+dataset: "elasticity"
+data: "Dataset/elasticity"
+save_dir: "Save_TrainedModel/elasticity/senseiver"
+
+seed : 42
+epochs : 10000
+batch_size : 128
+lr : 2.0e-4
+weight_decay : 1.0e-6
+train_ratio : 0.8
+time_stride : 1
+num_workers : 4
+
+# Architecture
+coord_dim : 2
+num_latents : 32
+latent_dim : 64
+num_encoder_layers : 2
+num_self_attn_per_block : 2        # depth = 2*2 = 4
+num_cross_attn_heads : 2
+num_self_attn_heads : 2
+dec_num_cross_attn_heads : 2
+field_embed_dim : 8
+space_bands : 32
+max_freq : 64.0
+ff_mult : 4
+dropout : 0.0
+
+# Training
+n_query_points : 1681              # full 41x41
+
+eval_every : 5
+save_every : 200
+
+cond_fields :   [0]
+n_obs_min_list: [16]
+n_obs_max_list: [32]
+
+vis_cond_fields: [0]
+vis_n_obs_list: [16]
+
+n_obs_min : 16
+n_obs_max : 32
+cond_field : 0
+
+RELOAD: false

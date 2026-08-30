@@ -1,0 +1,175 @@
+# Direct coherence post-training template.
+# Architecture/data/conditioning settings mirror config_pointcloud_ffm.yaml.
+
+# Extend Demo 40 - loss, data_loss_weight: 0.1, 
+
+Demo_Num: 401
+device_ids: [2]
+
+data: "Dataset/Merged_CH4COTU1P.h5"
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+seed : 42
+epochs : 10000
+batch_size : 96
+lr : 1.0e-4
+weight_decay : 1.0e-6
+train_ratio : 0.9
+time_stride : 1
+num_workers : 4
+
+# Must match the pretrained checkpoint architecture, like GL_rbf or GL_rbf_ENH.
+backbone: "GL_rbf"
+
+hidden_dim : 256
+cond_dim : 128
+field_embed_dim : 128
+sigma_min : 1.0e-4
+rbf_sigma : 0.05
+
+USE_FOURIER_PE: true
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
+
+latent_dim: 256
+num_latents: 128
+num_heads: 8
+num_latent_blocks: 4
+ff_mult: 4
+attn_dropout: 0.0
+mlp_dropout: 0.0
+decode_chunk_size: 4096
+share_query_proj: false
+
+summary_type: "mean"
+
+gather_mode: "topk_rbf_glres"
+gather_topk: 32
+sensor_local_topk: 16
+gather_query_chunk_size: 2048
+learnable_rbf_sigma: true
+neighbor_backend: "keops"
+sensor_local_dropout: 0.0
+
+# Keep these as legacy/default values for Demo 17 checkpoint compatibility.
+sensor_coord_encoding: null
+latent_sensor_reinject: null
+latent_reinject_every: 1
+query_latent_readout: null
+query_readout_type: null
+query_readout_scale_init: null
+enhanced_head_norm: null
+glres_scale_init: null
+
+Num_x: 403
+Num_y: 100
+fno_modes_x: 24
+fno_modes_y: 12
+fno_hidden_channels: 96
+fno_n_layers: 4
+condition_blur: true
+condition_blur_kernel: 11
+condition_blur_sigma: 1.75
+
+n_query_points : 4096
+query_sampling: "uniform"
+query_sample_near_ratio: 0.25
+query_sample_far_ratio: 0.25
+query_sample_sigma_ratio: 0.05
+prior : "rff"
+rff_features : 256
+rff_lengthscale : 0.15
+
+eval_every : 5
+save_every : 500
+n_steps_generation : 32
+
+cond_fields :   [2]
+n_obs_min_list: [256]
+n_obs_max_list: [256]
+
+vis_cond_fields: [2]
+vis_n_obs_list: [256]
+
+ode_solver : "euler"
+benchmark_n_steps : [2, 4, 8]
+
+# ==========================================================
+# Direct coherence training / post-training
+# ==========================================================
+
+training_mode: "direct_coherence"
+
+# "scratch" enables constrained training from initialization.
+# "pretrained" loads a normal PointCloudFFM checkpoint and continues in a new run.
+initialization: "pretrained"
+
+pretrained_run_dir: "Save_TrainedModel/ffm_tc_pointcloud_DemoN17_20260510_082814"
+pretrained_source_Demo_Num: null # can be number like 19 
+pretrained_checkpoint: "best"
+pretrained_load_optimizer: false
+pretrained_strict: true
+
+# Fresh fraction of the training split used per epoch.
+train_ratio_downsample: 0.25
+
+direct_coherence_enabled: true
+
+data_loss_weight: 0.1
+coherence_loss_weight: 1.0
+
+# Run the expensive differentiable clean rollout once every N optimizer steps.
+coherence_every_n_steps: 1
+coherence_start_epoch: 1
+coherence_interval_rescale: false
+
+# Limit the expensive coherence branch while data loss keeps its normal batch/query size.
+coherence_batch_size: 24
+coherence_n_points: 4096
+
+# The base model already produces high-quality reconstructions with two RF steps.
+coherence_rollout_steps: 2
+coherence_rollout_solver: "euler"
+coherence_obs_consistency_mode: "endpoint_smooth"
+coherence_obs_consistency_strength: 1.0
+coherence_obs_consistency_sigma: 0.05
+coherence_obs_consistency_schedule_power: 2.0
+coherence_obs_consistency_final_clamp: true
+
+# Coherence decomposition:
+# self   = per-field marginal W2^2
+# mutual = pairwise two-field sliced W2^2
+# cross  = joint all-field top-k sliced W2^2
+coherence_self_weight: 1.0
+coherence_mutual_weight: 1.0
+coherence_cross_weight: 1.0
+coherence_channel_weights: null
+
+coherence_cross_num_directions: 32
+coherence_cross_top_frac: 0.10
+coherence_cross_seed: 1234
+coherence_cross_include_axes: true
+coherence_cross_qmc: true
+
+coherence_mutual_num_directions: 16
+coherence_mutual_seed: 1234
+
+# Normalized space is the safest default because physical channels have very different scales.
+coherence_use_denorm: false
+
+# Choices:
+# weighted_sum = data_weight * L_FM + coherence_weight * L_coherence
+# config       = conflict-free two-objective gradient update
+gradient_balance_mode: "weighted_sum"
+config_missing_behavior: "error"
+config_data_grad_scale: 1.0
+config_coherence_grad_scale: 1.0
+
+# Optional warmup for scratch direct-coherence training.
+coherence_weight_warmup_epochs: 0
+
+# Alternative ConFIG block:
+# gradient_balance_mode: "config"
+# config_missing_behavior: "error"
+# config_data_grad_scale: 1.0
+# config_coherence_grad_scale: 1.0

@@ -1,0 +1,236 @@
+# =============================================================================
+# GL_rbf_CQ — balanced, validated new model
+# =============================================================================
+# Recommended default when reconstruction quality and CQ efficiency both matter.
+
+# Scientific identity:
+#   - stronger latent/sensor condition core: latent_dim=256
+#   - compact query decoder remains fixed at 128-D, low-rank-64, additive fusion
+#   - sinusoidal timestep FiLM + raw RBF measurement/support shortcut
+#   - EMA weights are used for validation and reconstruction
+#   - persistent geometry-only Top-K remains K=32 and unchanged
+#
+# Quick demonstrations (run from 0_demo_TurbulentCombustion/):
+#
+#   Validate paths and model construction without starting training:
+#     python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml --dry-run
+#
+#   Train on GPU 0 with the defaults below:
+#     CUDA_VISIBLE_DEVICES=0 python src/train_pointcloud_ffm.py \
+#       --config configs/gl_rbf_cq.yaml
+#
+#   Override portable paths or a run identifier without editing this file:
+#     python src/train_pointcloud_ffm.py --config configs/gl_rbf_cq.yaml \
+#       --data /path/to/Merged_COTU0U1P.h5 \
+#       --dataset-stats-path /path/to/dataset_stats.pt \
+#       --save-dir /path/to/runs/GL_rbf_CQ \
+#       --demo-num 9800 --device-ids 0
+#
+#   Reconstruct and run the fixed-manifest protocol:
+#     python src/reconstruct_pointcloud.py --config configs/gl_rbf_cq.yaml \
+#       --checkpoint /path/to/checkpoint.pt --device cuda:0
+#     python src/evaluate_fixed_manifest.py --config configs/gl_rbf_cq.yaml \
+#       --checkpoint /path/to/checkpoint.pt --device cuda:0
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Public identity and run locations
+# -----------------------------------------------------------------------------
+# model_name is the collaborator-facing name. backbone is intentionally kept at
+# its historical value so old configs/checkpoints and state keys remain valid.
+model_name: GL_rbf_CQ
+backbone: GL_rbf_ENH_CQ
+coord_dim: 3                  # The demo stores coordinates as (x, y, z).
+
+Demo_Num: 9800                # Run identity only; does not affect mathematics.
+device_ids: [0]               # Logical device ids seen by the Python process.
+data: Dataset/Merged_COTU0U1P.h5
+dataset_stats_path: ReleaseArtifacts/GL_rbf_CQ_rc1/dataset_stats.pt
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+# -----------------------------------------------------------------------------
+# Reproducibility, optimizer, and schedule
+# -----------------------------------------------------------------------------
+seed: 42
+epochs: 1000
+scheduler_t_max: 1000         # Keep 1000 for 200-epoch screens and continuations.
+batch_size: 128
+lr: 1.0e-4
+weight_decay: 1.0e-6
+train_ratio: 0.9
+time_stride: 1
+num_workers: 4
+
+# -----------------------------------------------------------------------------
+# Optimized data path
+# -----------------------------------------------------------------------------
+# Historical reference choices are shown for debugging only:
+#   data_path_mode: legacy
+#   coord_batch_mode: legacy_clone
+#   index_sampling_mode: legacy_randperm
+#   sampling_device: legacy_gpu
+#   gpu_transfer_mode: legacy_full
+# Do not mix these into a scientific A/B comparison without a controlled gate.
+data_path_mode: optimized                    # choices: [legacy, optimized]
+coord_batch_mode: shared_mesh                # [legacy_clone, shared_mesh]
+index_sampling_mode: scalable                # [legacy_randperm, scalable]
+sampling_device: cpu                         # [legacy_gpu, cpu]
+
+# The contiguous demo HDF5 layout favors a full snapshot read followed by
+# selected-field normalization and selected-only GPU transfer.
+field_read_mode: legacy_full_snapshot        # [legacy_full_snapshot, indexed_union]
+field_normalization_mode: selected_after_full_read  # [legacy_full_after_read, selected_after_full_read]
+gpu_transfer_mode: selected_only             # [legacy_full, selected_only]
+dataloader_persistent_workers: true
+dataloader_prefetch_factor: 2
+non_blocking_transfer: true
+
+# Data-path timing/transfer diagnostics. Set data_path_diagnostics=false for a
+# quiet production run; doing so does not alter the model or RF objective.
+data_path_diagnostics: true
+data_path_diag_storage_mode: append           # [legacy_rewrite, append]
+data_path_diag_every_n_steps: 50
+data_path_diag_warmup_steps: 5
+data_path_diag_max_steps_per_epoch: 10
+training_log_every_n_steps: 20
+training_history_plot_every_n_epochs: 50      # Regenerate the loss-history plot every 50 epochs.
+
+# -----------------------------------------------------------------------------
+# Shared GL-RBF sensor/query representation
+# -----------------------------------------------------------------------------
+hidden_dim: 256
+cond_dim: 128
+field_embed_dim: 128
+sigma_min: 1.0e-4              # Compatibility key; retained from historical FFM.
+rbf_sigma: 0.05
+
+USE_FOURIER_PE: true            # Fourier features for sensor/query coordinates.
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
+
+# latent_dim strengthens the condition/global core only. It does NOT widen the
+# compact CQ query state; cq_query_dim remains 128 below.
+latent_dim: 256
+num_latents: 128
+num_heads: 8
+num_latent_blocks: 4
+ff_mult: 4
+attn_dropout: 0.0
+mlp_dropout: 0.0
+decode_chunk_size: 4096
+share_query_proj: false
+summary_type: mean             # choices: [mean, cls]
+
+# -----------------------------------------------------------------------------
+# Local RBF gather, GLRES, and persistent-geometry contract
+# -----------------------------------------------------------------------------
+# Useful gather references:
+#   rbf             = historical full RBF gather
+#   topk_rbf        = compact local Top-K RBF gather
+#   topk_rbf_glres  = validated Top-K plus coarse scaffold/sensor importance
+gather_mode: topk_rbf_glres    # [rbf, topk_rbf, topk_rbf_gate, topk_rbf_ptlocal, topk_rbf_glres]
+gather_topk: 32                # Validated K; do not change for this profile.
+sensor_local_topk: 16
+gather_query_chunk_size: 2048
+learnable_rbf_sigma: true
+neighbor_backend: keops        # choices: [auto, torch, keops]
+sensor_local_dropout: 0.0
+
+sensor_coord_encoding: fourier # choices: [raw, fourier]
+latent_sensor_reinject: true
+latent_reinject_every: 1
+
+# Stage-8 preferred execution. This reuses sensor K/V across all four latent
+# re-injections without adding parameters or changing checkpoint keys.
+condition_attention_execution: cached_kv
+sensor_attention_padding_mode: full
+
+# Compatibility/debug override for historical MHA execution:
+#   condition_attention_execution: legacy_mha
+# Static bucketing and dynamic trimming are research diagnostics, not public
+# defaults. Keep full padding for the validated release execution.
+
+query_latent_readout: true
+query_readout_type: coord      # coord uses decoder coordinates; point uses x_t features.
+query_readout_scale_init: 1.0e-2
+enhanced_head_norm: true
+glres_scale_init: 1.0e-2
+
+# -----------------------------------------------------------------------------
+# Compact Query decoder (CQ)
+# -----------------------------------------------------------------------------
+# These values define the cheap query path and must remain independent of the
+# 256-D latent condition core above.
+cq_query_dim: 128
+cq_readout_mode: lowrank       # choices: [full, lowrank]
+cq_readout_rank: 64
+cq_readout_heads: 4
+cq_fusion_mode: additive       # choices: [additive, structured_concat]
+cq_global_scale_init: 1.0
+cq_local_scale_init: 1.0
+cq_readout_scale_init: 1.0e-2
+
+# Stage-7 time conditioning modulates point_q only. It does not make condition
+# latents or query-static caches time dependent.
+cq_time_conditioning: sinusoidal_film  # [scalar_concat, sinusoidal_film]
+cq_time_embed_dim: 128
+cq_time_max_period: 10000.0
+cq_time_film_zero_init: true
+
+# Adds five raw RBF-interpolated measurements and five support scalars. These
+# reuse the learned-local Top-K indices/distances; there is no second KNN search.
+cq_measurement_support_mode: rbf_value_support  # [none, rbf_value_support]
+cq_measurement_support_normalize: true
+
+# EMA is checkpointed for training resume and selected for validation/reconstruction.
+model_ema_enabled: true
+model_ema_decay: 0.999
+model_ema_eval: true
+
+# -----------------------------------------------------------------------------
+# Rectified-flow training query path and prior
+# -----------------------------------------------------------------------------
+n_query_points: 4096
+train_query_microbatch_size: 2048  # null or >=4096 selects monolithic execution.
+reuse_condition_context_across_query_microbatches: true
+query_sampling: uniform            # choices: [uniform, obs_mix]
+query_sample_near_ratio: 0.25      # Used only by obs_mix.
+query_sample_far_ratio: 0.25       # Used only by obs_mix.
+query_sample_sigma_ratio: 0.05     # Used only by obs_mix.
+
+prior: rff                         # choices: [iid, rff]
+rff_features: 256
+rff_lengthscale: 0.15
+
+# -----------------------------------------------------------------------------
+# Sparse conditioning demonstration
+# -----------------------------------------------------------------------------
+# Dataset field order: 0=CO, 1=T, 2=U_0, 3=U_1, 4=p.
+# Active example: condition on temperature using 192–384 random sensors.
+cond_fields: [1]
+n_obs_min_list: [192]
+n_obs_max_list: [384]
+
+# Multi-field example (commented):
+#   cond_fields: [0, 2]
+#   n_obs_min_list: [128, 192]
+#   n_obs_max_list: [256, 384]
+# Each list is per field; a one-element list broadcasts to all cond_fields.
+vis_cond_fields: [1]
+vis_n_obs_list: [256]
+
+# -----------------------------------------------------------------------------
+# Reconstruction, validation, and checkpoint retention
+# -----------------------------------------------------------------------------
+# cached_streamed prepares the condition once and streams query chunks.
+# static_features includes persistent Top-K geometry and query-static features.
+reconstruction_execution_mode: cached_streamed  # [legacy_full, cached_streamed]
+reconstruction_query_chunk_size: 8192
+reconstruction_cache_level: static_features     # [none, geometry, static_features]
+
+ode_solver: euler                 # choices: [euler, heun]
+benchmark_n_steps: [2, 4]      # Euler NFEs reported during reconstruction.
+eval_every: 10
+save_every: 500
+checkpoint_epochs: # [1, 20, 40, 60, 100, 150, 200, 400, 600, 800, 1000]
+n_steps_generation: 32            # Fallback when benchmark_n_steps is absent.

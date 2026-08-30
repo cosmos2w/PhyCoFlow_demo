@@ -1,0 +1,183 @@
+# =============================================================================
+# GL_rbf_ENH — legacy F0 reproduction and checkpoint-loading profile
+# =============================================================================
+# Use this profile to reproduce the clean F0 baseline or evaluate historical
+# GL_rbf_ENH checkpoints. It is intentionally not a CQ model:
+#   - latent_dim=128
+#   - full enhanced point/global/local query decoder
+#   - coordinate query-to-latent readout
+#   - no CQ low-rank decoder, FiLM, measurement/support, or EMA settings
+#
+# This profile is useful as the quality/cost reference when comparing
+# GL_rbf_CQ-fast and balanced GL_rbf_CQ.
+#
+# Quick demonstrations (run from 0_demo_TurbulentCombustion/):
+#
+#   Validate the legacy public profile without reading data:
+#     python src/train_pointcloud_ffm.py --config configs/legacy_gl_rbf_enh.yaml --dry-run
+#
+#   Train the clean F0 control on GPU 0:
+#     CUDA_VISIBLE_DEVICES=0 python src/train_pointcloud_ffm.py \
+#       --config configs/legacy_gl_rbf_enh.yaml
+#
+#   Launch a 200-epoch convergence screen with the same 1000-epoch LR horizon:
+#     python src/train_pointcloud_ffm.py --config configs/legacy_gl_rbf_enh.yaml \
+#       --set epochs=200 --set scheduler_t_max=1000 --demo-num 9802 --device-ids 0
+#
+#   Evaluate an old GL_rbf_ENH checkpoint:
+#     python src/evaluate_fixed_manifest.py \
+#       --config configs/legacy_gl_rbf_enh.yaml \
+#       --checkpoint /path/to/f0_checkpoint.pt --device cuda:0
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Public identity and run locations
+# -----------------------------------------------------------------------------
+model_name: GL_rbf_ENH
+backbone: GL_rbf_ENH            # Historical and public names are identical.
+coord_dim: 3
+
+Demo_Num: 9802
+device_ids: [0]
+data: Dataset/Merged_COTU0U1P.h5
+dataset_stats_path: ReleaseArtifacts/GL_rbf_CQ_rc1/dataset_stats.pt
+save_dir: runs/GL_rbf_ENH
+
+# -----------------------------------------------------------------------------
+# Reproducibility, optimizer, and schedule
+# -----------------------------------------------------------------------------
+seed: 42
+epochs: 1000
+scheduler_t_max: 1000          # Exact clean A/B horizon.
+batch_size: 128
+lr: 1.0e-4
+weight_decay: 1.0e-6
+train_ratio: 0.9
+time_stride: 1
+num_workers: 4
+
+# -----------------------------------------------------------------------------
+# Optimized data path
+# -----------------------------------------------------------------------------
+# These values match the clean CQ comparisons. Changing them would confound a
+# model comparison with data-loading or transfer behavior.
+data_path_mode: optimized                    # choices: [legacy, optimized]
+coord_batch_mode: shared_mesh                # [legacy_clone, shared_mesh]
+index_sampling_mode: scalable                # [legacy_randperm, scalable]
+sampling_device: cpu                         # [legacy_gpu, cpu]
+field_read_mode: legacy_full_snapshot        # [legacy_full_snapshot, indexed_union]
+field_normalization_mode: selected_after_full_read  # [legacy_full_after_read, selected_after_full_read]
+gpu_transfer_mode: selected_only             # [legacy_full, selected_only]
+dataloader_persistent_workers: true
+dataloader_prefetch_factor: 2
+non_blocking_transfer: true
+
+data_path_diagnostics: true
+data_path_diag_storage_mode: append           # [legacy_rewrite, append]
+data_path_diag_every_n_steps: 50
+data_path_diag_warmup_steps: 5
+data_path_diag_max_steps_per_epoch: 10
+training_log_every_n_steps: 20
+training_history_plot_every_n_epochs: 50
+
+# -----------------------------------------------------------------------------
+# Shared GL-RBF sensor/query representation
+# -----------------------------------------------------------------------------
+hidden_dim: 256
+cond_dim: 128
+field_embed_dim: 128
+sigma_min: 1.0e-4             # Historical compatibility key.
+rbf_sigma: 0.05
+
+USE_FOURIER_PE: true
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
+
+latent_dim: 128               # Clean F0 reference capacity.
+num_latents: 128
+num_heads: 8
+num_latent_blocks: 4
+ff_mult: 4
+attn_dropout: 0.0
+mlp_dropout: 0.0
+decode_chunk_size: 4096
+share_query_proj: false
+summary_type: mean            # choices: [mean, cls]
+
+# -----------------------------------------------------------------------------
+# Local RBF gather and enhanced GLRES condition core
+# -----------------------------------------------------------------------------
+gather_mode: topk_rbf_glres   # [rbf, topk_rbf, topk_rbf_gate, topk_rbf_ptlocal, topk_rbf_glres]
+gather_topk: 32               # Same K as both CQ profiles.
+sensor_local_topk: 16
+gather_query_chunk_size: 2048
+learnable_rbf_sigma: true
+neighbor_backend: keops       # choices: [auto, torch, keops]
+sensor_local_dropout: 0.0
+
+sensor_coord_encoding: fourier
+latent_sensor_reinject: true
+latent_reinject_every: 1
+
+# Optional execution-only Stage-8 controls. Keep legacy/full when reproducing
+# archived GL_rbf_ENH results.
+condition_attention_execution: legacy_mha  # [legacy_mha, cached_kv]
+sensor_attention_padding_mode: full        # [full, static_buckets]
+sensor_attention_buckets: [256, 320, 384]
+
+# -----------------------------------------------------------------------------
+# Full enhanced F0 query decoder
+# -----------------------------------------------------------------------------
+# Unlike CQ, every query uses the original enhanced query-to-latent readout and
+# [point, global, local] fusion head. There are deliberately no cq_* keys here.
+query_latent_readout: true
+query_readout_type: coord      # choices: [coord, point]
+query_readout_scale_init: 1.0e-2
+enhanced_head_norm: true
+glres_scale_init: 1.0e-2
+
+# -----------------------------------------------------------------------------
+# Rectified-flow training query path and prior
+# -----------------------------------------------------------------------------
+n_query_points: 4096
+train_query_microbatch_size: null  # Clean F0 reference used monolithic Q4096.
+reuse_condition_context_across_query_microbatches: true
+query_sampling: uniform            # choices: [uniform, obs_mix]
+query_sample_near_ratio: 0.25      # Used only by obs_mix.
+query_sample_far_ratio: 0.25
+query_sample_sigma_ratio: 0.05
+
+prior: rff                         # choices: [iid, rff]
+rff_features: 256
+rff_lengthscale: 0.15
+
+# -----------------------------------------------------------------------------
+# Sparse conditioning demonstration
+# -----------------------------------------------------------------------------
+# Dataset field order: 0=CO, 1=T, 2=U_0, 3=U_1, 4=p.
+cond_fields: [1]                   # Temperature-only clean comparison.
+n_obs_min_list: [192]
+n_obs_max_list: [384]
+
+# Example pressure + velocity conditioning (commented):
+#   cond_fields: [3, 4]
+#   n_obs_min_list: [192, 96]
+#   n_obs_max_list: [384, 192]
+vis_cond_fields: [1]
+vis_n_obs_list: [256]
+
+# -----------------------------------------------------------------------------
+# Reconstruction, validation, and checkpoint retention
+# -----------------------------------------------------------------------------
+# Cached streaming and persistent Top-K apply to F0 as well as CQ; only the
+# query decoder differs across these public profiles.
+reconstruction_execution_mode: cached_streamed  # [legacy_full, cached_streamed]
+reconstruction_query_chunk_size: 8192
+reconstruction_cache_level: static_features     # [none, geometry, static_features]
+
+ode_solver: euler                # choices: [euler, heun]
+benchmark_n_steps: [1, 2, 4]
+eval_every: 5
+save_every: 1000
+checkpoint_epochs: [1, 20, 40, 60, 100, 200, 400, 600, 800, 1000]
+n_steps_generation: 32

@@ -1,0 +1,140 @@
+
+#----------------------------------------------------------
+
+# Notes: Changing to V5 version: multi-field sparse encoding + 
+#                         Rectified Flow + Perceiver backbone + Global-Local mode + "multiple decoding gathering modes"
+
+#----------------------------------------------------------
+# Use Merged_CH4COTU1P.h5 for training, which contains 4 fields: CH4, CO, T, U_1, p
+# Try Fourier Positional Encoding & Using temperature sensor only
+# Work as baseline for later PDE coherence calculation
+#----------------------------------------------------------
+
+Demo_Num: 1
+device_ids: [0]
+
+data: "Dataset/Merged_CH4COTU1P.h5" # Two options: Merged_CH4COTU1P or Merged_COTU0U1P (newly added)
+save_dir: "Save_TrainedModel/ffm_tc_pointcloud"
+
+seed : 42
+epochs : 5000
+batch_size : 128
+lr : 1.0e-4
+weight_decay : 1.0e-6
+train_ratio : 0.9
+time_stride : 1
+num_workers : 4
+
+# ----------------------------------------------------------
+# Backbone selection
+# ----------------------------------------------------------
+# "GL_rbf" keeps the original local-global model.
+# "GL_rbf_ENH" keeps the same local top-K/RBF gather but strengthens representation learning:
+#   1) Fourier coordinate tokenization for both sensors and queries,
+#   2) repeated sensor-to-latent re-injection,
+#   3) lightweight query-to-latent global readout,
+#   4) LayerNorm before the fusion head.
+backbone: "fno" # Selection in ["mlp_rbf", "perceiver", "fno", "GL_rbf", "GL_rbf_ENH"]
+
+# ----------------------------------------------------------
+# Hyperparameters for mlp_rbf backbone
+# ----------------------------------------------------------
+hidden_dim : 256
+cond_dim : 128
+field_embed_dim : 128
+sigma_min : 1.0e-4    # legacy FFM key; unused in 1-RF, kept only for config compatibility
+rbf_sigma : 0.05
+
+USE_FOURIER_PE: true   # If true, mlp_rbf / perceiver / GL_rbf use Fourier positional coordinate features.
+fourier_pe_num_bands: 32
+fourier_pe_max_freq: 64.0
+
+# ----------------------------------------------------------
+# Hyperparameters for Perceiver backbone or GL_rbf/GL_rbf_ENH
+# ----------------------------------------------------------
+latent_dim: 256
+num_latents: 128
+num_heads: 8
+num_latent_blocks: 4
+ff_mult: 4
+attn_dropout: 0.0
+mlp_dropout: 0.0
+decode_chunk_size: 4096
+share_query_proj: false
+
+summary_type: "mean" # Only for GL_rbf / GL_rbf_ENH, mean or cls
+
+# Existing gather mode remains selectable.
+# Recommended first tests:
+#   "topk_rbf"       = clean enhanced model
+#   "topk_rbf_glres" = strongest enhanced model with residual scaffold/importance
+gather_mode: "topk_rbf_glres"        # choices: ["rbf", "topk_rbf", "topk_rbf_gate", "topk_rbf_ptlocal", "topk_rbf_glres"]
+gather_topk: 32                      # query-side top-k gather
+sensor_local_topk: 16                # sensor-side local graph neighborhood
+gather_query_chunk_size: 2048        # chunks query-side global readout/gather to keep memory bounded
+learnable_rbf_sigma: true
+neighbor_backend: "keops"
+sensor_local_dropout: 0.0
+
+# ----------------------------------------------------------
+# Hyperparameters for Enhanced GL_rbf backbone
+# ----------------------------------------------------------
+sensor_coord_encoding: "fourier"     # GL_rbf/GL_rbf_ENH only; Perceiver uses USE_FOURIER_PE for query and sensor coordinates.
+
+latent_sensor_reinject: true         # Latents periodically re-read sparse sensor tokens.
+latent_reinject_every: 1             # Re-inject every N latent blocks when enabled.
+
+query_latent_readout: true           # Let each query attend to latent memory before final fusion.
+query_readout_type: "coord"          # "coord" uses coordinate decoder tokens; "point" uses point features.
+query_readout_scale_init: 1.0e-2     # Small positive gate for query-to-latent readout.
+
+enhanced_head_norm: true             # Apply LayerNorm before the [query, global, local] fusion head.
+glres_scale_init: 1.0e-2             # Initial scale for topk_rbf_glres scaffold and sensor-importance terms.
+
+# ----------------------------------------------------------
+# Regular-grid specification required by the FNO baseline
+# These MUST be provided and must match the dataset, otherwise training will warn and exit.
+# ----------------------------------------------------------
+Num_x: 403
+Num_y: 100
+# ----------------------------------------------------------
+# Hyperparameters for FNO backbone
+# The tensor fed to FNO is shaped [B, C, Num_y, Num_x], so modes are specified separately along x and y.
+# Current FNO conditioning uses normalized value, support-weighted value, and soft-support maps.
+# Retrain FNO checkpoints after this change; older FNO checkpoints are architecture-incompatible.
+# ----------------------------------------------------------
+fno_modes_x: 24
+fno_modes_y: 12
+fno_hidden_channels: 64
+fno_n_layers: 4
+condition_blur: true
+condition_blur_kernel: 15
+condition_blur_sigma: 2.5
+
+# ----------------------------------------------------------
+# These are hyperparameters for the training process
+# ----------------------------------------------------------
+n_query_points : 4096       # Number of query points to be evaluated in training process
+query_sampling: "uniform"   # "obs_mix" or "uniform" (faster)
+query_sample_near_ratio: 0.25
+query_sample_far_ratio: 0.25
+query_sample_sigma_ratio: 0.05
+prior : "rff"            # choices=["iid", "rff"]; idd, Independent and Identically Distributed, standard diffusion; RFF, Random Fourier Features
+rff_features : 256
+rff_lengthscale : 0.15
+
+eval_every : 5
+save_every : 500         # Saving reconstruction visualizations after save_every epochs to validate reconstruction quality
+n_steps_generation : 32  # Fallback single reconstruction NFE if benchmark_n_steps is omitted.
+
+# Setting up the conditioning process
+cond_fields :   [2, 3]          # For Merged_CH4COTU1P: "0:CH4, 1:CO, 2:T, 3:U_1, 4:p"
+n_obs_min_list: [192, 192]  # Per-field minimum sensors. Length 1 broadcasts to all cond_fields.
+n_obs_max_list: [384, 384]  # Per-field maximum sensors. Length 1 broadcasts to all cond_fields.
+
+vis_cond_fields:            # help="Visualization conditioned fields. Defaults to cond_fields if None
+vis_n_obs_list: [256, 256]  # Visualization exact sensors per field. Defaults to n_obs_max_list.
+
+# ===== Rectified Flow generation controls =====
+ode_solver : "euler"
+benchmark_n_steps : [1, 2, 4]
