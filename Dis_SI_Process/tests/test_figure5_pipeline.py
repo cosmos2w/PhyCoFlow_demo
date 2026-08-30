@@ -12,7 +12,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class Figure5PipelineTest(unittest.TestCase):
-    def test_draft_build_emits_svg_only_with_editable_text(self) -> None:
+    def test_v2_build_emits_seven_named_svg_only_outputs_with_editable_text(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_root = Path(temporary)
             timestamp = "20990101_0000"
@@ -30,18 +30,41 @@ class Figure5PipelineTest(unittest.TestCase):
             )
             bundle = output_root / "figures" / "generated" / timestamp
             svgs = sorted(bundle.glob("*.svg"))
-            self.assertEqual(len(svgs), 9)
+            self.assertEqual(len(svgs), 7)
             self.assertFalse(list(bundle.glob("*.pdf")))
+            expected = {
+                f"fig5a_calibration_{timestamp}.svg",
+                f"fig5b_sharpness_{timestamp}.svg",
+                f"fig5c_spread_error_{timestamp}.svg",
+                f"fig5d_accuracy_latency_{timestamp}.svg",
+                f"fig5e_query_memory_{timestamp}.svg",
+                f"fig5f_nfe_tradeoff_{timestamp}.svg",
+                f"fig5_composed_v2_{timestamp}.svg",
+            }
+            self.assertEqual({path.name for path in svgs}, expected)
             for path in svgs:
                 root = ET.parse(path).getroot()
                 self.assertTrue(any(node.tag.endswith("text") for node in root.iter()))
 
-    def test_strict_formal_rejects_current_missing_validation_outputs(self) -> None:
+    def test_strict_formal_rejects_incomplete_validation_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
+            output_root = Path(temporary)
+            config_path = output_root / "missing_formal_sources.yaml"
+            config_text = (PACKAGE_ROOT / "configs" / "figure5_draft.yaml").read_text(encoding="utf-8")
+            config_text = config_text.replace(
+                "uncertainty_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Uncertainty",
+                f"uncertainty_root: {output_root / 'missing_uncertainty'}",
+            ).replace(
+                "cost_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Cost",
+                f"cost_root: {output_root / 'missing_cost'}",
+            )
+            config_path.write_text(config_text, encoding="utf-8")
             result = subprocess.run(
                 [
                     sys.executable,
                     str(PACKAGE_ROOT / "scripts" / "build_figure5_draft.py"),
+                    "--config",
+                    str(config_path),
                     "--timestamp",
                     "20990101_0001",
                     "--output-root",

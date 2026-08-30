@@ -50,7 +50,12 @@ class LoadedModel:
     device: torch.device
 
     def reconstruct(self, snapshot: int, condition_cfg: dict, sensor_rows: list[dict], *,
-                    n_steps: int, ode_solver: str, obs_consistency: str, generation_seed: int) -> dict:
+                    n_steps: int, ode_solver: str, obs_consistency: str, generation_seed: int,
+                    reconstruction_execution_mode: str = "legacy_full",
+                    reconstruction_query_chunk_size: int = 8192,
+                    reconstruction_cache_level: str = "static_features",
+                    reconstruction_geometry_cache: Any = None,
+                    query_indices: np.ndarray | list[int] | None = None) -> dict:
         """Reconstruct using a saved sensor plan and canonical family adapters."""
         torch.manual_seed(int(generation_seed)); np.random.seed(int(generation_seed) & 0xFFFFFFFF)
         torch.cuda.manual_seed_all(int(generation_seed))
@@ -59,15 +64,31 @@ class LoadedModel:
 
         if self.family == "pointcloud_ffm":
             sample = self.dataset[snapshot]
-            coords = sample["coords"].unsqueeze(0).to(self.device)
-            truth = sample["fields"].unsqueeze(0).to(self.device)
-            obs_indices, obs_field_ids = _plan_tensors(sensor_rows, self.device)
-            obs_coords = coords[:, obs_indices[0]]
-            obs_values = torch.stack([truth[0, idx, fld] for idx, fld in zip(obs_indices[0], obs_field_ids[0])]).view(1, -1, 1)
+            coords_full = sample["coords"].unsqueeze(0).to(self.device)
+            truth_full = sample["fields"].unsqueeze(0).to(self.device)
+            obs_indices_full, obs_field_ids = _plan_tensors(sensor_rows, self.device)
+            obs_coords = coords_full[:, obs_indices_full[0]]
+            obs_values = torch.stack([truth_full[0, idx, fld] for idx, fld in zip(obs_indices_full[0], obs_field_ids[0])]).view(1, -1, 1)
+            if query_indices is None:
+                coords, truth, obs_indices = coords_full, truth_full, obs_indices_full
+            else:
+                query_indices_tensor = torch.as_tensor(query_indices, dtype=torch.long, device=self.device)
+                if query_indices_tensor.ndim != 1 or torch.unique(query_indices_tensor).numel() != query_indices_tensor.numel():
+                    raise ValueError("query_indices must be a one-dimensional set of unique full-grid indices")
+                inverse = torch.full((coords_full.shape[1],), -1, dtype=torch.long, device=self.device)
+                inverse[query_indices_tensor] = torch.arange(query_indices_tensor.numel(), device=self.device)
+                obs_indices = inverse[obs_indices_full]
+                if torch.any(obs_indices < 0):
+                    raise ValueError("Every hard-clamped sensor must be present in query_indices")
+                coords, truth = coords_full[:, query_indices_tensor], truth_full[:, query_indices_tensor]
             obs_mask = torch.ones((1, obs_indices.shape[1]), device=self.device, dtype=coords.dtype)
             kwargs = dict(coords=coords, obs_coords=obs_coords, obs_values=obs_values,
                           obs_mask=obs_mask, obs_field_ids=obs_field_ids, n_steps=n_steps,
-                          clamp_indices=obs_indices, ode_solver=ode_solver)
+                          clamp_indices=obs_indices, ode_solver=ode_solver,
+                          reconstruction_execution_mode=reconstruction_execution_mode,
+                          reconstruction_query_chunk_size=reconstruction_query_chunk_size,
+                          reconstruction_cache_level=reconstruction_cache_level,
+                          reconstruction_geometry_cache=reconstruction_geometry_cache)
             sig = inspect.signature(self.model.sample)
             applied = obs_consistency if "obs_consistency_mode" in sig.parameters else "native_not_applied"
             if "obs_consistency_mode" in sig.parameters:
@@ -75,8 +96,10 @@ class LoadedModel:
             recon = self.model.sample(**{k: v for k, v in kwargs.items() if k in sig.parameters})
             out = {"coords": coords, "truth": truth, "recon": recon, "obs_coords": obs_coords,
                    "obs_values": obs_values, "obs_mask": obs_mask, "obs_indices": obs_indices,
-                   "obs_field_ids": obs_field_ids}
+                   "obs_indices_full": obs_indices_full, "obs_field_ids": obs_field_ids}
         else:
+            if query_indices is not None:
+                raise ValueError("Arbitrary query subsets are supported only by point-cloud FFM adapters")
             # Canonical baseline code owns family-specific inference. Inject the
             # already-saved sparse condition into its shared adapter so sensor
             # selection and generation have independent, explicit seeds.
@@ -107,6 +130,9 @@ class LoadedModel:
                 raise RuntimeError("Canonical baseline sensor selection does not match the saved sensor plan.")
         out["obs_consistency_requested"] = obs_consistency
         out["obs_consistency_applied"] = applied
+        out["reconstruction_execution_mode"] = (
+            reconstruction_execution_mode if self.family == "pointcloud_ffm" else "native_baseline_adapter"
+        )
         return out
 
     def close(self) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build evidence-aware standalone panels and the composed Figure 5 SVG draft."""
+"""Build six standalone Figure 5 V2 panels and the composed SVG."""
 from __future__ import annotations
 
 import argparse
@@ -24,26 +24,32 @@ from utils.figure5_data import SourceRecord, load_figure5_data  # noqa: E402
 from utils.figure5_panels import make_composed, make_standalone  # noqa: E402
 from utils.figure5_style import apply_style, save_svg  # noqa: E402
 
-PANEL_SLUGS = {
-    "a": "uq_map",
-    "b": "uq_coverage",
-    "c": "uq_interval_width",
-    "d": "uq_spread_error",
-    "e": "cost_latency_error",
-    "f": "cost_query_scaling",
-    "g": "cost_memory_scaling",
-    "h": "cost_nfe_error",
-}
 
 PANEL_PURPOSE = {
-    "a": "Localize reconstruction fidelity and empirical spread for one unobserved field.",
-    "b": "Test whether central predictive intervals achieve their nominal empirical coverage.",
-    "c": "Report predictive sharpness so coverage cannot be achieved merely by widening intervals.",
-    "d": "Test whether larger ensemble spread is associated with harder held-out states.",
-    "e": "Place the eight adopted methods on a native-mesh warm-latency versus error plane.",
-    "f": "Show how adopted-checkpoint warm latency changes with the number of query points.",
-    "g": "Show how peak allocated GPU memory changes with the number of query points.",
-    "h": "Show the reconstruction-error trade-off as measured numerical effort increases.",
+    "a": "Measure whether repeated generations attain nominal central-interval coverage.",
+    "b": "Measure interval sharpness jointly with calibration after field-scale normalization.",
+    "c": "Test whether larger state-level ensemble spread is associated with larger reconstruction error.",
+    "d": "Compare native-mesh accuracy and synchronized warm latency for the eight Figure 4 methods.",
+    "e": "Measure DMF-Gen latency and peak allocated memory over real-coordinate query sizes.",
+    "f": "Trace DMF-Gen accuracy and synchronized latency as measured vector-field evaluations increase.",
+}
+
+PANEL_CAVEATS = {
+    "a": "Intervals are empirical central intervals from 64 draws on the frozen 200-state U2 cohort; moving-block bootstrap intervals preserve local temporal dependence. The severe undercoverage means the raw ensemble must not be described as calibrated.",
+    "b": "Widths are normalized by frozen training-set field standard deviations and must be read jointly with panel a: narrow intervals are not desirable when they under-cover. Error bars are moving-block bootstrap intervals over states.",
+    "c": "Spearman statistics and confidence intervals use the frozen 1,000-state U1 cohort and temporal moving-block bootstrap. Association is descriptive, field dependent, and does not establish prospective error prediction or calibration.",
+    "d": "Accuracy is the frozen 1,000-state FieldL2 estimate with state-bootstrap intervals; latency is synchronized warm inference IQR after 10 warm-ups and at least 10 s of timing. Absolute latency is hardware- and adapter-specific.",
+    "e": "Each point uses real-coordinate inference with the same M=256 conditioning sensors, synchronized CUDA timing for at least 10 s, and peak allocated—not reserved—memory. Scaling is hardware- and chunk-size-specific.",
+    "f": "Errors use the same predeclared 50-state cohort and common generation seeds at every measured NFE; error bars are state-bootstrap intervals and latency bars are repeat IQRs. The observed worsening with NFE is reported without assuming monotonic solver improvement.",
+}
+
+PANEL_SI = {
+    "a": "Field-unit coverage counts, per-state interval membership, bootstrap settings, and the U3 sensor-density calibration sweep.",
+    "b": "Physical-unit widths, field normalization constants, per-state widths, and the U3 sensor-density sharpness sweep.",
+    "c": "Full state scatter, binned counts, Pearson correlations, ensemble-diversity diagnostics, and predeclared visual cases.",
+    "d": "Per-method checkpoint hashes, adapters, repeat timings, error bootstrap tables, warm-up policy, and unavailable/failure handling.",
+    "e": "All repeat timings, chunking settings, allocated and reserved memory, cache-equivalence diagnostics, and device metadata.",
+    "f": "Per-state errors, common seeds, vector-field-call accounting, repeat timings, solver settings, and error-bootstrap tables.",
 }
 
 
@@ -51,9 +57,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=PACKAGE_ROOT / "configs" / "figure5_draft.yaml")
     parser.add_argument("--timestamp", default=datetime.now().strftime("%Y%m%d_%H%M"))
-    parser.add_argument("--output-root", type=Path, default=PACKAGE_ROOT, help="Override output root; useful for isolated QA/tests.")
-    parser.add_argument("--strict-formal", action="store_true", help="Fail if any panel would use a proxy or pending state.")
-    parser.add_argument("--preview-png", type=Path, help="Optional Python/Matplotlib QA preview of the composed figure; SVG outputs remain primary.")
+    parser.add_argument("--output-root", type=Path, default=PACKAGE_ROOT)
+    parser.add_argument("--strict-formal", action="store_true")
+    parser.add_argument("--preview-png", type=Path)
     return parser.parse_args()
 
 
@@ -74,87 +80,137 @@ def _git_commit() -> str:
         return "unavailable"
 
 
-def _source_display(path: str) -> str:
-    candidate = Path(path)
+def _display_source(source: str) -> str:
+    path = Path(source)
+    if not path.is_absolute():
+        return str(path)
     try:
-        absolute = candidate if candidate.is_absolute() else REPO_ROOT / candidate
-        return str(absolute.absolute().relative_to(REPO_ROOT.absolute()))
+        return str(path.relative_to(REPO_ROOT))
     except ValueError:
-        return str(candidate)
+        return source
 
 
-def _quantitative_summary(panel: str, data: dict[str, Any]) -> str:
-    if data["modes"][panel] == "pending":
-        return "No quantitative result is reported because the required frozen predictive-uncertainty product does not exist yet."
+def _summary(panel: str, data: dict[str, Any]) -> str:
+    if data["modes"][panel] != "formal":
+        return "No quantitative result is reported: the frozen formal source has not passed its protocol and QA gate."
     if panel == "a":
-        values = data["uq_map"]
-        sensitivity = values["std"]
-        return f"The displayed reconstruction has relative L2 = {values['relative_l2']:.4f}; the 99th percentile of the displayed spread/sensitivity field is {np.nanquantile(sensitivity, 0.99):.4g}."
+        table = data["coverage"]
+        return "; ".join(f"{field}: mean absolute calibration error {group['calibration_error'].abs().mean():.3f}" for field, group in table.groupby("field", sort=False)) + "."
+    if panel == "b":
+        table = data["coverage"]
+        rows = table[table["nominal_level"].eq(0.9)]
+        return "At 90% nominal coverage, normalized widths are " + ", ".join(f"{row.field} {row.mean_interval_width_normalized:.3g}" for row in rows.itertuples()) + "."
+    if panel == "c":
+        values = data["spread_error"]["associations"]
+        return "Spearman associations are " + ", ".join(f"{field} {values[field]['spearman_rho']:.3f}" for field in values) + "."
     if panel == "d":
-        rho = data["spread_error"]["rho"]
-        return "Spearman associations shown in the panel are " + ", ".join(f"{field}: {value:.3f}" for field, value in rho.items()) + "."
+        rows = data["cost_native"]
+        available = rows[rows["status"].eq("ok")]
+        return "; ".join(f"{row.method}: {row.error:.4f} at {row.median_latency_ms:.2f} ms" for row in available.itertuples()) + "."
     if panel == "e":
-        table = data["cost_native"]
-        row = table.loc[table["error"].idxmin()]
-        xcol = "latency_ms" if "latency_ms" in table.columns else "latency_s"
-        unit = "ms" if xcol == "latency_ms" else "s"
-        return f"The lowest-error displayed point is {row['method']} (error {row['error']:.4f}, cost {row[xcol]:.4g} {unit})."
-    if panel in ("f", "g"):
-        table = data["cost_query"].sort_values("N")
-        column = "latency_ms" if panel == "f" else "memory_mib"
-        ratio = float(table.iloc[-1][column] / table.iloc[0][column])
-        return f"Across the displayed query-count range, {column.replace('_', ' ')} increases by {ratio:.2f}×."
-    if panel == "h":
-        lines = []
-        for method, group in data["cost_nfe"].groupby("method", sort=False):
-            group = group.sort_values("nfe")
-            lines.append(f"{method}: {group.iloc[0]['error']:.4f} at NFE {int(group.iloc[0]['nfe'])} to {group.iloc[-1]['error']:.4f} at NFE {int(group.iloc[-1]['nfe'])}")
-        return "; ".join(lines) + "."
-    return "See the plotted frozen source table."
+        rows = data["cost_query"].sort_values("N")
+        return f"From N={int(rows.iloc[0].N):,} to {int(rows.iloc[-1].N):,}, median latency changes {rows.iloc[-1].median_latency_ms / rows.iloc[0].median_latency_ms:.2f}× and peak allocated memory changes {rows.iloc[-1].peak_allocated_mib / rows.iloc[0].peak_allocated_mib:.2f}×."
+    rows = data["cost_nfe"].sort_values("measured_nfe")
+    return "; ".join(f"NFE {int(row.measured_nfe)}: error {row.unobserved_mean_error:.4f}, latency {row.median_latency_ms:.2f} ms" for row in rows.itertuples()) + "."
 
 
-def _caveat(panel: str, record: SourceRecord) -> str:
-    if record.mode == "formal":
-        return "Formal panel candidate; manuscript promotion still requires the ValidationV2 row-count, identity, QA, and temporal-bootstrap gates."
-    if record.mode == "pending":
-        return "Draft layout only. No values are invented or borrowed from case-bootstrap confidence intervals."
-    return record.note + " This panel is a layout/engineering proxy and must not be cited as Figure 5 manuscript evidence."
+def _metadata(panel: str, data: dict[str, Any], config: dict[str, Any]) -> str:
+    if data["modes"][panel] != "formal":
+        return "Cohort/protocol metadata will be populated only from a completed formal run manifest."
+    run = data["run_metadata"]["U2" if panel in "ab" else "U1" if panel == "c" else "cost"]
+    manifest = run["manifest"]
+    return f"Run `{manifest.get('run_id')}`; schema `{manifest.get('schema_version')}`; plan SHA-256 `{manifest.get('plan_sha256')}`; formal flag `{manifest.get('formal')}`."
 
 
-def _write_companion(path: Path, panel: str, svg_path: Path, data: dict[str, Any], record: SourceRecord, timestamp: str) -> None:
+def _write_panel_companion(path: Path, panel: str, svg: Path, data: dict[str, Any], record: SourceRecord, config: dict[str, Any], timestamp: str) -> None:
+    text = f"""# Figure 5 panel {panel}: {config['figure']['panel_map'][panel].replace('_', ' ')}
+
+- Generated: `{timestamp}`
+- SVG: `{svg.name}`
+- Evidence status: **{record.mode.upper()}**
+
+## Scientific question
+
+{PANEL_PURPOSE[panel]}
+
+## Main quantitative result
+
+{_summary(panel, data)}
+
+## Source and identity
+
+`{_display_source(record.source)}`
+
+{_metadata(panel, data, config)}
+
+## Uncertainty definition and caveats
+
+{PANEL_CAVEATS[panel]} Source classification: {record.note}
+
+## SI destination
+
+{PANEL_SI[panel]}
+"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    title = f"Figure 5 panel {panel}: {PANEL_SLUGS[panel].replace('_', ' ')}"
-    text = f"""# {title}\n\n- Generated: `{timestamp}`\n- SVG: `{svg_path.name}`\n- Evidence status: **{record.mode.upper()}**\n\n## Purpose and meaning\n\n{PANEL_PURPOSE[panel]}\n\n## Main quantitative result\n\n{_quantitative_summary(panel, data)}\n\n## Source data / generation source\n\n`{_source_display(record.source)}`\n\nThe build reads this source in place and writes only a lightweight derived summary under `Dis_SI_Process/results/`; no raw result or checkpoint is copied.\n\n## Caveats and draft status\n\n{_caveat(panel, record)}\n"""
     path.write_text(text, encoding="utf-8")
 
 
-def _write_composed_companion(path: Path, svg_path: Path, records: list[SourceRecord], timestamp: str) -> None:
-    statuses = ", ".join(f"{r.panel}={r.mode}" for r in records)
-    path.write_text(
-        f"""# Composed Figure 5 draft\n\n- Generated: `{timestamp}`\n- SVG: `{svg_path.name}`\n- Panel status map: `{statuses}`\n\n## Purpose and meaning\n\nThe draft orders empirical conditional uncertainty evidence first (a–d), then computational cost and scaling evidence (e–h). Panel a is the spatial anchor; coverage, sharpness, and spread–error association form the required UQ triad; the cost row separates accuracy–latency, query scaling, memory scaling, and numerical effort.\n\n## Main quantitative result\n\nThis is an evidence-aware initial draft, not a final validation figure. Existing processed artifacts establish the panel grammar and selected engineering trends, while formal predictive coverage/width and the adopted eight-method native benchmark remain visibly unresolved.\n\n## Source data / generation source\n\nThe figure is assembled directly in Python/Matplotlib from the panel sources documented in the eight companion files. No SVG collage, raw-data copy, retraining, or model inference is performed.\n\n## Caveats and draft status\n\nProxy and pending badges are part of the scientific audit trail. They must be removed only by rerendering from frozen ValidationV2 outputs; manual relabelling is not sufficient. Timing remains hardware/protocol-specific, and solver-sensitivity is not predictive uncertainty.\n""",
-        encoding="utf-8",
+def _write_composed_companion(path: Path, svg: Path, records: list[SourceRecord], data: dict[str, Any], config: dict[str, Any], timestamp: str) -> None:
+    statuses = ", ".join(f"{record.panel}={record.mode}" for record in records)
+    results = "\n".join(f"- **{record.panel}.** {_summary(record.panel, data)}" for record in records)
+    sources = "\n".join(
+        f"- **{record.panel}.** `{_display_source(record.source)}` — {_metadata(record.panel, data, config)}"
+        for record in records
     )
+    si_items = "\n".join(f"- **{panel}.** {PANEL_SI[panel]}" for panel in "abcdef")
+    path.write_text(f"""# Figure 5 V2 composed candidate
+
+- Generated: `{timestamp}`
+- SVG: `{svg.name}`
+- Panel status map: `{statuses}`
+
+Figure 5 follows the earlier tests of generalization across physical domain, output discretization, and measurement content by addressing two cross-cutting questions: whether repeated conditional generations expose meaningful empirical ambiguity, and what practical accuracy–latency–memory cost direct function-space generation requires.
+
+The top row jointly reports calibration, normalized sharpness, and spread–error association. The bottom row reports the actual eight-method native-mesh comparison, DMF query/memory scaling, and the measured-NFE accuracy–cost path. No qualitative reconstruction, solver-sensitivity proxy, architecture proxy, throughput extension, or ablation enters this composition.
+
+## Main quantitative results
+
+{results}
+
+## Exact sources and run identities
+
+{sources}
+
+## Statistics and caveats
+
+Only an all-formal status map is a manuscript candidate. State-level confidence intervals use the frozen bootstrap protocol (temporal moving blocks for UQ; the predeclared state bootstrap for accuracy); latency uncertainty is synchronized repeat IQR with at least 10 s per accepted timing row. Absolute cost is hardware-specific. Spread–error association is not prospective calibration, and the figure does not force Pareto superiority, calibrated uncertainty, or monotonic improvement with NFE.
+
+## Corresponding SI material
+
+{si_items}
+""", encoding="utf-8")
 
 
 def _export_derived(data: dict[str, Any], records: list[SourceRecord], root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([asdict(r) for r in records]).to_csv(root / "data_source_status.csv", index=False)
-    data["spread_error"]["table"].to_csv(root / "uq_spread_error_display.csv", index=False)
+    pd.DataFrame([asdict(record) for record in records]).to_csv(root / "data_source_status.csv", index=False)
     if data.get("coverage") is not None:
-        data["coverage"].to_csv(root / "uq_coverage_display.csv", index=False)
-    data["cost_native"].to_csv(root / "cost_latency_error_display.csv", index=False)
-    data["cost_query"].to_csv(root / "cost_query_memory_display.csv", index=False)
-    data["cost_nfe"].to_csv(root / "cost_nfe_error_display.csv", index=False)
+        data["coverage"].to_csv(root / "uq_coverage_sharpness_display.csv", index=False)
+    if data.get("spread_error") is not None:
+        data["spread_error"]["table"].to_csv(root / "uq_spread_error_display.csv", index=False)
+    for key, name in (("cost_native", "cost_accuracy_latency_display.csv"), ("cost_query", "cost_query_memory_display.csv"), ("cost_nfe", "cost_nfe_tradeoff_display.csv")):
+        if data.get(key) is not None:
+            data[key].to_csv(root / name, index=False)
 
 
 def main() -> int:
     args = parse_args()
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
-    if config["figure"].get("formats") != ["svg"]:
-        raise ValueError("Draft contract requires SVG-only output.")
-    apply_style(config.get("style", {}).get("font_family"))
+    if config["schema_version"] != "figure5-validation-v2" or config["figure"]["formats"] != ["svg"]:
+        raise ValueError("Figure 5 V2 requires schema figure5-validation-v2 and SVG-only output")
+    apply_style(config["style"]["font_family"])
     data, records = load_figure5_data(config, REPO_ROOT)
-    nonformal = [r.panel for r in records if r.mode != "formal"]
+    nonformal = [record.panel for record in records if record.mode != "formal"]
     if args.strict_formal and nonformal:
         raise RuntimeError(f"Strict formal build blocked; non-formal panels: {', '.join(nonformal)}")
 
@@ -162,41 +218,27 @@ def main() -> int:
     docs_dir = args.output_root / "docs" / "generated"
     result_dir = args.output_root / "results" / "derived" / args.timestamp
     figure_dir.mkdir(parents=True, exist_ok=True)
-    docs_dir.mkdir(parents=True, exist_ok=True)
     _export_derived(data, records, result_dir)
-
+    record_by_panel = {record.panel: record for record in records}
     outputs: dict[str, Path] = {}
-    record_by_panel = {r.panel: r for r in records}
-    for panel, slug in PANEL_SLUGS.items():
-        path = figure_dir / f"fig5_panel_{panel}_{slug}_{args.timestamp}.svg"
-        save_svg(make_standalone(panel, data, config), path)
-        outputs[panel] = path
-        _write_companion(docs_dir / f"fig5_panel_{panel}_{slug}_{args.timestamp}.md", panel, path, data, record_by_panel[panel], args.timestamp)
-
-    composed_path = figure_dir / f"fig5_composed_draft_{args.timestamp}.svg"
+    for panel in "abcdef":
+        stem = config["figure"]["output_stems"][panel]
+        svg = figure_dir / f"{stem}_{args.timestamp}.svg"
+        save_svg(make_standalone(panel, data, config), svg)
+        outputs[panel] = svg
+        _write_panel_companion(docs_dir / f"{stem}_{args.timestamp}.md", panel, svg, data, record_by_panel[panel], config, args.timestamp)
+    composed_stem = config["figure"]["output_stems"]["composed"]
+    composed_svg = figure_dir / f"{composed_stem}_{args.timestamp}.svg"
     composed = make_composed(data, config)
     if args.preview_png:
         args.preview_png.parent.mkdir(parents=True, exist_ok=True)
         composed.savefig(args.preview_png, format="png", dpi=180, facecolor="white")
-    save_svg(composed, composed_path)
-    outputs["composed"] = composed_path
-    _write_composed_companion(docs_dir / f"fig5_composed_draft_{args.timestamp}.md", composed_path, records, args.timestamp)
-
-    manifest = {
-        "schema_version": config["schema_version"],
-        "timestamp": args.timestamp,
-        "git_commit": _git_commit(),
-        "config": str(args.config.resolve()),
-        "config_sha256": _sha256(args.config),
-        "formats": ["svg"],
-        "outputs": {key: str(path) for key, path in outputs.items()},
-        "sources": [
-            {**asdict(record), "source_display": _source_display(record.source), "sha256": _sha256(Path(record.source))}
-            for record in records
-        ],
-    }
+    save_svg(composed, composed_svg)
+    outputs["composed"] = composed_svg
+    _write_composed_companion(docs_dir / f"{composed_stem}_{args.timestamp}.md", composed_svg, records, data, config, args.timestamp)
+    manifest = {"schema_version": config["schema_version"], "timestamp": args.timestamp, "git_commit": _git_commit(), "strict_formal": args.strict_formal, "config": str(args.config.resolve()), "config_sha256": _sha256(args.config), "formats": ["svg"], "outputs": {key: str(path) for key, path in outputs.items()}, "sources": [asdict(record) for record in records]}
     (result_dir / "build_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(json.dumps({"figure_dir": str(figure_dir), "docs_dir": str(docs_dir), "result_dir": str(result_dir), "panel_modes": data["modes"]}, indent=2))
+    print(json.dumps({"figure_dir": str(figure_dir), "panel_modes": data["modes"]}, indent=2))
     return 0
 
 
