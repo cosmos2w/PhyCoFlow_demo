@@ -5,28 +5,42 @@
 !/.gitignore
 !/0_demo_TurbulentCombustion/
 !/1_SubTask_SuperResolution/
+!/Dis_SI_Process/
 
 /0_demo_TurbulentCombustion/**
 /1_SubTask_SuperResolution/**
+/Dis_SI_Process/**
 
 # Keep directory traversal available, then allow only source, documentation,
 # and reproducibility configuration files. Generated data, checkpoints,
 # caches, logs, and rendered figures remain local.
 !/0_demo_TurbulentCombustion/**/
 !/1_SubTask_SuperResolution/**/
+!/Dis_SI_Process/**/
 
 !/0_demo_TurbulentCombustion/**/*.py
 !/1_SubTask_SuperResolution/**/*.py
+!/Dis_SI_Process/**/*.py
 !/0_demo_TurbulentCombustion/**/*.sh
 !/1_SubTask_SuperResolution/**/*.sh
 !/0_demo_TurbulentCombustion/**/*.yaml
 !/1_SubTask_SuperResolution/**/*.yaml
+!/Dis_SI_Process/**/*.yaml
 !/0_demo_TurbulentCombustion/**/*.yml
 !/1_SubTask_SuperResolution/**/*.yml
+!/Dis_SI_Process/**/*.yml
 !/0_demo_TurbulentCombustion/**/*.toml
 !/1_SubTask_SuperResolution/**/*.toml
 !/0_demo_TurbulentCombustion/**/*.md
 !/1_SubTask_SuperResolution/**/*.md
+!/Dis_SI_Process/**/*.md
+!/Dis_SI_Process/.gitignore
+
+# Figure 5 workflow: keep code/config/contracts/docs, not generated products.
+/Dis_SI_Process/results/**
+/Dis_SI_Process/figures/generated/**
+!/Dis_SI_Process/results/.gitkeep
+!/Dis_SI_Process/figures/generated/.gitkeep
 !/0_demo_TurbulentCombustion/**/*.ipynb
 !/1_SubTask_SuperResolution/**/*.ipynb
 !/0_demo_TurbulentCombustion/.gitignore

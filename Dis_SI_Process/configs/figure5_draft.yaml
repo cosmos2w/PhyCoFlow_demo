@@ -1,0 +1,42 @@
+schema_version: figure5-draft-v1
+
+figure:
+  width_mm: 183
+  composed_height_mm: 208
+  standalone_height_mm: 52
+  qualitative_height_mm: 48
+  field: CO
+  formats: [svg]
+  dpi: 300
+
+formal_inputs:
+  uncertainty_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Uncertainty
+  cost_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Cost
+
+draft_inputs:
+  qualitative_nfe_pattern: 0_demo_TurbulentCombustion/_CheckNotes/Stage6_formal_baseline/evaluation/matched_reconstruction/F0_best/nfe{nfe}.npz
+  qualitative_nfes: [1, 2, 4]
+  field_l2_summary: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/archive_pre_revision_20260827/FieldL2_summary_paper_full_20260711.csv
+  architecture_cost_proxy: 0_demo_TurbulentCombustion/figures/generated/gl_rbf_cq_rc1_pareto/pareto_source.csv
+  query_scaling_proxy: 0_demo_TurbulentCombustion/_CheckNotes/Stage4_reconstruction/reconstruction_scaling.csv
+
+statistics:
+  spread_error_bins: 8
+  robust_quantile: 0.99
+  unobserved_fields: [CO, U_0, U_1, p]
+
+style:
+  font_family: [Arial, Liberation Sans, DejaVu Sans]
+  field_colors:
+    CO: "#457B9D"
+    T: "#D95F5F"
+    U_0: "#7B6FA6"
+    U_1: "#2A9D8F"
+    p: "#C98A3D"
+  method_colors:
+    F0-e1000: "#8D99AE"
+    CQ-LR-128-e1000: "#457B9D"
+    S7-B-e1000: "#E63946"
+  proxy_face: "#FFF3CD"
+  pending_face: "#F1F3F5"
+  pending_edge: "#ADB5BD"

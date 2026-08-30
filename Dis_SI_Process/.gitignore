@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+results/*
+!results/.gitkeep
+
+figures/generated/*
+!figures/generated/.gitkeep
