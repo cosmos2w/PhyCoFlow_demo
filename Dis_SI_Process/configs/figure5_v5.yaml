@@ -1,0 +1,116 @@
+schema_version: figure5-validation-v5
+
+figure:
+  width_mm: 183
+  composed_height_mm: 116
+  formats: [svg]
+  panel_map:
+    a: statewise_normalized_crps
+    b: state_level_spread_error_spearman
+    c: spatial_uncertainty_error_capture
+    d: lifecycle_bubble_map
+  output_stems:
+    a: fig5a_probabilistic_reconstruction_v5
+    b: fig5b_uncertainty_difficult_states_v5
+    c: fig5c_spatial_error_capture_v5
+    d: fig5d_lifecycle_footprint_v5
+    composed: fig5_composed_v5
+  layout:
+    margins: {left: 0.115, right: 0.985, bottom: 0.105, top: 0.955}
+    width_ratios: [1.0, 1.06]
+    height_ratios: [1.0, 1.12]
+    wspace: 0.27
+    hspace: 0.54
+
+paper_contract:
+  dataset: turbulent_combustion
+  task: missing_channel_reconstruction
+  condition: Cond_T
+  sensor_count: 256
+  native_query_count: 40300
+  batch_size: 1
+  precision: float32
+  unobserved_fields: [Y_CH4, Y_CO, U1, p]
+  generative_method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT]
+  method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+
+formal_inputs:
+  uq_root: Dis_SI_Process/results/ValidationV3/UQCompare
+  uq_run_id: uq_compare_formal_20260830_v3r6
+  cost_root: Dis_SI_Process/results/ValidationV3/CostClean
+  cost_run_id: formal_cost_clean_v3_20260830_v3
+  training_cost_root: Dis_SI_Process/results/ValidationV4/TrainingCost
+  training_cost_run_id: training_replay_formal_v4r2
+  geofno_timing_root: Dis_SI_Process/results/ValidationV42/GeoFNOMultiGPU
+  geofno_timing_run_id: geofno_ddp_timing_formal_v42r2
+  scale_root: Dis_SI_Process/results/ValidationV4/ScaleStress
+  scale_run_id: scale_stress_formal_v4
+  uq_localization_root: Dis_SI_Process/results/ValidationV5/UQLocalization
+  uq_localization_run_id: uq_localization_formal_v5
+  lifecycle_root: Dis_SI_Process/results/ValidationV5/Lifecycle
+  lifecycle_run_id: lifecycle_formal_v5
+  nfe_source: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Cost/formal_cost_20260830_v2/nfe_error.csv
+
+formal_protocol:
+  uq:
+    states: 200
+    draws_per_state: 64
+    fields: [Y_CH4, Y_CO, U1, p]
+    field_weights: [0.25, 0.25, 0.25, 0.25]
+    bootstrap_method: temporal_moving_block_bootstrap
+    block_length: 25
+    replicates: 2000
+  localization:
+    spatial_fractions: [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00]
+    ranking: descending_ensemble_standard_deviation
+    error: absolute_error_of_ensemble_mean
+    aggregation: field_first_equal_macro_then_state_mean
+  native_cost:
+    query_count: 40300
+    timing_boundary: warm_model_core_geometry_persisted
+  training_compute:
+    metric_name: replay_equivalent_model_core_training_gpu_hours
+    display_label: Replay-equivalent model-core training GPU-hours
+    divisor_ms_per_hour: 3600000
+    multi_stage_policy: sum_required_sequential_stages
+    geofno_gpu_count: 2
+  training_cost:
+    preferred_metric: training_update_time_ms
+    allowed_metrics: [training_update_time_ms]
+    promotion_tolerance_fraction: 0.25
+  scale_stress:
+    native_query_counts: [1024, 4096, 16384, 40300]
+    throughput_query_counts: [100000, 250000, 500000, 1000000, 2000000, 4000000]
+    adaptive_query_cap: 8000000
+    native_limit: 40300
+    boundary_runtime_cap_s: 60
+    boundary_memory_fraction: 0.90
+    no_accuracy_claim_above_native: true
+
+build_policy:
+  manuscript_mode: strict-formal
+  preserve_v2_through_v42: true
+  reject_proxy: true
+  generated_formats: [svg]
+  si_subdirectory: si
+
+style:
+  font_family: [Arial, DejaVu Sans, Liberation Sans]
+  method_colors:
+    DMF-Gen: "#E63946"
+    FFM-FNO: "#1D3557"
+    FFM-Perceiver: "#457B9D"
+    Latent FM: "#6A4C93"
+    SiT: "#A28BC4"
+    MLP-RBF: "#2A9D8F"
+    Geo-FNO: "#F4A261"
+    Senseiver: "#8D99AE"
+  method_markers:
+    DMF-Gen: o
+    FFM-FNO: s
+    FFM-Perceiver: D
+    Latent FM: ^
+    SiT: v
+    MLP-RBF: P
+    Geo-FNO: X
+    Senseiver: h

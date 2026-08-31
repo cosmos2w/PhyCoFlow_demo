@@ -1,5 +1,29 @@
 # Figure 5 V4 validation workflow
 
+## V5 focused four-panel validation
+
+V5 is additive and preserves every V2–V4.2 artifact. Panels a/b reuse the
+formal V3 200-state cross-model UQ run, panel c is the only new inference
+quantity and is reduced state-by-state without saving ensemble stacks, and
+panel d converts accepted V3/V4/V4.2 timings plus adopted update/GPU counts to
+**Replay-equivalent model-core training GPU-hours**. Full calibration,
+fieldwise UQ, spatial fieldwise capture, 8M-query latency/memory stress and NFE
+diagnostics are rendered as SVG under the timestamped `si/` subdirectory.
+
+```bash
+conda run -n phycoflow_env python \
+  Dis_SI_Process/scripts/run_error_capture_v5.py \
+  --device cuda:2 --run-id uq_localization_formal_v5
+
+conda run -n fig python Dis_SI_Process/scripts/build_figure5_v5.py \
+  --strict-formal --timestamp YYYYMMDD_HHMM
+```
+
+The strict build writes four standalone SVGs, one 183-mm composed SVG, a
+separated SI SVG directory, one dataset-aware display-source table, manifests,
+QA, panel/composed companions and a completion report. It performs no training
+or timing replay.
+
 ## V4.1 additive revision
 
 V4.1 preserves the complete V4 bundle and adds distribution-aware a/b panels,
