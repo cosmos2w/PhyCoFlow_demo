@@ -1,0 +1,125 @@
+schema_version: figure5-training-cost-audit-v4
+
+# This contract is intentionally separate from the Figure 5 V3/V4 plotting
+# configs.  It describes provenance only; it does not launch training and it
+# never treats a filesystem timestamp as timing evidence.
+condition: Cond_T
+checkpoint_name: last.pt
+source_validation_plan: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_ValidationPlans/validation_v1.yaml
+archive_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels
+
+method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+
+# The paths and hashes below are the exact Figure 4 Cond_T joins.  Keeping
+# them here makes the audit self-contained and allows it to reject a changed
+# validation plan or an accidentally selected best/proxy checkpoint.
+checkpoints:
+  - method: DMF-Gen
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/DMF_Gen/Cond_T/last.pt
+    sha256: 857a505ff96cc3512c20f45641250d9db9d448c1f1e33b8c4a1c792acb1e4a06
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/DMF_Gen/Cond_T/run_config.yaml
+    stage: 1
+  - method: FFM-FNO
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_FNO/Cond_T/last.pt
+    sha256: 9819ad702a9463c88409a67dff81eab8a2f5b043465fdd7063abfb116d5836bf
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_FNO/Cond_T/run_config.yaml
+    stage: 1
+  - method: FFM-Perceiver
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_Perceiver/Cond_T/last.pt
+    sha256: c35041c26835b2fd3e513b1afa4faeef9e4515dad7b38669de1a9c6002f94d5b
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_Perceiver/Cond_T/run_config.yaml
+    stage: 1
+  - method: Latent FM
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Cond_T/last.pt
+    sha256: d2257080b4379fd8d2560d38b0e0e8225d80ba763df98bae7495ab95e07e009c
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Cond_T/run_config.yaml
+    stage: 2
+    dependencies:
+      - name: Latent FM shared autoencoder
+        role: required_stage_1
+        path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Stage0/last.pt
+        config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Stage0/run_config.yaml
+        include_in_total: true
+        # No independent hash was frozen for the archived shared VAE in the
+        # Figure 4 plan.  The audit reports this as resolved-but-unpinned.
+        expected_sha256: null
+  - method: SiT
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/SiT/Cond_T/last.pt
+    sha256: 1d20713b43bc3b44dc8610d93d5e6bc9454d1c2933372422802f7fd6953ee4af
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/SiT/Cond_T/run_config.yaml
+    stage: 1
+  - method: MLP-RBF
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/MLP_RBF/Cond_T/last.pt
+    sha256: a528358e6db159af6bc407f1d45588be0b0ef696b1ce38bc7a1dd50ecb56420d
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/MLP_RBF/Cond_T/run_config.yaml
+    stage: 1
+  - method: Geo-FNO
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/GeoFNO/Cond_T/last.pt
+    sha256: 56208012cebc98c4a4143382641a99ec28f495dc5e3ccf3ab211e6d63d0f19da
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/GeoFNO/Cond_T/run_config.yaml
+    stage: 1
+  - method: Senseiver
+    path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Senseiver/Cond_T/last.pt
+    sha256: b055ccc8ad86ab2d4d44a527620f4c0db06009c26de26d8d52db44065fc48503
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Senseiver/Cond_T/run_config.yaml
+    stage: 1
+
+evidence_policy:
+  forbid_filesystem_mtime: true
+  # Only explicit values in checkpoint metadata or declared text/JSON/YAML
+  # evidence files may populate these fields.  A run-name/filename timestamp,
+  # filesystem ctime/mtime, or config epoch target is not wall-clock evidence.
+  wall_clock_keys:
+    - wall_clock_seconds
+    - elapsed_seconds
+    - duration_seconds
+    - training_seconds
+    - train_seconds
+    - wall_clock_hours
+    - elapsed_hours
+    - duration_hours
+    - start_time
+    - started_at
+    - start_timestamp
+    - end_time
+    - finished_at
+    - end_timestamp
+  update_count_sources:
+    - checkpoint.global_step
+    - checkpoint.optimizer.state[*].step
+  gpu_identity_sources:
+    - declared_training_manifest
+    - declared_training_log
+    - declared_scheduler_metadata
+  config_device_ids_are_not_hardware_identity: true
+
+promotion:
+  preferred_metric: total_gpu_hours
+  allowed_fallback_metric: training_update_time_ms
+  replay_equivalent_metric: replay_equivalent_gpu_hours
+  replay_validation_tolerance_fraction: 0.25
+  historical_gpu_hours_requires:
+    - explicit_wall_clock
+    - active_gpu_count
+    - known_hardware_identity
+    - complete_required_stages
+  replay_requires:
+    warmup_updates: 20
+    measured_updates: 100
+    measured_blocks: 10
+    updates_per_block: 10
+    clean_gpu: true
+    checkpoint_write: forbidden
+    archived_weights_mutation: forbidden
+    timing_boundary: synchronized_update_core_preloaded_batch
+    stability_gate: first_five_vs_last_five_block_medians
+
+replay:
+  scaffold_script: Dis_SI_Process/scripts/benchmark_training_replay_v4.py
+  output_schema: figure5-training-replay-v4
+  run_by_default: false
+  safety_note: "Execution is an in-memory timing replay only: no checkpoint, optimizer archive, history, or dataset file may be written."
+
+output:
+  root: Dis_SI_Process/results/ValidationV4/TrainingCost
+  run_id: training_cost_formal_v4

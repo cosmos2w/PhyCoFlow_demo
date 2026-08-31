@@ -1,0 +1,133 @@
+schema_version: figure5-validation-v4
+
+# Figure 5 V4 is additive.  The V3 configuration, source roots, and generated
+# bundles remain untouched; this file only declares the new panel contract.
+figure:
+  width_mm: 183
+  composed_height_mm: 138
+  formats: [svg]
+  panel_map:
+    a: uq_crps
+    b: uq_spread_error_methods
+    c: cost_native_clean
+    d: cost_training_compute
+    e: cost_scalability_envelope
+  output_stems:
+    a: fig5a_normalized_crps
+    b: fig5b_spread_error_methods
+    c: fig5c_accuracy_latency_clean
+    d: fig5d_accuracy_training_cost
+    e: fig5e_scalability_envelope
+    composed: fig5_composed_v4
+  # These are explicit physical layout controls consumed by the V4 renderer.
+  # No row-header text is part of the contract.
+  layout:
+    margins: {left: 0.115, right: 0.985, bottom: 0.075, top: 0.955}
+    height_ratios: [1.0, 1.12, 1.78]
+    wspace: 0.32
+    hspace: 0.68
+    e_hspace: 0.32
+
+paper_contract:
+  conditioning: Cond_T
+  sensor_count: 256
+  native_query_count: 40300
+  batch_size: 1
+  precision: float32
+  unobserved_fields: [Y_CH4, Y_CO, U1, p]
+  generative_method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT]
+  method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+
+formal_inputs:
+  # Reuse V3 products only when their own V3 identity/QA gates pass.
+  uq_root: Dis_SI_Process/results/ValidationV3/UQCompare
+  uq_run_id: uq_compare_formal_20260830_v3r6
+  cost_root: Dis_SI_Process/results/ValidationV3/CostClean
+  cost_run_id: formal_cost_clean_v3_20260830_v3
+  # V4-only evidence.  Neither root may fall back to V2/V3 query-scaling data.
+  training_cost_root: Dis_SI_Process/results/ValidationV4/TrainingCost
+  training_cost_run_id: training_replay_formal_v4r2
+  scale_root: Dis_SI_Process/results/ValidationV4/ScaleStress
+  scale_run_id: scale_stress_formal_v4
+
+v3_provenance:
+  contract: Dis_SI_Process/docs/figure_contract.md
+  uq_schema: figure5-validation-v3-uq-1
+  cost_schema: figure5-validation-v3-cost-1
+  superseded_cost_is_not_a_fallback: true
+
+formal_protocol:
+  uq:
+    states: 200
+    draws_per_state: 64
+    fields: [Y_CH4, Y_CO, U1, p]
+    field_weights: [0.25, 0.25, 0.25, 0.25]
+    interval: temporal_moving_block_bootstrap_95ci
+  native_cost:
+    query_count: 40300
+    timing_boundary: warm_model_core_geometry_persisted
+    latency_interval: iqr
+  training_cost:
+    # The metric is declared before looking at cross-method values.  A replay
+    # estimate is only promoted when its manifest records the validation gate.
+    preferred_metric: total_gpu_hours
+    allowed_metrics: [total_gpu_hours, replay_equivalent_gpu_hours, training_update_time_ms]
+    promotion_tolerance_fraction: 0.25
+    unit_policy: gpu_hours_or_update_ms
+  scale_stress:
+    native_query_counts: [1024, 4096, 16384, 40300]
+    throughput_query_counts: [100000, 250000, 500000, 1000000, 2000000, 4000000]
+    adaptive_query_cap: 8000000
+    native_limit: 40300
+    boundary_runtime_cap_s: 60
+    boundary_memory_fraction: 0.90
+    query_spec:
+      label: sensor_prefixed_sobol_v1
+      generator: torch.quasirandom.SobolEngine
+      sequence_policy: exact_sensor_prefix_then_sobol_suffix
+      sensor_prefix: exact_256_observation_coordinates
+      dtype: float32
+    no_accuracy_claim_above_native: true
+
+build_policy:
+  manuscript_mode: strict-formal
+  strict_formal:
+    require_all_panels: true
+    require_v3_uq: true
+    require_v3_native_cost: true
+    require_training_cost_evidence: true
+    require_scale_stress_evidence: true
+    reject_validation_v2_cost: true
+    reject_v3_query_scaling_as_v4: true
+    reject_proxy: true
+    on_incomplete: fail
+  main_figure:
+    allow_nfe_panel: false
+    allow_full_grid_slice_scaling: false
+    allow_unvalidated_accuracy_above_native: false
+
+style:
+  font_family: [Arial, DejaVu Sans, Liberation Sans]
+  method_colors:
+    DMF-Gen: "#E63946"
+    FFM-FNO: "#1D3557"
+    FFM-Perceiver: "#457B9D"
+    Latent FM: "#6A4C93"
+    SiT: "#A28BC4"
+    MLP-RBF: "#2A9D8F"
+    Geo-FNO: "#F4A261"
+    Senseiver: "#8D99AE"
+  # One marker per method, shared by c/d/e and reused in the a/b forest pair.
+  # The mapping follows the adopted Figure 4/V3 visual identity.
+  method_markers:
+    DMF-Gen: o
+    FFM-FNO: s
+    FFM-Perceiver: D
+    Latent FM: ^
+    SiT: v
+    MLP-RBF: P
+    Geo-FNO: X
+    Senseiver: h
+  pending_face: "#F1F3F5"
+  pending_edge: "#ADB5BD"
+  dmf_highlight: "#E63946"

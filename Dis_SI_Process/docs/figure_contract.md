@@ -1,48 +1,80 @@
-# Figure 5 validation V3 contract
+# Figure 5 validation V4 contract
 
-Core conclusion: conditional ensemble quality differs across the five trained generative reconstruction methods, while clean native accuracy–latency and support-qualified query scaling expose distinct deployment trade-offs without asserting Pareto superiority.
+Core conclusion: DMF-Gen provides the strongest measured conditional-distribution quality, while separate online-inference, offline-training, and support-qualified high-resolution benchmarks expose transparent lifecycle trade-offs without asserting universal efficiency or accuracy beyond the native domain.
 
-- Schema: `figure5-validation-v3`.
-- Archetype: compact quantitative grid with an asymmetric bottom-row hero panel.
-- Target/output: Nature Machine Intelligence-style, 183 mm × 118 mm, editable SVG only.
-- Backend: Python/Matplotlib exclusively for plotting, previewing, export, and visual QA.
-- Top row: paired generative-method comparison (`a` normalized empirical CRPS; `b` method-wise macro spread/error Spearman association).
-- Bottom row: computational characteristics (`c` corrected native accuracy–latency hero panel; `d` query-count latency; `e` peak allocated memory).
+- Schema: `figure5-validation-v4`.
+- Archetype: quantitative grid with a full-width scalability hero panel.
+- Target/output: Nature Machine Intelligence-style, 183 mm × 138 mm, Python/Matplotlib only, editable SVG primary output with Python-rendered print-size preview for QA.
 - Formal unobserved fields: `Y_CH4`, `Y_CO`, `U1`, and `p`, each with macro weight 0.25 under `Cond_T`.
 - Generative order: DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT.
 - Eight-method order: DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver.
-- Source-data policy: reuse the matching DMF U2 summaries and frozen Figure 4 FieldL2 products in place. Do not copy checkpoints, datasets, reconstruction caches, or V2 result bundles.
-- Strict behavior: `--strict-formal` fails on missing cross-model UQ, missing/failed V3 QA, checkpoint mismatch, V2 cost input, unsupported query-scaling rows, or unresolved DMF timing reconciliation. It never substitutes V2 timing or proxy data.
+- Visual identity: exact Figure 3/4 method colors and one stable method marker across panels c--e.
+- Provenance: reuse the unchanged formal V3 UQ and clean native-cost products in place; write all new training-cost, scale-stress, figure, manifest, and QA products under new ValidationV4 roots.
+- Strict behavior: `--strict-formal` fails on unsupported training-cost estimates, missing stage/update provenance, fake query scaling, non-common stress coordinates, V2 timing, failed V3 identities, missing V4 QA, or proxy data.
 
-## Panel evidence map
+## Evidence chain and panel map
 
-### a — Normalized empirical CRPS
+### a — Probabilistic reconstruction quality
 
-Use the fixed 200-state cohort, exact saved M=256 temperature sensor plan, S=64 shared draw-ID seeds, and each adopted Figure 4 generative checkpoint. Compute empirical CRPS pointwise after normalization by the frozen training field standard deviation, average spatially, then equal-weight the four unobserved fields. Report the state mean and temporal moving-block-bootstrap 95% CI. Lower is better.
+Reuse formal V3 normalized empirical CRPS from the fixed 200-state, M=256, S=64 paired cohort. Compute CRPS pointwise after normalization by frozen training field standard deviation, average spatially, then equal-weight the four unobserved fields. Show the state mean and temporal moving-block-bootstrap 95% CI in a horizontal forest plot. Lower is better.
 
-### b — Macro spread/error association
+### b — Uncertainty informativeness
 
-For every state and generative method, equal-weight normalized spatial RMS ensemble standard deviation across the four unobserved fields and separately equal-weight ensemble-mean physical relative-L2. Report Spearman association across the paired cohort with temporal moving-block-bootstrap 95% CI. Use “associated with reconstruction difficulty,” never “predicts error.”
+Reuse formal V3 method-wise Spearman association between macro normalized ensemble spread and macro ensemble-mean unobserved-field error, with temporal moving-block-bootstrap 95% CI. Describe the result only as uncertainty informativeness or association with reconstruction difficulty; it is not evidence of calibration or prospective error prediction.
 
-### c — Corrected native accuracy–latency
+Panels a and b share method rows, row guides, marker/color grammar, and a faint DMF-Gen row highlight. Method labels appear only in panel a.
 
-At M=256 and N=40,300, plot clean-GPU warm model-core median latency (log x; repeat IQR) against frozen 1,000-state mean unobserved-field relative-L2 (temporal-bootstrap 95% CI) for all eight exact checkpoints. The timer excludes loading, data I/O, CPU preprocessing, host transfer, generic adapter dispatch, metrics, device-to-host transfer, plotting, and disk I/O. It includes stochastic noise, value-dependent conditioning, every model/flow evaluation, adopted observation consistency, and device-side output. Only reusable state-independent sensor/query geometry may persist. DMF uses the canonical configured 8,192-point reconstruction chunk. Its unified timer must agree within 20% with the same-setting direct and independent exact-shape timers; the approximately 29 ms prior probe must be mapped to a documented profiled boundary before promotion.
+### c — Native inference accuracy--cost
 
-### d — Query-count latency
+Reuse the validated V3 clean-GPU native benchmark at M=256, N=40,300, batch 1, float32 for all eight exact Figure 4 checkpoints. Plot frozen 1,000-state mean unobserved-field relative-L2 against warm model-core median latency with temporal-bootstrap accuracy CI and repeat IQR. The timer excludes loading, data I/O, CPU preparation, host transfer, generic adapter dispatch, metrics, device-to-host transfer, plotting, and disk I/O. It includes stochastic initialization, value-dependent conditioning, every required model/flow evaluation, observation consistency, and device-side output. Only reusable value-independent sensor/query geometry may persist.
 
-Use N=1,024, 4,096, 16,384, and 40,300 only for canonical methods that natively accept variable query coordinates. Fixed-discretization models receive an open native-size marker at N=40,300 only. Never reconstruct the full grid and slice it to claim scaling. Latency uses the same clean model-core definition as panel c.
+### d — Offline training accuracy--cost
 
-### e — Query-count peak allocated memory
+Use the same frozen reconstruction-error coordinate and y limits as panel c. The x coordinate must be frozen before ranking methods and must be one of:
 
-Use exactly the same method eligibility and N keys as panel d. Reset CUDA peak-memory statistics immediately before one measured core inference and report peak allocated memory. Peak reserved memory remains SI-only.
+1. explicit total GPU-hours to the adopted checkpoint with known hardware, active GPU count, optimizer updates, and every required training stage; or
+2. replay-equivalent GPU-hours derived from a standardized clean-GPU forward/backward/optimizer replay and the adopted checkpoint's documented update count, promoted only after agreement with trustworthy historical records within the predeclared tolerance; or
+3. a directly measured per-update training-compute metric if total/update provenance is insufficient.
 
-## Evidence hierarchy and review risks
+Filesystem modification times are never evidence of training duration. Every required stage of a multi-stage method must be measured and reported; if unlike stages cannot be reduced to the selected direct metric without an arbitrary aggregation, the method-level coordinate remains unavailable and its stage values stay in SI. The panel is a descriptive footprint of adopted checkpoints, not a matched-budget causal efficiency ablation.
 
-- Hero evidence: panel c, because it corrects the invalid V2 timing coordinate while retaining exact Figure 4 accuracy.
-- Validation evidence: panels a and b establish paired cross-model ensemble quality.
-- Deployment evidence: panels d and e distinguish genuine query evaluation from fixed-grid inference.
-- SI/robustness: full calibration/width curves, fieldwise UQ, diversity, cold/no-cache timing, reserved memory, component timing, and NFE/solver diagnostics.
-- Reviewer risks: finite-ensemble CRPS, temporal dependence, stochastic seed control, method-native solver/NFE differences, exact checkpoint joins, cache fairness, and accidental full-grid slicing.
-- Image integrity: all panels are vector quantitative plots; no raster image adjustment or representative-case selection enters the main figure.
+### e — High-resolution scalability envelope
 
-No ablation training and no optional 100k–1M throughput-only extension are part of this contract.
+Use two vertically aligned axes sharing query count: warm model-core latency and peak allocated GPU memory. Native-validated real-coordinate points are N=1,024, 4,096, 16,384, and 40,300. Only canonically arbitrary-query methods receive curves. Fixed-discretization methods receive open native-only markers at N=40,300; full-grid reconstruction followed by slicing is forbidden.
+
+For N>40,300, use one frozen, hashed, deterministic coordinate specification shared by all eligible methods. Predeclare N=100k, 250k, 500k, 1M, 2M, and 4M, with method-independent adaptive continuation rules. This region is shaded and labelled `throughput-only stress test`; it carries no physical-accuracy or super-resolution claim. Stop at the first CUDA OOM, 90% physical-VRAM allocation boundary, runtime cap, or global safety cap, and record both largest successful N and first failed N. First-use geometry preparation and peak reserved memory remain SI-only.
+
+## Evidence hierarchy
+
+- Primary scientific evidence: panel a, conditional-distribution quality across five trained generators.
+- Uncertainty validation: panel b, state-level informativeness without a calibration claim.
+- Lifecycle trade-off evidence: paired panels c and d, with shared error geometry and one consistent legend.
+- Deployment hero evidence: panel e, which distinguishes canonical query evaluation from fixed-grid inference and separates the native accuracy domain from throughput-only stress.
+- SI/robustness: full reliability/width curves, fieldwise UQ, diversity, cold/no-cache timing, training provenance details, replay throughput/memory, first-use geometry cost, peak reserved memory, full failure table, and NFE/solver diagnostics.
+
+## Statistics and source-data requirements
+
+- UQ unit: one held-out temporal state; 200 paired states, 64 shared draw-ID seeds, moving-block bootstrap with the frozen V3 block length and replicate count.
+- Accuracy unit: one held-out temporal state from the frozen 1,000-state Figure 4 cohort; temporal moving-block-bootstrap 95% CI.
+- Latency: synchronized clean-GPU warm repeats, median and IQR, with hardware/software and timing boundary recorded.
+- Memory: peak allocated CUDA memory reset immediately before one measured core inference; reserved memory reported only in SI.
+- Training cost: exact stage, device, adopted canonical batch/query configuration, update count, timing statistic, replay duration, and historical-validation status recorded per method. The promoted direct fallback is synchronized update time at each adopted configuration, with 20 warmups, 100 measured updates per successful stage, and a 25% early/late block-stability gate. Cross-method values are descriptive footprints, not batch-normalized or matched-budget causal estimates; failed canonical replays and unlike multi-stage methods remain explicitly unavailable.
+- Every quantitative panel must be reproducible from a timestamp-matched source table and manifest.
+
+## Visual and image-integrity contract
+
+- Explicit GridSpec geometry; no large row headers.
+- Panels a/b and c/d use shared-axis logic without duplicate adjacent y labels.
+- Panel e spans the full width with aligned latency/memory axes, a native boundary, and restrained throughput shading.
+- Panel letters are lowercase bold; text remains editable SVG text; all labels and legends must pass inspection at 183-mm print width.
+- All panels are vector quantitative plots. No raster image adjustment or representative-case selection enters the figure.
+
+## Reviewer risks and non-claims
+
+- Finite-ensemble CRPS and temporal dependence remain explicit.
+- Spread/error association is not calibration.
+- Historical and replay-equivalent training costs are not interchangeable unless the validation gate passes.
+- Different adopted checkpoints were not trained under a matched optimization budget.
+- High-N dummy-query results measure throughput and memory only, not accuracy or physically validated super-resolution.
+- Hardware, precision, chunking, cache policy, solver, and method-native training/inference settings limit absolute cost comparisons.
+- No NFE/solver main panel and no A0/A1/A2/A3 ablation training are part of V4.
