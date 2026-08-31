@@ -1,5 +1,35 @@
 # Figure 5 V4 validation workflow
 
+## V4.1 additive revision
+
+V4.1 preserves the complete V4 bundle and adds distribution-aware a/b panels,
+log–log c/d planes, a two-GPU canonical Geo-FNO training-memory replay, a taller
+memory-only e panel, tighter gutters, larger typography/legend, and a separate
+audited Zero-H-balanced four-panel backup. Its source/statistical contract is
+`docs/figure5_v41_source_schema.md`.
+
+The Geo-FNO DDP run promotes only process-local allocated memory; wall timing
+under shared GPU load is explicitly inadmissible:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,2 torchrun --standalone --nproc-per-node=2 \
+  Dis_SI_Process/scripts/benchmark_geofno_ddp_v41.py \
+  --execute --confirm-in-memory-replay --memory-only \
+  --run-id geofno_ddp_memory_formal_v41
+```
+
+Then build all five V4.1 main standalones, the 183-mm composed main figure,
+four Zero-H backup standalones, the backup composite, source tables,
+companions, manifest, completion report, and SVG QA:
+
+```bash
+conda run -n fig python Dis_SI_Process/scripts/build_figure5_v41.py \
+  --strict-formal --timestamp YYYYMMDD_HHMM
+```
+
+The strict build rejects a missing/non-passing two-GPU run, a non-formal
+inherited V3/V4 input, any bootstrap mismatch, or an unaudited Zero-H source.
+
 This additive workflow builds Figure 5 V4 while preserving every V2/V3 result
 as provenance. Panels a--c reuse the QA-passing V3 UQ and native clean-cost
 runs in place. Panels d/e use independent `ValidationV4` roots and can never
@@ -123,3 +153,20 @@ conda run -n phycoflow_env python -m pytest -q \
 
 The composed preview must also be inspected at final 183-mm print width for
 label, legend, panel-boundary, and native/throughput-region collisions.
+# Figure 5 V4.2
+
+V4.2 is the additive correction that restores panel d to canonical training update time (`ms/update`). Build it with:
+
+```bash
+conda run -n fig python Dis_SI_Process/scripts/build_figure5_v42.py --strict-formal
+```
+
+The V4 single-stage timing coordinates are preserved exactly. Geo-FNO is admitted only through the clean two-GPU DDP global-batch-192 timing run; Latent FM remains unavailable rather than combining unlike stage times.
+
+### Metric-matched Zero-H Figure 5 V4.2 backup
+
+The replacement Zero-H-balanced backup mirrors formal Figure 5 panels a–d while using only checkpoints and measurements from `1_SubTask_SuperResolution` recipe `4_ZeroH_Balanced`. Panels a/b contain the two stochastic adopted models; panels c/d contain all four adopted models. Build it without fallbacks using:
+
+```bash
+conda run -n fig python Dis_SI_Process/scripts/build_figure5_zeroh_matched_v42.py --strict-formal
+```

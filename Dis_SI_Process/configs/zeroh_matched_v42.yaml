@@ -1,0 +1,92 @@
+schema_version: figure5-zeroh-matched-v4.2
+scenario:
+  recipe: 4_ZeroH_Balanced
+  label: Zero-H-balanced
+  field: density
+  sensor_count: 256
+  native_query_count: 16384
+  checkpoint_kind: best
+  generative_methods: [DMF-Gen, FFM-Perceiver]
+  all_methods: [DMF-Gen, FFM-Perceiver, MLP-RBF, Senseiver]
+  model_keys:
+    DMF-Gen: DMFGen
+    FFM-Perceiver: FFM_Perceiver
+    MLP-RBF: MLP_RBF
+    Senseiver: Senseiver
+  consistency_modes:
+    DMF-Gen: default_hard
+    FFM-Perceiver: endpoint_smooth
+  n_steps: 2
+  ode_solver: euler
+
+cohort:
+  sensor_plan: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/SensorPlans/SensorPlan_formal_20260712.csv
+  sensor_plan_sha256: 05fdd36e16ff23d32c199e46d9a355c95f6fa4ab3f9814b831e46266206c6a9c
+  accuracy_per_snapshot: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/QuestionB_ZeroH/QuestionB_per_snapshot_2026-08-06_11-24.csv
+  accuracy_summary: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/QuestionB_ZeroH/QuestionB_summary_2026-08-06_11-24.csv
+  uq_states: 200
+  accuracy_states: 300
+  pilot_states: 12
+  pilot_draws: 8
+  formal_draws: 64
+
+checkpoints:
+  DMF-Gen:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/DMF_Gen/4_ZeroH_Balanced/best.pt
+    sha256: dd6b2f34033af52d6d100f62d51ea13490a9b3b5d2dade1fccc2bd2c6974c8b5
+  FFM-Perceiver:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/FFM_Perceiver/4_ZeroH_Balanced/best.pt
+    sha256: d259c51fd661d2ffeed486ee7c8f79d04ce3afeddb219d319ab268557c96a681
+  MLP-RBF:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/MLP_RBF/4_ZeroH_Balanced/best.pt
+    sha256: c7fe270d48e0cd56b5931031c84d5b41f1d2211c7ce6fe01587710bd41a61f2e
+  Senseiver:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/Senseiver/4_ZeroH_Balanced/best.pt
+    sha256: 4e438823535828f52ee73b0f697f245a9ca52dc9c610eb0ab7fd3c4a403c3524
+
+bootstrap:
+  replicates: 2000
+  confidence_level: 0.95
+  seed: 20260831
+  unit: unique_case_time_pair
+
+uq_output_root: Dis_SI_Process/results/ValidationV42/ZeroHMatched/UQ
+cost_output_root: Dis_SI_Process/results/ValidationV42/ZeroHMatched/Cost
+
+formal_runs:
+  uq_run_id: zeroh_uq_formal_v42
+  cost_run_id: zeroh_cost_formal_v42
+
+figure:
+  width_mm: 183
+  height_mm: 116
+  output_stems:
+    a: fig5a_zeroh_normalized_crps_matched_v42
+    b: fig5b_zeroh_spread_error_matched_v42
+    c: fig5c_zeroh_accuracy_latency_matched_v42
+    d: fig5d_zeroh_accuracy_training_update_matched_v42
+    composed: fig5_zeroh_matched_backup_v42
+  layout:
+    left: 0.115
+    right: 0.985
+    bottom: 0.17
+    top: 0.955
+    wspace: 0.14
+    hspace: 0.57
+
+paper_contract:
+  generative_method_order: [DMF-Gen, FFM-Perceiver]
+  method_order: [DMF-Gen, FFM-Perceiver, MLP-RBF, Senseiver]
+
+style:
+  font_family: [Arial, DejaVu Sans, Liberation Sans]
+  method_colors:
+    DMF-Gen: "#E63946"
+    FFM-Perceiver: "#457B9D"
+    MLP-RBF: "#2A9D8F"
+    Senseiver: "#8D99AE"
+  method_markers:
+    DMF-Gen: o
+    FFM-Perceiver: D
+    MLP-RBF: P
+    Senseiver: h

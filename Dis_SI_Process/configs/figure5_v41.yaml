@@ -1,0 +1,121 @@
+schema_version: figure5-validation-v4.1
+
+figure:
+  width_mm: 183
+  composed_height_mm: 145
+  formats: [svg]
+  panel_map:
+    a: uq_crps_distribution
+    b: uq_spread_error_bootstrap_distribution
+    c: cost_native_clean
+    d: cost_training_memory_multigpu
+    e: scalability_memory_only
+  output_stems:
+    a: fig5a_crps_boxscatter_v41
+    b: fig5b_spearman_boxscatter_v41
+    c: fig5c_accuracy_latency_loglog_v41
+    d: fig5d_accuracy_training_loglog_v41
+    e: fig5e_scalability_memory_v41
+    composed: fig5_composed_v41
+  backup_output_stems:
+    a: fig5a_zeroh_physical_l2_backup_v41
+    b: fig5b_zeroh_gradient_l2_backup_v41
+    c: fig5c_zeroh_sensor_excluded_l2_backup_v41
+    d: fig5d_zeroh_normalized_l2_backup_v41
+    composed: fig5_zeroh_balanced_backup_v41
+  layout:
+    margins: {left: 0.115, right: 0.985, bottom: 0.070, top: 0.965}
+    height_ratios: [1.16, 1.26, 1.55]
+    ab_wspace: 0.13
+    cd_wspace: 0.14
+    outer_hspace: 0.57
+
+paper_contract:
+  conditioning: Cond_T
+  sensor_count: 256
+  native_query_count: 40300
+  batch_size: 1
+  precision: float32
+  unobserved_fields: [Y_CH4, Y_CO, U1, p]
+  generative_method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT]
+  method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+  zeroh_method_order: [DMF-Gen, FFM-Perceiver, MLP-RBF, Senseiver]
+
+formal_inputs:
+  uq_root: Dis_SI_Process/results/ValidationV3/UQCompare
+  uq_run_id: uq_compare_formal_20260830_v3r6
+  cost_root: Dis_SI_Process/results/ValidationV3/CostClean
+  cost_run_id: formal_cost_clean_v3_20260830_v3
+  training_cost_root: Dis_SI_Process/results/ValidationV4/TrainingCost
+  training_cost_run_id: training_replay_formal_v4r2
+  geofno_multigpu_root: Dis_SI_Process/results/ValidationV41/GeoFNOMultiGPU
+  geofno_multigpu_run_id: geofno_ddp_memory_formal_v41
+  scale_root: Dis_SI_Process/results/ValidationV4/ScaleStress
+  scale_run_id: scale_stress_formal_v4
+  zeroh_per_snapshot: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/QuestionB_ZeroH/QuestionB_per_snapshot_2026-08-06_11-24.csv
+  zeroh_summary: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/QuestionB_ZeroH/QuestionB_summary_2026-08-06_11-24.csv
+  zeroh_audit: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/UnifiedPublicationV2/UnifiedV2Audit_20260806_1124.json
+  zeroh_manifest: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/UnifiedPublicationV2/UnifiedV2DataManifest_20260806_1124.json
+
+formal_protocol:
+  uq:
+    states: 200
+    draws_per_state: 64
+    fields: [Y_CH4, Y_CO, U1, p]
+    field_weights: [0.25, 0.25, 0.25, 0.25]
+    interval: temporal_moving_block_bootstrap_95ci
+  native_cost:
+    query_count: 40300
+    timing_boundary: warm_model_core_geometry_persisted
+    latency_interval: iqr
+  training_cost:
+    preferred_metric: peak_allocated_training_memory_mib
+    allowed_metrics: [total_gpu_hours, replay_equivalent_gpu_hours, training_update_time_ms]
+    promotion_tolerance_fraction: 0.25
+    unit_policy: total_peak_allocated_mib_across_active_devices
+  scale_stress:
+    native_query_counts: [1024, 4096, 16384, 40300]
+    throughput_query_counts: [100000, 250000, 500000, 1000000, 2000000, 4000000]
+    adaptive_query_cap: 8000000
+    native_limit: 40300
+    boundary_runtime_cap_s: 60
+    boundary_memory_fraction: 0.90
+    no_accuracy_claim_above_native: true
+  zeroh:
+    recipe: 4_ZeroH_Balanced
+    snapshots_per_method: 300
+    sensor_count: 256
+
+build_policy:
+  manuscript_mode: strict-formal
+  strict_formal:
+    require_all_panels: true
+    require_geofno_multigpu: true
+    require_zeroh_audit_pass: true
+    reject_proxy: true
+    on_incomplete: fail
+  main_figure:
+    allow_nfe_panel: false
+    allow_full_grid_slice_scaling: false
+    allow_unvalidated_accuracy_above_native: false
+
+style:
+  font_family: [Arial, DejaVu Sans, Liberation Sans]
+  method_colors:
+    DMF-Gen: "#E63946"
+    FFM-FNO: "#1D3557"
+    FFM-Perceiver: "#457B9D"
+    Latent FM: "#6A4C93"
+    SiT: "#A28BC4"
+    MLP-RBF: "#2A9D8F"
+    Geo-FNO: "#F4A261"
+    Senseiver: "#8D99AE"
+  method_markers:
+    DMF-Gen: o
+    FFM-FNO: s
+    FFM-Perceiver: D
+    Latent FM: ^
+    SiT: v
+    MLP-RBF: P
+    Geo-FNO: X
+    Senseiver: h
