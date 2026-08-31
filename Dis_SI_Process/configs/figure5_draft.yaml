@@ -1,28 +1,25 @@
-schema_version: figure5-validation-v2
+schema_version: figure5-validation-v3
 
 figure:
   width_mm: 183
-  composed_height_mm: 145
+  composed_height_mm: 118
   formats: [svg]
-  dpi: 300
   row_headers:
-    top: Empirical conditional uncertainty
+    top: Conditional ensemble quality
     bottom: Computational characteristics
   panel_map:
-    a: uq_calibration
-    b: uq_sharpness
-    c: uq_spread_error
-    d: cost_native_pareto
-    e: cost_query_memory
-    f: cost_nfe_tradeoff
+    a: uq_crps
+    b: uq_spread_error_methods
+    c: cost_native_clean
+    d: cost_query_scaling_methods
+    e: cost_memory_scaling_methods
   output_stems:
-    a: fig5a_calibration
-    b: fig5b_sharpness
-    c: fig5c_spread_error
-    d: fig5d_accuracy_latency
+    a: fig5a_normalized_crps
+    b: fig5b_spread_error_methods
+    c: fig5c_accuracy_latency_clean
+    d: fig5d_query_latency
     e: fig5e_query_memory
-    f: fig5f_nfe_tradeoff
-    composed: fig5_composed_v2
+    composed: fig5_composed_v3
 
 paper_contract:
   conditioning: Cond_T
@@ -30,108 +27,67 @@ paper_contract:
   native_query_count: 40300
   batch_size: 1
   precision: float32
-  fields: [Y_CH4, Y_CO, T, U1, p]
   unobserved_fields: [Y_CH4, Y_CO, U1, p]
-  method_order:
-    - DMF-Gen
-    - FFM-FNO
-    - FFM-Perceiver
-    - Latent FM
-    - SiT
-    - MLP-RBF
-    - Geo-FNO
-    - Senseiver
+  generative_method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT]
+  method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
 
 formal_inputs:
-  uncertainty_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Uncertainty
-  cost_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Cost
-  adopted_checkpoint: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/DMF_Gen/Cond_T/last.pt
+  uq_root: Dis_SI_Process/results/ValidationV3/UQCompare
+  uq_run_id: uq_compare_formal_20260830_v3r6
+  uq_pilot_run_ids: [pilot_uq_compare_20260830_v3, pilot_uq_compare_deterministic_20260830_v3, pilot_uq_compare_common_norm_20260830_v3, pilot_uq_compare_prepared_20260830_v3r2, pilot_uq_compare_prepared_20260830_v3r3, pilot_uq_compare_prepared_20260830_v3r4]
+  cost_root: Dis_SI_Process/results/ValidationV3/CostClean
+  cost_run_id: formal_cost_clean_v3_20260830_v3
   field_l2_summary: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/FieldL2/FieldL2_summary_paper_full_20260711.csv
 
+v2_provenance:
+  completion_report: Dis_SI_Process/docs/initial_draft_summary.md
+  superseded_cost_run: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Cost/formal_cost_20260830_v2
+  superseded_dmf_latency_ms: 127.04870223999023
+  reused_dmf_u2: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Uncertainty/u2_formal_20260830_v1
+
 formal_protocol:
-  calibration_levels: [0.50, 0.80, 0.90, 0.95]
-  uq_calibration:
-    campaign: U2
+  uq:
     states: 200
     draws_per_state: 64
-    aggregation_unit: state
-    interval: temporal_block_bootstrap_95ci
-    exclude_hard_clamped_T_sensors: true
-  uq_sharpness:
-    campaign: U2
-    states: 200
-    draws_per_state: 64
-    normalization: training_set_field_standard_deviation
-    aggregation_unit: state
-    interval: temporal_block_bootstrap_95ci
-  uq_spread_error:
-    campaign: U1
-    states: 1000
-    draws_per_state: 16
-    spread: normalized_spatial_rms_ensemble_standard_deviation
-    error: ensemble_mean_physical_relative_l2
-    display: quantile_binned_trend
+    sensor_count: 256
+    fields: [Y_CH4, Y_CO, U1, p]
+    field_weights: [0.25, 0.25, 0.25, 0.25]
+    crps: empirical_pointwise_normalized_by_training_std
+    spread: macro_normalized_spatial_rms_ensemble_std
+    error: macro_ensemble_mean_physical_relative_l2
     association: spearman
-    interval: temporal_block_bootstrap_95ci
-    bins: 8
-  cost_native_pareto:
-    query_count: 40300
-    latency_summary: synchronized_warm_median
-    latency_interval: iqr
-    error: mean_physical_relative_l2_unobserved_fields
-    error_interval: temporal_block_bootstrap_95ci
-    checkpoint_join: exact_identity
-    missing_method: unavailable
-  cost_query_memory:
+    interval: temporal_moving_block_bootstrap_95ci
+  cost:
+    timing_boundary: warm_model_core_geometry_persisted
+    warmups: 20
+    minimum_repeats: 30
+    minimum_timed_seconds: 10
     query_counts: [1024, 4096, 16384, 40300]
-    latency_summary: synchronized_warm_median
+    throughput_extension: not_run
     latency_interval: iqr
     memory: peak_allocated_gpu
-    mark_native: 40300
-  cost_nfe_tradeoff:
-    states: 50
-    common_generation_seeds: true
-    effort: measured_vector_field_evaluations
-    x: synchronized_warm_median_latency
-    x_interval: iqr
-    y: mean_physical_relative_l2_unobserved_fields
-    y_interval: temporal_block_bootstrap_95ci
+    checkpoint_join: exact_identity
 
 build_policy:
   manuscript_mode: strict-formal
   strict_formal:
     require_all_panels: true
-    require_frozen_inputs: true
+    require_v3_schema: true
     require_exact_identity: true
-    require_protocol_metadata: true
-    allow_pending: false
-    allow_proxy: false
-    allow_engineering_inputs: false
+    require_passing_qa: true
+    reject_validation_v2_cost: true
+    reject_missing_cross_model_uq: true
+    reject_proxy: true
     on_incomplete: fail
   main_figure:
-    allow_qualitative_map: false
-    allow_proxy_claims: false
-    allow_architecture_proxies: false
+    allow_calibration_curves: false
+    allow_interval_width_curves: false
+    allow_nfe_panel: false
+    allow_full_grid_slice_scaling: false
     allow_throughput_extension: false
-    allow_synthetic_query_extension: false
-
-# Retained in place solely for non-manuscript developer QA and provenance.
-# These inputs must never enter a strict-formal composition or support claims.
-engineering_inputs:
-  status: engineering-only
-  qualitative_nfe_pattern: 0_demo_TurbulentCombustion/_CheckNotes/Stage6_formal_baseline/evaluation/matched_reconstruction/F0_best/nfe{nfe}.npz
-  qualitative_nfes: [1, 2, 4]
-  architecture_cost_proxy: 0_demo_TurbulentCombustion/figures/generated/gl_rbf_cq_rc1_pareto/pareto_source.csv
-  query_scaling_proxy: 0_demo_TurbulentCombustion/_CheckNotes/Stage4_reconstruction/reconstruction_scaling.csv
 
 style:
-  font_family: [Arial, Liberation Sans, DejaVu Sans]
-  field_colors:
-    Y_CH4: "#C98A3D"
-    Y_CO: "#457B9D"
-    T: "#D95F5F"
-    U1: "#2A9D8F"
-    p: "#7B6FA6"
+  font_family: [Arial, DejaVu Sans, Liberation Sans]
   method_colors:
     DMF-Gen: "#E63946"
     FFM-FNO: "#1D3557"
@@ -141,6 +97,5 @@ style:
     MLP-RBF: "#2A9D8F"
     Geo-FNO: "#F4A261"
     Senseiver: "#8D99AE"
-  draft_tag: "#6C757D"
   pending_face: "#F1F3F5"
   pending_edge: "#ADB5BD"

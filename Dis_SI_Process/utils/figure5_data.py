@@ -1,4 +1,4 @@
-"""Strict adapters from frozen ValidationV2 products to Figure 5 V2 panels."""
+"""Strict adapters from frozen ValidationV3 products to Figure 5 V3."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
 
 
 @dataclass(frozen=True)
@@ -29,119 +28,108 @@ def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _candidate_runs(root: Path, *, kind: str, job: str | None = None) -> list[Path]:
-    candidates = []
-    if not root.exists():
-        return candidates
-    for directory in root.iterdir():
-        manifest_path, qa_path = directory / "manifest.json", directory / "qa.json"
-        if not directory.is_dir() or not manifest_path.is_file() or not qa_path.is_file():
-            continue
-        try:
-            manifest, qa = _json(manifest_path), _json(qa_path)
-        except (OSError, json.JSONDecodeError):
-            continue
-        if manifest.get("status") != "complete" or qa.get("status") != "pass" or not manifest.get("formal", False):
-            continue
-        if kind == "uncertainty" and manifest.get("job") != job:
-            continue
-        candidates.append(directory)
-    return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+def _finite(table: pd.DataFrame, columns: list[str]) -> bool:
+    return bool(np.isfinite(table[columns].to_numpy(dtype=float)).all())
 
 
-def _load_uncertainty(root: Path, job: str, *, expected_states: int, expected_draws: int) -> dict[str, Any] | None:
-    for directory in _candidate_runs(root, kind="uncertainty", job=job):
-        per_state_path, coverage_path = directory / "per_state_field.csv", directory / "coverage_by_level.csv"
-        if not per_state_path.is_file() or not coverage_path.is_file():
-            continue
-        per_state, coverage = pd.read_csv(per_state_path), pd.read_csv(coverage_path)
-        if len(per_state) != expected_states * 5:
-            continue
-        if per_state["state"].nunique() != expected_states or set(per_state["draw_count"].astype(int)) != {expected_draws}:
-            continue
-        if per_state.select_dtypes(include=[np.number]).isna().any().any():
-            continue
-        return {"directory": directory, "manifest": _json(directory / "manifest.json"), "qa": _json(directory / "qa.json"), "per_state": per_state, "coverage": coverage}
-    return None
+def _formal_run(root: Path, run_id: str, schema: str, required: list[str]) -> dict[str, Any] | None:
+    directory = root / run_id
+    manifest_path, qa_path = directory / "manifest.json", directory / "qa.json"
+    if not manifest_path.is_file() or not qa_path.is_file():
+        return None
+    manifest, qa = _json(manifest_path), _json(qa_path)
+    if manifest.get("schema_version") != schema or manifest.get("status") != "complete" or not manifest.get("formal", False) or qa.get("status") != "pass":
+        return None
+    if not all((directory / name).is_file() for name in required):
+        return None
+    return {"directory": directory, "manifest": manifest, "qa": qa}
 
 
-def _load_cost(root: Path, methods: list[str]) -> dict[str, Any] | None:
-    for directory in _candidate_runs(root, kind="cost"):
-        summary_path, nfe_path = directory / "benchmark_summary.csv", directory / "nfe_error.csv"
-        if not summary_path.is_file() or not nfe_path.is_file():
-            continue
-        summary, nfe = pd.read_csv(summary_path), pd.read_csv(nfe_path)
-        timed = summary[summary["status"].eq("ok")]
-        if "timed_total_ms" not in timed.columns or (timed["repeats"].fillna(0) < 30).any() or (timed["timed_total_ms"].fillna(0) < 10000.0).any():
-            continue
-        native = summary[summary["suite"].eq("native_methods")].copy()
-        query = summary[summary["suite"].eq("dmf_query_memory") & summary["status"].eq("ok")].copy()
-        statuses = dict(zip(native["method"].astype(str), native["status"].astype(str)))
-        if set(statuses) != set(methods):
-            continue
-        if set(query["N"].dropna().astype(int)) != {1024, 4096, 16384, 40300}:
-            continue
-        if set(nfe["measured_nfe"].astype(int)) != {1, 2, 4, 8}:
-            continue
-        return {"directory": directory, "manifest": _json(directory / "manifest.json"), "qa": _json(directory / "qa.json"), "native": native, "query": query, "nfe": nfe}
-    return None
+def _load_uq(config: dict[str, Any], repo_root: Path) -> dict[str, Any] | None:
+    formal = config["formal_inputs"]
+    root = _repo_path(repo_root, formal["uq_root"])
+    run = _formal_run(root, formal["uq_run_id"], "figure5-validation-v3-uq-1", ["crps_summary.csv", "spread_error_summary.csv", "per_state_method.csv", "reliability_si.csv"])
+    if run is None or "ValidationV2" in str(run["directory"]):
+        return None
+    crps = pd.read_csv(run["directory"] / "crps_summary.csv")
+    spread = pd.read_csv(run["directory"] / "spread_error_summary.csv")
+    states = pd.read_csv(run["directory"] / "per_state_method.csv")
+    methods = config["paper_contract"]["generative_method_order"]
+    if list(crps["method"].astype(str)) != methods or list(spread["method"].astype(str)) != methods:
+        return None
+    if len(states) != 1000 or states["state"].nunique() != 200 or set(states["draw_count"].astype(int)) != {64}:
+        return None
+    if any(states[states["method"].eq(method)]["state"].nunique() != 200 for method in methods):
+        return None
+    if not _finite(crps, ["mean_normalized_crps", "crps_ci_low", "crps_ci_high"]) or not _finite(spread, ["spearman_rho", "spearman_ci_low", "spearman_ci_high"]):
+        return None
+    run.update({"crps": crps, "spread": spread, "states": states})
+    return run
 
 
-def _bin_spread_error(table: pd.DataFrame, field_order: list[str], bins: int, qa: dict[str, Any]) -> dict[str, Any]:
-    records: list[dict[str, Any]] = []
-    associations = {row["field"]: row for row in qa.get("associations", [])}
-    for field in field_order:
-        group = table[table["field"].eq(field)].sort_values("original_time_index").copy()
-        spread = group["spread_rms_normalized"].to_numpy(dtype=float)
-        error = group["ensemble_mean_relative_l2"].to_numpy(dtype=float)
-        edges = np.unique(np.quantile(spread, np.linspace(0, 1, bins + 1)))
-        group["bin"] = np.clip(np.digitize(spread, edges[1:-1]), 0, max(len(edges) - 2, 0))
-        for bin_id, part in group.groupby("bin", sort=True):
-            records.append({"field": field, "bin": int(bin_id), "spread": float(part["spread_rms_normalized"].mean()), "error": float(part["ensemble_mean_relative_l2"].mean()), "error_q25": float(part["ensemble_mean_relative_l2"].quantile(0.25)), "error_q75": float(part["ensemble_mean_relative_l2"].quantile(0.75)), "n": int(len(part))})
-        if field not in associations:
-            associations[field] = {"field": field, "spearman_rho": float(spearmanr(spread, error).statistic), "spearman_ci_low": np.nan, "spearman_ci_high": np.nan}
-    return {"table": pd.DataFrame(records), "associations": associations, "raw": table}
+def _load_cost(config: dict[str, Any], repo_root: Path) -> dict[str, Any] | None:
+    formal = config["formal_inputs"]
+    root = _repo_path(repo_root, formal["cost_root"])
+    run = _formal_run(root, formal["cost_run_id"], "figure5-validation-v3-cost-1", ["native_summary.csv", "query_latency_summary.csv", "memory_summary.csv", "variable_query_support.csv", "timing_boundary_audit.csv"])
+    if run is None or "ValidationV2" in str(run["directory"]):
+        return None
+    native = pd.read_csv(run["directory"] / "native_summary.csv")
+    query = pd.read_csv(run["directory"] / "query_latency_summary.csv")
+    memory = pd.read_csv(run["directory"] / "memory_summary.csv")
+    support = pd.read_csv(run["directory"] / "variable_query_support.csv")
+    boundary = pd.read_csv(run["directory"] / "timing_boundary_audit.csv")
+    methods = config["paper_contract"]["method_order"]
+    if list(native["method"].astype(str)) != methods or set(native["status"].astype(str)) != {"ok"}:
+        return None
+    if set(support["method"].astype(str)) != set(methods):
+        return None
+    variable = set(support[support["variable_query_supported"].astype(bool)]["method"].astype(str))
+    expected = {(method, count) for method in methods for count in ([1024, 4096, 16384, 40300] if method in variable else [40300])}
+    query_keys = set(zip(query["method"].astype(str), query["N"].astype(int)))
+    memory_keys = set(zip(memory["method"].astype(str), memory["N"].astype(int)))
+    if query_keys != expected or memory_keys != expected or query_keys != memory_keys:
+        return None
+    if not _finite(native, ["median_latency_ms", "latency_q25_ms", "latency_q75_ms", "error", "error_ci_low", "error_ci_high"]):
+        return None
+    if not _finite(query, ["median_latency_ms", "latency_q25_ms", "latency_q75_ms"]) or not _finite(memory, ["peak_allocated_mib"]):
+        return None
+    if len(boundary) < 3 or not boundary.iloc[:3]["pass_20pct"].astype(bool).all():
+        return None
+    run.update({"native": native, "query": query, "memory": memory, "support": support, "boundary": boundary})
+    return run
 
 
 def load_figure5_data(config: dict[str, Any], repo_root: Path) -> tuple[dict[str, Any], list[SourceRecord]]:
-    """Load formal products only; absent evidence remains pending, never proxied."""
-    fields = list(config["paper_contract"]["unobserved_fields"])
-    methods = list(config["paper_contract"]["method_order"])
-    uq_root = _repo_path(repo_root, config["formal_inputs"]["uncertainty_root"])
-    cost_root = _repo_path(repo_root, config["formal_inputs"]["cost_root"])
-    u1 = _load_uncertainty(uq_root, "U1", expected_states=1000, expected_draws=16)
-    u2 = _load_uncertainty(uq_root, "U2", expected_states=200, expected_draws=64)
-    cost = _load_cost(cost_root, methods)
-    modes = {"a": "formal" if u2 else "pending", "b": "formal" if u2 else "pending", "c": "formal" if u1 else "pending", "d": "formal" if cost else "pending", "e": "formal" if cost else "pending", "f": "formal" if cost else "pending"}
+    """Load only adopted V3 formal products; missing inputs remain pending."""
+    uq = _load_uq(config, repo_root)
+    cost = _load_cost(config, repo_root)
+    modes = {"a": "formal" if uq else "pending", "b": "formal" if uq else "pending", "c": "formal" if cost else "pending", "d": "formal" if cost else "pending", "e": "formal" if cost else "pending"}
+    uq_root = _repo_path(repo_root, config["formal_inputs"]["uq_root"]) / config["formal_inputs"]["uq_run_id"]
+    cost_root = _repo_path(repo_root, config["formal_inputs"]["cost_root"]) / config["formal_inputs"]["cost_run_id"]
     sources = {
-        "a": str(u2["directory"] / "coverage_by_level.csv") if u2 else str(uq_root / "<formal-U2>"),
-        "b": str(u2["directory"] / "coverage_by_level.csv") if u2 else str(uq_root / "<formal-U2>"),
-        "c": str(u1["directory"] / "per_state_field.csv") if u1 else str(uq_root / "<formal-U1>"),
-        "d": str(cost["directory"] / "benchmark_summary.csv") if cost else str(cost_root / "<formal-cost>"),
-        "e": str(cost["directory"] / "benchmark_summary.csv") if cost else str(cost_root / "<formal-cost>"),
-        "f": str(cost["directory"] / "nfe_error.csv") if cost else str(cost_root / "<formal-cost>"),
+        "a": str((uq["directory"] if uq else uq_root) / "crps_summary.csv"),
+        "b": str((uq["directory"] if uq else uq_root) / "spread_error_summary.csv"),
+        "c": str((cost["directory"] if cost else cost_root) / "native_summary.csv"),
+        "d": str((cost["directory"] if cost else cost_root) / "query_latency_summary.csv"),
+        "e": str((cost["directory"] if cost else cost_root) / "memory_summary.csv"),
     }
-    data: dict[str, Any] = {"modes": modes, "sources": sources, "coverage": None, "spread_error": None, "cost_native": None, "cost_query": None, "cost_nfe": None, "run_metadata": {"U1": u1, "U2": u2, "cost": cost}}
-    if u2:
-        coverage = u2["coverage"].copy()
-        data["coverage"] = coverage[coverage["field"].isin(fields) & coverage["sensor_count"].eq(256)].copy()
-    if u1:
-        per_state = u1["per_state"]
-        per_state = per_state[per_state["field"].isin(fields) & per_state["sensor_count"].eq(256)].copy()
-        data["spread_error"] = _bin_spread_error(per_state, fields, int(config["formal_protocol"]["uq_spread_error"]["bins"]), u1["qa"])
-    if cost:
-        native = cost["native"].copy()
-        native["method"] = pd.Categorical(native["method"], categories=methods, ordered=True)
-        data["cost_native"] = native.sort_values("method")
-        data["cost_query"] = cost["query"].sort_values("N")
-        data["cost_nfe"] = cost["nfe"].sort_values("measured_nfe")
     notes = {
-        "a": "Formal U2 state-level empirical coverage." if u2 else "Requires a complete formal U2 run (200 states × 64 draws).",
-        "b": "Formal U2 widths normalized by frozen training standard deviations." if u2 else "Requires the same complete formal U2 run.",
-        "c": "Formal U1 state-level spread/error association." if u1 else "Requires a complete formal U1 run (1,000 states × 16 draws).",
-        "d": "Formal canonical-adapter native benchmark with frozen FieldL2 join." if cost else "Requires a complete formal all-suite cost run.",
-        "e": "Formal DMF real-coordinate query/memory sweep." if cost else "Requires N=1,024/4,096/16,384/40,300 benchmark rows.",
-        "f": "Formal DMF measured-NFE accuracy/latency sweep." if cost else "Requires the fixed 50-state NFE sweep.",
+        "a": "Five-method paired normalized empirical CRPS with equal field weights." if uq else "Requires the complete five-method 200-state x 64-draw V3 UQ run.",
+        "b": "Five method-wise macro spread/error Spearman estimates." if uq else "Requires complete cross-model V3 UQ summaries.",
+        "c": "Eight exact checkpoints with clean-GPU model-core timing and frozen FieldL2." if cost else "Requires a passing clean V3 native benchmark and DMF reconciliation.",
+        "d": "Curves only for audited native variable-query models; fixed-grid methods are native-only." if cost else "Requires the V3 query-support audit and latency table.",
+        "e": "Peak allocated memory under the identical support/query protocol as panel d." if cost else "Requires the V3 memory table with matching support keys.",
     }
-    records = [SourceRecord(panel=panel, mode=modes[panel], status="available" if modes[panel] == "formal" else "missing", source=sources[panel], note=notes[panel]) for panel in "abcdef"]
-    return data, records
+    records = [SourceRecord(panel=panel, mode=modes[panel], status="available" if modes[panel] == "formal" else "missing", source=sources[panel], note=notes[panel]) for panel in "abcde"]
+    return {
+        "modes": modes,
+        "sources": sources,
+        "uq_crps": None if uq is None else uq["crps"],
+        "uq_spread": None if uq is None else uq["spread"],
+        "cost_native": None if cost is None else cost["native"],
+        "cost_query": None if cost is None else cost["query"],
+        "cost_memory": None if cost is None else cost["memory"],
+        "query_support": None if cost is None else cost["support"],
+        "timing_boundary": None if cost is None else cost["boundary"],
+        "run_metadata": {"uq": uq, "cost": cost},
+    }, records

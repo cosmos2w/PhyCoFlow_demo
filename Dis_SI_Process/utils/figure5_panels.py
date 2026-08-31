@@ -1,35 +1,32 @@
-"""Six-panel Figure 5 V2 renderers."""
+"""Five-panel Figure 5 V3 renderers."""
 from __future__ import annotations
 
 from typing import Any
 
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
-from .figure5_style import AXIS, DMF, MM, NEUTRAL, add_panel_label, add_status_badge, style_grid
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["Arial", "DejaVu Sans", "Liberation Sans"]
+plt.rcParams["svg.fonttype"] = "none"
 
-
-MARKERS = ("o", "s", "^", "D", "v", "P", "X", "h")
-FIELD_LABELS = {"Y_CH4": r"$Y_{\mathrm{CH_4}}$", "Y_CO": r"$Y_{\mathrm{CO}}$", "U1": r"$U_1$", "p": r"$p$"}
-
-
-def _field_colors(config: dict[str, Any]) -> dict[str, str]:
-    return dict(config["style"]["field_colors"])
+from .figure5_style import AXIS, GRID, MM, add_panel_label, style_grid
 
 
-def _method_colors(config: dict[str, Any]) -> dict[str, str]:
-    return dict(config["style"]["method_colors"])
+MARKERS = ("o", "s", "D", "^", "v", "P", "X", "h")
 
 
-def _finish(ax, label: str, *, formal: bool = True) -> None:
-    add_panel_label(ax, label)
-    if not formal:
-        add_status_badge(ax, "AWAITING FORMAL RUN", kind="pending", y=0.98, va="top")
+def _colors(config: dict[str, Any]) -> dict[str, str]:
+    return config["style"]["method_colors"]
 
 
 def _pending(ax, label: str, title: str, requirement: str) -> None:
-    ax.set_facecolor("#F1F3F5")
+    ax.set_facecolor("#F3F5F6")
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_color("#ADB5BD")
@@ -38,190 +35,151 @@ def _pending(ax, label: str, title: str, requirement: str) -> None:
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_title(title, loc="left", fontweight="bold", pad=4)
-    ax.text(0.5, 0.56, "Formal evidence pending", transform=ax.transAxes, ha="center", va="center", fontsize=6.2, fontweight="bold", color="#5C6770")
+    ax.text(0.5, 0.56, "Formal V3 evidence pending", transform=ax.transAxes, ha="center", va="center", fontsize=6.2, fontweight="bold", color="#5C6770")
     ax.text(0.5, 0.39, requirement, transform=ax.transAxes, ha="center", va="center", fontsize=5.1, color="#5C6770", wrap=True)
-    _finish(ax, label, formal=False)
+    add_panel_label(ax, label)
 
 
-def draw_calibration(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "a") -> None:
-    table = data.get("coverage")
+def _forest(ax, table, config, *, estimate: str, low: str, high: str, xlabel: str, ref: float | None, label: str, title: str, show_methods: bool = True) -> None:
+    methods = config["paper_contract"]["generative_method_order"]
+    colors = _colors(config)
+    y = np.arange(len(methods))[::-1]
+    for index, method in enumerate(methods):
+        row = table[table["method"].eq(method)].iloc[0]
+        value, lo, hi = float(row[estimate]), float(row[low]), float(row[high])
+        ax.errorbar(value, y[index], xerr=np.asarray([[value - lo], [hi - value]]), fmt=MARKERS[index], color=colors[method], markersize=5.0 if method == "DMF-Gen" else 4.1, capsize=2.0, elinewidth=1.25, zorder=3)
+    if ref is not None:
+        ax.axvline(ref, color="#8D99AE", linestyle="--", linewidth=0.8, zorder=0)
+    ax.set_yticks(y)
+    ax.set_yticklabels(methods if show_methods else [""] * len(methods))
+    if show_methods:
+        for tick, method in zip(ax.get_yticklabels(), methods):
+            tick.set_color(colors[method])
+            if method == "DMF-Gen":
+                tick.set_fontweight("bold")
+    ax.set_xlabel(xlabel)
+    ax.set_title(title, loc="left", fontweight="bold")
+    style_grid(ax, axis="x")
+    add_panel_label(ax, label)
+
+
+def draw_crps(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "a", show_methods: bool = True) -> None:
+    table = data.get("uq_crps")
     if table is None:
-        _pending(ax, panel_label, "Calibration", "U2 · 200 states × 64 draws · M=256")
+        _pending(ax, panel_label, "Probabilistic reconstruction", "Five methods · 200 states × 64 draws · normalized empirical CRPS")
         return
-    colors = _field_colors(config)
-    ax.plot([0.48, 0.97], [0.48, 0.97], linestyle="--", color=NEUTRAL, linewidth=0.9, label="Ideal")
-    for i, field in enumerate(config["paper_contract"]["unobserved_fields"]):
-        group = table[table["field"].eq(field)].sort_values("nominal_level")
-        y = group["empirical_coverage"].to_numpy()
-        yerr = np.vstack([y - group["coverage_ci_low"].to_numpy(), group["coverage_ci_high"].to_numpy() - y])
-        ax.errorbar(group["nominal_level"], y, yerr=yerr, marker=MARKERS[i], color=colors[field], capsize=1.8, label=FIELD_LABELS[field])
-    ax.set(xlabel="Nominal central coverage", ylabel="Empirical state-level coverage", xlim=(0.48, 0.97), ylim=(0.0, 1.0))
-    ax.set_xticks([0.5, 0.8, 0.9, 0.95])
-    ax.set_title("Calibration", loc="left", fontweight="bold")
-    style_grid(ax)
-    ax.legend(ncol=2, loc="upper left", handlelength=1.3, columnspacing=0.9)
-    _finish(ax, panel_label)
+    _forest(ax, table, config, estimate="mean_normalized_crps", low="crps_ci_low", high="crps_ci_high", xlabel="Normalized CRPS (lower is better)", ref=None, label=panel_label, title="Probabilistic reconstruction", show_methods=show_methods)
 
 
-def draw_sharpness(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "b") -> None:
-    table = data.get("coverage")
+def draw_spread_association(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "b", show_methods: bool = True) -> None:
+    table = data.get("uq_spread")
     if table is None:
-        _pending(ax, panel_label, "Sharpness", "U2 · interval width / frozen training s.d.")
+        _pending(ax, panel_label, "Spread–error association", "Five methods · state-level macro spread and macro ensemble-mean error")
         return
-    colors = _field_colors(config)
-    for i, field in enumerate(config["paper_contract"]["unobserved_fields"]):
-        group = table[table["field"].eq(field)].sort_values("nominal_level")
-        y = group["mean_interval_width_normalized"].to_numpy()
-        yerr = np.vstack([y - group["width_normalized_ci_low"].to_numpy(), group["width_normalized_ci_high"].to_numpy() - y])
-        ax.errorbar(group["nominal_level"], y, yerr=yerr, marker=MARKERS[i], color=colors[field], capsize=1.8, label=FIELD_LABELS[field])
-    ax.set(xlabel="Nominal central coverage", ylabel="Interval width / training s.d.")
-    ax.set_xticks([0.5, 0.8, 0.9, 0.95])
-    ax.set_title("Normalized interval width", loc="left", fontweight="bold")
-    style_grid(ax)
-    ax.legend(ncol=2, loc="upper left", handlelength=1.3, columnspacing=0.9)
-    _finish(ax, panel_label)
+    _forest(ax, table, config, estimate="spearman_rho", low="spearman_ci_low", high="spearman_ci_high", xlabel="Spearman ρ", ref=0.0, label=panel_label, title="Spread associated with error", show_methods=show_methods)
+    ax.set_xlim(min(-0.08, float(table["spearman_ci_low"].min()) - 0.04), max(0.75, float(table["spearman_ci_high"].max()) + 0.04))
 
 
-def draw_spread_error(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "c") -> None:
-    result = data.get("spread_error")
-    if result is None:
-        _pending(ax, panel_label, "Spread–error association", "U1 · 1,000 states × 16 draws · M=256")
-        return
-    table, colors = result["table"], _field_colors(config)
-    for i, field in enumerate(config["paper_contract"]["unobserved_fields"]):
-        group = table[table["field"].eq(field)].sort_values("bin")
-        association = result["associations"][field]
-        low, high = association.get("spearman_ci_low", np.nan), association.get("spearman_ci_high", np.nan)
-        ci = f" [{low:.2f}, {high:.2f}]" if np.isfinite(low) and np.isfinite(high) else ""
-        label = f"{FIELD_LABELS[field]} ρ={association['spearman_rho']:.2f}{ci}"
-        x, y = group["spread"].to_numpy(), group["error"].to_numpy()
-        ax.plot(x, y, marker=MARKERS[i], color=colors[field], label=label)
-        ax.fill_between(x, group["error_q25"].to_numpy(), group["error_q75"].to_numpy(), color=colors[field], alpha=0.11, linewidth=0)
-    ax.set(xlabel="Spatial RMS ensemble s.d. / training s.d.", ylabel="Ensemble-mean relative L2")
-    ax.set_title("Spread associated with error", loc="left", fontweight="bold")
-    style_grid(ax)
-    ax.legend(loc="best", handlelength=1.2)
-    _finish(ax, panel_label)
-
-
-def draw_accuracy_latency(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "d") -> None:
+def draw_accuracy_latency(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "c") -> None:
     table = data.get("cost_native")
     if table is None:
-        _pending(ax, panel_label, "Native-mesh accuracy–latency", "Eight canonical Cond_T methods · N=40,300")
+        _pending(ax, panel_label, "Native accuracy–latency", "Eight methods · clean GPU · warm model core · N=40,300")
         return
-    colors = _method_colors(config)
-    available = table[table["status"].eq("ok")].copy()
-    for i, (_, row) in enumerate(available.iterrows()):
-        method = str(row["method"])
+    methods = config["paper_contract"]["method_order"]
+    colors = _colors(config)
+    offsets = {
+        "DMF-Gen": (4, 4, "left"), "FFM-FNO": (4, 3, "left"), "FFM-Perceiver": (-4, 3, "right"),
+        "Latent FM": (4, 3, "left"), "SiT": (-4, 3, "right"), "MLP-RBF": (4, -7, "left"),
+        "Geo-FNO": (4, 3, "left"), "Senseiver": (4, -7, "left"),
+    }
+    for index, method in enumerate(methods):
+        row = table[table["method"].eq(method)].iloc[0]
         x, y = float(row["median_latency_ms"]), float(row["error"])
         xerr = np.asarray([[x - float(row["latency_q25_ms"])], [float(row["latency_q75_ms"]) - x]])
         yerr = np.asarray([[y - float(row["error_ci_low"])], [float(row["error_ci_high"]) - y]])
-        ax.errorbar(x, y, xerr=xerr, yerr=yerr, fmt=MARKERS[i], color=colors[method], markersize=5.2 if method == "DMF-Gen" else 4.2, capsize=1.8, zorder=3)
-        offsets = (4, 2) if method != "Senseiver" else (4, -7)
-        ax.annotate(method, (x, y), xytext=offsets, textcoords="offset points", fontsize=4.8, color=colors[method])
+        ax.errorbar(x, y, xerr=xerr, yerr=yerr, fmt=MARKERS[index], color=colors[method], markersize=5.4 if method == "DMF-Gen" else 4.3, capsize=1.8, zorder=3)
+        dx, dy, alignment = offsets[method]
+        ax.annotate(method, (x, y), xytext=(dx, dy), textcoords="offset points", ha=alignment, fontsize=4.8, color=colors[method], fontweight="bold" if method == "DMF-Gen" else "normal")
     ax.set_xscale("log")
-    ax.set(xlabel="Median warm latency (ms)", ylabel="Mean relative L2")
+    ax.set_xlim(float(table["median_latency_ms"].min()) * 0.90, float(table["median_latency_ms"].max()) * 1.16)
+    ax.set_ylim(float(table["error_ci_low"].min()) - 0.018, float(table["error_ci_high"].max()) + 0.018)
+    ax.set_xlabel("Warm model-core latency (ms)")
+    ax.set_ylabel("Mean unobserved-field relative L2")
     ax.set_title("Native 40,300-point trade-off", loc="left", fontweight="bold")
     style_grid(ax)
-    _finish(ax, panel_label)
+    add_panel_label(ax, panel_label)
 
 
-def draw_query_latency(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str | None = "e") -> None:
-    table = data.get("cost_query")
-    if table is None:
-        _pending(ax, panel_label or "e", "DMF query scaling", "Real-coordinate N sweep · M=256")
+def _scaling(ax, table, support, config, *, metric: str, ylabel: str, panel_label: str, title: str, show_legend: bool) -> None:
+    if table is None or support is None:
+        _pending(ax, panel_label, title, "Audited native query support · N=1,024/4,096/16,384/40,300")
         return
-    x, y = table["N"].to_numpy(), table["median_latency_ms"].to_numpy()
-    yerr = np.vstack([y - table["latency_q25_ms"].to_numpy(), table["latency_q75_ms"].to_numpy() - y])
-    ax.errorbar(x, y, yerr=yerr, marker="o", color=DMF, capsize=1.8)
+    methods = config["paper_contract"]["method_order"]
+    colors = _colors(config)
+    for index, method in enumerate(methods):
+        group = table[table["method"].eq(method)].sort_values("N")
+        variable = bool(support[support["method"].eq(method)]["variable_query_supported"].iloc[0])
+        if variable:
+            if metric == "median_latency_ms":
+                y = group[metric].to_numpy(dtype=float)
+                yerr = np.vstack([y - group["latency_q25_ms"].to_numpy(dtype=float), group["latency_q75_ms"].to_numpy(dtype=float) - y])
+                ax.errorbar(group["N"], y, yerr=yerr, color=colors[method], marker=MARKERS[index], markersize=3.6, capsize=1.4, label=method)
+            else:
+                ax.plot(group["N"], group[metric], color=colors[method], marker=MARKERS[index], markersize=3.6, label=method)
+        else:
+            row = group.iloc[0]
+            ax.plot(float(row["N"]), float(row[metric]), marker=MARKERS[index], markersize=5.0, markerfacecolor="white", markeredgecolor=colors[method], markeredgewidth=1.1, linestyle="none")
+    ax.axvline(40300, color="#8D99AE", linestyle="--", linewidth=0.8, zorder=0)
+    ax.text(40300, 0.98, "native", transform=ax.get_xaxis_transform(), ha="right", va="top", fontsize=4.7, color="#6C757D")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.axvline(40300, color=NEUTRAL, linestyle="--", linewidth=0.8)
-    ax.set(ylabel="Warm latency (ms)")
-    ax.set_title("DMF query scaling", loc="left", fontweight="bold", pad=2)
+    ax.set_xticks([1024, 4096, 16384, 40300], labels=["1k", "4k", "16k", "40.3k"])
+    ax.set_xlabel("Requested query points, N")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title, loc="left", fontweight="bold")
     style_grid(ax)
-    if panel_label:
-        _finish(ax, panel_label)
+    add_panel_label(ax, panel_label)
+    if show_legend:
+        handles = [mlines.Line2D([], [], color=colors[method], marker=MARKERS[index], markersize=3.6, label=method) for index, method in enumerate(methods) if bool(support[support["method"].eq(method)]["variable_query_supported"].iloc[0])]
+        handles.append(mlines.Line2D([], [], color="#606060", marker="o", markerfacecolor="white", linestyle="none", label="fixed grid: native only"))
+        ax.legend(handles=handles, loc="upper left", fontsize=4.5, handlelength=1.3, ncol=1)
 
 
-def draw_query_memory(ax, data: dict[str, Any], config: dict[str, Any]) -> None:
-    table = data.get("cost_query")
-    if table is None:
-        ax.axis("off")
-        return
-    ax.plot(table["N"], table["peak_allocated_mib"], marker="s", color=config["style"]["field_colors"]["Y_CO"])
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.axvline(40300, color=NEUTRAL, linestyle="--", linewidth=0.8)
-    ax.set(xlabel="Query points, N", ylabel="Peak allocated (MiB)")
-    style_grid(ax)
+def draw_query_latency(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "d", show_legend: bool = True) -> None:
+    _scaling(ax, data.get("cost_query"), data.get("query_support"), config, metric="median_latency_ms", ylabel="Warm latency (ms)", panel_label=panel_label, title="Query-count latency", show_legend=show_legend)
 
 
-def draw_nfe_tradeoff(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "f") -> None:
-    table = data.get("cost_nfe")
-    if table is None:
-        _pending(ax, panel_label, "Few-step accuracy–cost", "Fixed 50-state cohort · measured NFE")
-        return
-    table = table.sort_values("measured_nfe")
-    x, y = table["median_latency_ms"].to_numpy(), table["unobserved_mean_error"].to_numpy()
-    xerr = np.vstack([x - table["latency_q25_ms"].to_numpy(), table["latency_q75_ms"].to_numpy() - x])
-    yerr = np.vstack([y - table["error_ci_low"].to_numpy(), table["error_ci_high"].to_numpy() - y])
-    ax.errorbar(x, y, xerr=xerr, yerr=yerr, color=DMF, marker="o", capsize=1.8)
-    for x_i, y_i, nfe in zip(x, y, table["measured_nfe"].astype(int)):
-        ax.annotate(f"NFE {nfe}", (x_i, y_i), xytext=(3, 3), textcoords="offset points", fontsize=4.8)
-    ax.set(xlabel="Median warm latency (ms)", ylabel="Mean relative L2")
-    ax.set_title("Few-step accuracy–cost path", loc="left", fontweight="bold")
-    style_grid(ax)
-    _finish(ax, panel_label)
+def draw_query_memory(ax, data: dict[str, Any], config: dict[str, Any], *, panel_label: str = "e", show_legend: bool = False) -> None:
+    _scaling(ax, data.get("cost_memory"), data.get("query_support"), config, metric="peak_allocated_mib", ylabel="Peak allocated memory (MiB)", panel_label=panel_label, title="Query-count memory", show_legend=show_legend)
 
 
-DRAWERS = {"a": draw_calibration, "b": draw_sharpness, "c": draw_spread_error, "d": draw_accuracy_latency, "f": draw_nfe_tradeoff}
+DRAWERS = {"a": draw_crps, "b": draw_spread_association, "c": draw_accuracy_latency, "d": draw_query_latency, "e": draw_query_memory}
 
 
 def make_standalone(panel: str, data: dict[str, Any], config: dict[str, Any]):
-    if panel == "e":
-        if data.get("cost_query") is None:
-            fig, ax = plt.subplots(figsize=(82 * MM, 76 * MM))
-            fig.subplots_adjust(left=0.16, right=0.96, top=0.88, bottom=0.14)
-            _pending(ax, "e", "DMF query and memory scaling", "Real-coordinate N sweep · M=256")
-            return fig
-        fig, axes = plt.subplots(2, 1, figsize=(82 * MM, 76 * MM), sharex=True, gridspec_kw={"hspace": 0.16})
-        fig.subplots_adjust(left=0.20, right=0.96, top=0.88, bottom=0.16)
-        draw_query_latency(axes[0], data, config, panel_label="e")
-        axes[0].tick_params(labelbottom=False)
-        draw_query_memory(axes[1], data, config)
-        return fig
-    width = 105 if panel == "d" else 86
-    fig, ax = plt.subplots(figsize=(width * MM, 62 * MM))
-    fig.subplots_adjust(left=0.18, right=0.96, top=0.84, bottom=0.20)
+    width = 108 if panel == "c" else 88
+    height = 66 if panel in "de" else 60
+    fig, ax = plt.subplots(figsize=(width * MM, height * MM))
+    fig.subplots_adjust(left=0.22 if panel in "ab" else 0.17, right=0.96, top=0.84, bottom=0.20)
     DRAWERS[panel](ax, data, config, panel_label=panel)
     return fig
 
 
 def make_composed(data: dict[str, Any], config: dict[str, Any]):
-    width, height = float(config["figure"]["width_mm"]) * MM, float(config["figure"]["composed_height_mm"]) * MM
+    width = float(config["figure"]["width_mm"]) * MM
+    height = float(config["figure"]["composed_height_mm"]) * MM
     fig = plt.figure(figsize=(width, height))
-    outer = fig.add_gridspec(2, 12, left=0.075, right=0.985, bottom=0.075, top=0.89, wspace=1.15, hspace=0.68)
-    top_axes = [fig.add_subplot(outer[0, 0:4]), fig.add_subplot(outer[0, 4:8]), fig.add_subplot(outer[0, 8:12])]
-    draw_calibration(top_axes[0], data, config, panel_label="a")
-    draw_sharpness(top_axes[1], data, config, panel_label="b")
-    draw_spread_error(top_axes[2], data, config, panel_label="c")
-    d_ax = fig.add_subplot(outer[1, 0:6])
-    draw_accuracy_latency(d_ax, data, config, panel_label="d")
-    if data.get("cost_query") is None:
-        e_ax = fig.add_subplot(outer[1, 6:9])
-        _pending(e_ax, "e", "DMF query and memory scaling", "Real-coordinate N sweep · M=256")
-    else:
-        e_grid = outer[1, 6:9].subgridspec(2, 1, hspace=0.16)
-        e_axes = [fig.add_subplot(e_grid[i, 0]) for i in range(2)]
-        draw_query_latency(e_axes[0], data, config, panel_label="e")
-        e_axes[0].tick_params(labelbottom=False)
-        draw_query_memory(e_axes[1], data, config)
-    f_ax = fig.add_subplot(outer[1, 9:12])
-    f_position = f_ax.get_position()
-    f_ax.set_position([f_position.x0 + 0.008, f_position.y0, f_position.width - 0.008, f_position.height])
-    draw_nfe_tradeoff(f_ax, data, config, panel_label="f")
-    headers = config["figure"]["row_headers"]
-    fig.text(0.075, 0.97, headers["top"], ha="left", va="top", fontsize=7.0, fontweight="bold", color=AXIS)
-    fig.text(0.075, 0.505, headers["bottom"], ha="left", va="bottom", fontsize=7.0, fontweight="bold", color=AXIS)
+    grid = fig.add_gridspec(2, 12, left=0.092, right=0.985, bottom=0.09, top=0.90, wspace=1.45, hspace=0.82)
+    ax_a = fig.add_subplot(grid[0, 0:6])
+    ax_b = fig.add_subplot(grid[0, 6:12])
+    draw_crps(ax_a, data, config, panel_label="a", show_methods=True)
+    draw_spread_association(ax_b, data, config, panel_label="b", show_methods=True)
+    ax_c = fig.add_subplot(grid[1, 0:6])
+    ax_d = fig.add_subplot(grid[1, 6:9])
+    ax_e = fig.add_subplot(grid[1, 9:12])
+    draw_accuracy_latency(ax_c, data, config, panel_label="c")
+    draw_query_latency(ax_d, data, config, panel_label="d", show_legend=False)
+    draw_query_memory(ax_e, data, config, panel_label="e", show_legend=False)
+    fig.text(0.092, 0.975, config["figure"]["row_headers"]["top"], ha="left", va="top", fontsize=7.0, fontweight="bold", color=AXIS)
+    fig.text(0.092, 0.505, config["figure"]["row_headers"]["bottom"], ha="left", va="bottom", fontsize=7.0, fontweight="bold", color=AXIS)
     return fig

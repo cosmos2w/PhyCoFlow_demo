@@ -1,73 +1,65 @@
-# Figure 5 validation workflow
+# Figure 5 V3 validation workflow
 
-This directory contains the lightweight Figure 5 post-processing and visualization pipeline. It reads checkpoints, reconstruction caches, frozen metrics, and raw datasets in place from the turbulent-combustion and super-resolution project trees; it does not copy or regenerate those products.
+This directory refactors the Figure 5 V2 post-processing workflow into the five-panel V3 comparison while leaving every V2 result and companion untouched. It reads checkpoints, frozen Figure 4 FieldL2 tables, the adopted sensor plan, and reusable V2 DMF UQ summaries in place; it does not duplicate checkpoints, datasets, reconstruction caches, or raw ensemble stacks.
 
-The `figure5-validation-v2` contract is a compact six-panel, quantitative figure about empirical conditional uncertainty and computational characteristics. The main figure contains no qualitative map and makes no scientific claim from a proxy. Formal field identities are the paper's `Y_CH4`, `Y_CO`, `T`, `U1`, and `p`; under `Cond_T`, the plotted unobserved fields are `Y_CH4`, `Y_CO`, `U1`, and `p` in that order.
+The V3 main figure compares conditional ensemble quality across the five trained generative methods and measures clean computational trade-offs across all eight Figure 4 methods. Under `Cond_T`, `Y_CH4`, `Y_CO`, `U1`, and `p` are equal-weight macro-aggregated.
 
 ## Panel map
 
-- `a` — empirical calibration of central conditional intervals.
-- `b` — sharpness as interval width normalized by training-set field standard deviation.
-- `c` — state-level normalized spread associated with ensemble-mean relative-L2 error.
-- `d` — actual eight-method native-mesh accuracy–latency comparison.
-- `e` — aligned DMF-Gen query-latency and peak-allocated-memory micro-axes.
-- `f` — DMF-Gen latency–error path annotated by measured vector-field evaluation count.
+- `a` — normalized empirical CRPS for DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, and SiT.
+- `b` — method-wise Spearman association between macro normalized ensemble spread and macro ensemble-mean error.
+- `c` — corrected native N=40,300 accuracy–latency trade-off for all eight methods.
+- `d` — warm model-core latency versus N, with curves only for native variable-query paths.
+- `e` — peak allocated memory versus N under the identical support protocol.
 
-The composed target is 183 mm × approximately 145 mm and SVG-only. Spatial uncertainty examples, raw physical-unit widths, extended uncertainty diagnostics, detailed cost tables, and ablations belong in the SI or a later figure.
+Full reliability/interval-width curves, fieldwise UQ, diversity, cold/no-cache timing, reserved memory, and NFE/solver diagnostics remain SI/internal. No ablation training is part of this workflow.
 
-## Layout
+## Execution order
 
-- `configs/` — in-place source roots, formal panel contract, exact field/method order, palette, and build policy.
-- `scripts/` — command-line build and QA entry points.
-- `utils/` — reusable data adapters, statistics, styling, and panel renderers.
-- `figures/generated/` — timestamped SVG outputs; ignored by git.
-- `docs/` — figure contract and timestamped panel companions.
-- `results/` — lightweight derived CSVs and build manifests; ignored by git.
+Use `phycoflow_env` for inference and benchmarking. GPU 2 is referenced explicitly below.
 
-## Build
+```bash
+conda run -n phycoflow_env python \
+  0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Scripts/61_run_uq_compare_v3.py \
+  --plan 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_ValidationPlans/validation_v1.yaml \
+  --job PILOT --methods all --device cuda:2 --run-id <pilot_run_id>
+```
 
-Use the project figure environment:
+Only after the 12×8 pilot passes stochasticity and same-seed reproducibility:
+
+```bash
+conda run -n phycoflow_env python \
+  0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Scripts/61_run_uq_compare_v3.py \
+  --plan 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_ValidationPlans/validation_v1.yaml \
+  --job FORMAL --methods all --device cuda:2 --run-id uq_compare_formal_20260830_v3r6
+```
+
+Run clean cost only when GPU 2 has no foreign compute process and no UQ job is active:
+
+```bash
+conda run -n phycoflow_env python \
+  0_demo_TurbulentCombustion/tools/benchmark_validation_v3.py \
+  --plan 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_ValidationPlans/validation_v1.yaml \
+  --device cuda:2 --run-id formal_cost_clean_v3_20260830_v3
+```
+
+The cost runner enforces at least 20 warmups, 30 synchronized repeats, and 10 measured seconds per accepted row. DMF uses its canonical configured 8,192-point reconstruction chunk; the timing audit maps the provisional approximately 29 ms probe to the earlier 4,096-point streaming boundary. The runner saves clean-GPU state, timing-boundary audit, exact identity checks, native results, variable-query support, latency repeats/summaries, allocated/reserved memory, and QA below `results/ValidationV3/CostClean/`.
+
+## Strict figure build
+
+Use the plotting-only `fig` environment:
 
 ```bash
 conda run -n fig python Dis_SI_Process/scripts/build_figure5_draft.py --strict-formal
 ```
 
-To reproduce an exact name:
-
-```bash
-conda run -n fig python Dis_SI_Process/scripts/build_figure5_draft.py \
-  --strict-formal --timestamp YYYYMMDD_HHMM
-```
-
-The V2 output contract is six standalone SVG panels, one composed SVG, a Markdown provenance companion for every output, lightweight derived tables, and a JSON build manifest. PDF is unsupported during this testing stage.
-
-## Formal-data handoff
-
-Freeze the U1/U2 uncertainty products and native-method/DMF cost products below the `ValidationV2` roots named in `configs/figure5_draft.yaml`. Reuse the frozen 1,000-state FieldL2 result in place only when its checkpoint identity matches exactly. Stream new UQ calculations state-by-state; do not retain full ensembles except for predeclared SI cases.
-
-`--strict-formal` is the manuscript-candidate mode. It must fail if any required panel source, identity, cohort/protocol metadata, or required statistic is missing, and it must never substitute a proxy or pending panel. Legacy engineering inputs remain listed only to preserve the existing QA/provenance path; they cannot enter the strict-formal composition or support manuscript claims.
-
-The frozen inference specification is `_TrainedModels/_ValidationPlans/validation_v1.yaml`. Run model inference in `phycoflow_env` (the `fig` environment is plotting-only):
-
-```bash
-conda run -n phycoflow_env python \
-  0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Scripts/60_run_uncertainty_validation.py \
-  --config 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_ValidationPlans/validation_v1.yaml \
-  --job PILOT --device cuda:0
-
-conda run -n phycoflow_env python \
-  0_demo_TurbulentCombustion/tools/benchmark_validation_v2.py \
-  --plan 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_ValidationPlans/validation_v1.yaml \
-  --suite all --methods all --device cuda:0
-```
-
-Run the uncertainty pilot before U1/U2/U3. The production commands differ only in `--job U1`, `--job U2`, or `--job U3`. Do not lower the frozen state/draw counts for a formal run.
+The output is five timestamped standalone SVGs, one 183 mm × 118 mm composed V3 SVG, one Markdown companion per panel plus a composed companion, V3 source tables/build manifest, and a timestamped completion report. `--strict-formal` fails if the five-method UQ or clean V3 cost run is missing, failed, identity-incomplete, or replaced by V2/proxy data.
 
 ## QA
 
 ```bash
 conda run -n fig python Dis_SI_Process/scripts/qa_figure5_outputs.py \
-  Dis_SI_Process/figures/generated/<timestamp>
+  Dis_SI_Process/figures/generated/<timestamp> --strict-formal
 ```
 
-QA should check the six V2 filenames, SVG parseability, editable text, 183 mm × approximately 145 mm composition, paper-aligned field/method identities, source companions, and absence of proxy/pending content in a strict-formal build. Visual inspection at final printed size remains required.
+QA checks six exact SVG names, parseability, editable text, fixed composed dimensions, required V3 terminology, companion/source-table presence, support-key consistency, absence of V2 main-panel content, and strict build-manifest status. Visual inspection at final printed size remains mandatory.

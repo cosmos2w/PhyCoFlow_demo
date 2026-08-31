@@ -7,12 +7,22 @@ import unittest
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+import yaml
+
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class Figure5PipelineTest(unittest.TestCase):
-    def test_v2_build_emits_seven_named_svg_only_outputs_with_editable_text(self) -> None:
+    def test_v3_contract_has_five_panels_and_no_main_nfe_or_v2_fallback(self) -> None:
+        config = yaml.safe_load((PACKAGE_ROOT / "configs" / "figure5_draft.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(config["schema_version"], "figure5-validation-v3")
+        self.assertEqual(list(config["figure"]["panel_map"]), list("abcde"))
+        self.assertNotIn("nfe", " ".join(config["figure"]["panel_map"].values()).lower())
+        self.assertEqual(config["formal_protocol"]["uq"]["field_weights"], [0.25, 0.25, 0.25, 0.25])
+        self.assertTrue(config["build_policy"]["strict_formal"]["reject_validation_v2_cost"])
+
+    def test_v3_build_emits_six_named_svg_only_outputs_with_editable_text(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_root = Path(temporary)
             timestamp = "20990101_0000"
@@ -30,16 +40,15 @@ class Figure5PipelineTest(unittest.TestCase):
             )
             bundle = output_root / "figures" / "generated" / timestamp
             svgs = sorted(bundle.glob("*.svg"))
-            self.assertEqual(len(svgs), 7)
+            self.assertEqual(len(svgs), 6)
             self.assertFalse(list(bundle.glob("*.pdf")))
             expected = {
-                f"fig5a_calibration_{timestamp}.svg",
-                f"fig5b_sharpness_{timestamp}.svg",
-                f"fig5c_spread_error_{timestamp}.svg",
-                f"fig5d_accuracy_latency_{timestamp}.svg",
+                f"fig5a_normalized_crps_{timestamp}.svg",
+                f"fig5b_spread_error_methods_{timestamp}.svg",
+                f"fig5c_accuracy_latency_clean_{timestamp}.svg",
+                f"fig5d_query_latency_{timestamp}.svg",
                 f"fig5e_query_memory_{timestamp}.svg",
-                f"fig5f_nfe_tradeoff_{timestamp}.svg",
-                f"fig5_composed_v2_{timestamp}.svg",
+                f"fig5_composed_v3_{timestamp}.svg",
             }
             self.assertEqual({path.name for path in svgs}, expected)
             for path in svgs:
@@ -52,10 +61,10 @@ class Figure5PipelineTest(unittest.TestCase):
             config_path = output_root / "missing_formal_sources.yaml"
             config_text = (PACKAGE_ROOT / "configs" / "figure5_draft.yaml").read_text(encoding="utf-8")
             config_text = config_text.replace(
-                "uncertainty_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Uncertainty",
-                f"uncertainty_root: {output_root / 'missing_uncertainty'}",
+                "uq_root: Dis_SI_Process/results/ValidationV3/UQCompare",
+                f"uq_root: {output_root / 'missing_uncertainty'}",
             ).replace(
-                "cost_root: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Results/ValidationV2/Cost",
+                "cost_root: Dis_SI_Process/results/ValidationV3/CostClean",
                 f"cost_root: {output_root / 'missing_cost'}",
             )
             config_path.write_text(config_text, encoding="utf-8")
