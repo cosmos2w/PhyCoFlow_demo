@@ -145,6 +145,9 @@ def parse_args(argv: Optional[Sequence[str]] = None):
         action="store_true",
         help="Validate the resolved config and model schema without reading data.",
     )
+    # Populated by complete YAML files.  There is deliberately no fragmented
+    # CLI shorthand for scientific id/variant/reference provenance.
+    p.set_defaults(ablation=None)
     p.add_argument("--RELOAD", action="store_true",
                    help="If set, try to reload the latest matching checkpoint and continue training.")
     p.add_argument("--training-mode", dest="training_mode", type=str, default="standard",
@@ -1810,11 +1813,14 @@ def apply_pretrained_source_base_config(args, source_run_dir: Optional[Path]) ->
 
 
 def checkpoint_metadata(args, direct_cfg: Optional[DirectCoherenceConfig], source_run_dir, source_checkpoint) -> dict:
-    if str(args.training_mode) == "direct_coherence":
+    ablation = getattr(args, "ablation", None)
+    if isinstance(ablation, dict) and ablation.get("enabled") and ablation.get("id") == "A1":
+        method = "deterministic_direct_field_mse"
+    elif str(args.training_mode) == "direct_coherence":
         method = "direct_coherence_rectified_flow"
     else:
         method = "1_rectified_flow"
-    return {
+    metadata = {
         "method": method,
         "training_mode": args.training_mode,
         "initialization": args.initialization,
@@ -1827,6 +1833,11 @@ def checkpoint_metadata(args, direct_cfg: Optional[DirectCoherenceConfig], sourc
         "pretrained_use_source_base_config": bool(getattr(args, "pretrained_use_source_base_config", True)),
         "pretrained_inherited_base_config_keys": list(getattr(args, "pretrained_inherited_base_config_keys", [])),
     }
+    if isinstance(ablation, dict) and ablation.get("enabled"):
+        from model_ablation import ablation_metadata
+
+        metadata["ablation"] = ablation_metadata(vars(args))
+    return metadata
 
 
 def architecture_compatibility_hint(args, source_run_dir: Optional[Path]) -> str:
@@ -1993,6 +2004,10 @@ def main(argv: Optional[Sequence[str]] = None):
                     "data": args.data,
                     "dataset_stats_path": args.dataset_stats_path,
                     "save_dir": args.save_dir,
+                    "ablation": getattr(model, "ablation_metadata", None),
+                    "trainable_parameters": sum(
+                        parameter.numel() for parameter in model.parameters()
+                    ),
                 },
                 indent=2,
             )

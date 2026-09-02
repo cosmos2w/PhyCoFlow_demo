@@ -45,6 +45,36 @@ def build_pointcloud_model(
         resolved["model_name"] = str(model_name_or_config)
     identity = resolve_model_identity(resolved)
     backbone_name = identity.internal_backbone
+    ablation_config = resolved.get("ablation")
+    backbone_class = ConditionalPointHybridLocalGlobalRBF
+    deterministic_wrapper = None
+    metadata = None
+    if isinstance(ablation_config, Mapping) and bool(ablation_config.get("enabled", False)):
+        # Keep production imports untouched unless a research YAML explicitly
+        # enables an ablation.
+        from model_ablation import (
+            DeterministicDMFRegressor,
+            LocalSensorTokensOnlyBackbone,
+            NoLocalQueryConditioningBackbone,
+            NoSensorGlobalFeedbackBackbone,
+            ablation_metadata,
+            resolve_ablation,
+        )
+
+        normalized_ablation = resolve_ablation(resolved)
+        assert normalized_ablation is not None
+        ablation_id = str(normalized_ablation["id"]).upper()
+        if backbone_name != "GL_rbf_ENH":
+            raise ValueError("Cond_T ablations A1--A5 require backbone=GL_rbf_ENH.")
+        if ablation_id == "A2":
+            backbone_class = NoSensorGlobalFeedbackBackbone
+        elif ablation_id == "A3":
+            backbone_class = NoLocalQueryConditioningBackbone
+        elif ablation_id == "A5":
+            backbone_class = LocalSensorTokensOnlyBackbone
+        elif ablation_id == "A1":
+            deterministic_wrapper = DeterministicDMFRegressor
+        metadata = ablation_metadata(resolved)
     coord_dim = int(_get(resolved, "coord_dim", 3))
     is_cq = backbone_name == "GL_rbf_ENH_CQ"
     enhanced = backbone_name in {"GL_rbf_ENH", "GL_rbf_ENH_CQ"}
@@ -140,7 +170,7 @@ def build_pointcloud_model(
         )
     else:
         query_latent_readout = bool(_get(resolved, "query_latent_readout", enhanced))
-        backbone = ConditionalPointHybridLocalGlobalRBF(
+        backbone = backbone_class(
             **common,
             enhanced_backbone=enhanced,
             query_latent_readout=query_latent_readout,
@@ -156,6 +186,11 @@ def build_pointcloud_model(
             ),
             enhanced_head_norm=bool(_get(resolved, "enhanced_head_norm", enhanced)),
         )
-    return PointCloudFFM(
-        backbone, prior, sigma_min=float(_get(resolved, "sigma_min", 1.0e-4))
-    ).to(torch.device(device))
+    sigma_min = float(_get(resolved, "sigma_min", 1.0e-4))
+    if deterministic_wrapper is not None:
+        wrapper = deterministic_wrapper(backbone, sigma_min=sigma_min)
+    else:
+        wrapper = PointCloudFFM(backbone, prior, sigma_min=sigma_min)
+    if metadata is not None:
+        wrapper.ablation_metadata = metadata
+    return wrapper.to(torch.device(device))
