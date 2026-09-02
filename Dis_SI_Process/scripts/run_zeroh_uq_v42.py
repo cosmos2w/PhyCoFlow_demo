@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Zero-H-balanced CRPS and spread/error validation for matched Figure 5 panels a/b."""
+"""Scenario-configured CRPS and spread/error validation for matched Figure 5 panels a/b."""
 from __future__ import annotations
 
 import argparse
@@ -148,11 +148,13 @@ def main() -> int:
     if args.methods != ["all"]:
         methods = [method for method in methods if method in set(args.methods)]
     if not methods:
-        raise ValueError("No Zero-H generative method selected")
+        raise ValueError("No configured generative method selected")
+    namespace = str(config.get("run_namespace", "zeroh"))
+    run_prefix = str(config.get("run_prefix", "zeroh"))
     formal = args.job == "FORMAL" and set(methods) == set(config["scenario"]["generative_methods"])
     states = int(config["cohort"]["uq_states"] if formal else config["cohort"]["pilot_states"])
     draws = int(config["cohort"]["formal_draws"] if formal else config["cohort"]["pilot_draws"])
-    run_id = args.run_id or f"zeroh_uq_{args.job.lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_id = args.run_id or f"{run_prefix}_uq_{args.job.lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     run_dir = _resolve(config["uq_output_root"]) / run_id
     if run_dir.exists():
         raise RuntimeError(f"Refusing to overwrite {run_dir}")
@@ -161,7 +163,7 @@ def main() -> int:
 
     sensor_plan = _resolve(config["cohort"]["sensor_plan"])
     if _sha(sensor_plan) != config["cohort"]["sensor_plan_sha256"]:
-        raise RuntimeError("Zero-H sensor-plan identity mismatch")
+        raise RuntimeError("Scenario sensor-plan identity mismatch")
     cohort = _sensor_groups(sensor_plan, states, int(config["scenario"]["sensor_count"]))
     checkpoint_checks = []
     for method in methods:
@@ -169,14 +171,14 @@ def main() -> int:
         actual = _sha(path)
         checkpoint_checks.append({"method": method, "path": str(path), "expected": config["checkpoints"][method]["sha256"], "actual": actual, "pass": actual == config["checkpoints"][method]["sha256"]})
     if not all(row["pass"] for row in checkpoint_checks):
-        raise RuntimeError("Zero-H checkpoint identity mismatch")
+        raise RuntimeError("Scenario checkpoint identity mismatch")
 
     super_config = load_config()
     specs = {row["label"]: row for row in method_items(super_config)}
     recipe_key = config["scenario"]["recipe"]
     recipe_spec = super_config["recipes"][recipe_key]
     manifest = {
-        "schema_version": "figure5-zeroh-uq-v4.2-1",
+        "schema_version": str(config.get("uq_schema_version", "figure5-zeroh-uq-v4.2-1")),
         "status": "running",
         "formal": formal,
         "run_id": run_id,
@@ -185,7 +187,7 @@ def main() -> int:
         "methods": methods,
         "state_count": states,
         "draws_per_state": draws,
-        "seed_schedule": "stable_seed(20260831,'zeroh',case_id,time_index,draw_id)",
+        "seed_schedule": f"stable_seed({int(config['bootstrap']['seed'])},'{namespace}',case_id,time_index,draw_id)",
         "bootstrap": config["bootstrap"],
         "checkpoint_checks": checkpoint_checks,
         "environment": {"python": sys.version, "platform": platform.platform(), "torch": torch.__version__, "cuda": torch.version.cuda, "device": args.device, "gpu": torch.cuda.get_device_name(torch.device(args.device))},
@@ -220,7 +222,7 @@ def main() -> int:
                 seeds = []
                 with torch.inference_mode():
                     for draw in range(draws):
-                        seed = stable_seed(int(config["bootstrap"]["seed"]), "zeroh", int(metadata["case_id"]), int(metadata["time_index"]), draw)
+                        seed = stable_seed(int(config["bootstrap"]["seed"]), namespace, int(metadata["case_id"]), int(metadata["time_index"]), draw)
                         seeds.append(seed)
                         torch.manual_seed(seed)
                         np.random.seed(seed & 0xFFFFFFFF)
@@ -279,9 +281,9 @@ def main() -> int:
         crps = np.asarray([row["normalized_crps"] for row in rows], dtype=float)
         spread = np.asarray([row["normalized_spread"] for row in rows], dtype=float)
         error = np.asarray([row["ensemble_mean_relative_l2"] for row in rows], dtype=float)
-        crps_low, crps_high = _bootstrap(crps, config["bootstrap"], f"zeroh|crps|{method}", lambda idx: float(np.mean(crps[idx])))
+        crps_low, crps_high = _bootstrap(crps, config["bootstrap"], f"{namespace}|crps|{method}", lambda idx: float(np.mean(crps[idx])))
         rho = float(spearmanr(spread, error).statistic)
-        rho_low, rho_high = _bootstrap(spread, config["bootstrap"], f"zeroh|rho|{method}", lambda idx: float(spearmanr(spread[idx], error[idx]).statistic))
+        rho_low, rho_high = _bootstrap(spread, config["bootstrap"], f"{namespace}|rho|{method}", lambda idx: float(spearmanr(spread[idx], error[idx]).statistic))
         crps_summary.append({"method": method, "state_count": states, "mean_normalized_crps": float(np.mean(crps)), "crps_ci_low": crps_low, "crps_ci_high": crps_high, "field": "density", "field_macro_weight": 1.0})
         spread_summary.append({"method": method, "state_count": states, "spearman_rho": rho, "spearman_ci_low": rho_low, "spearman_ci_high": rho_high, "spread_definition": "normalized_spatial_rms_ensemble_std", "error_definition": "ensemble_mean_physical_relative_l2", "field_macro_weight": 1.0})
     _write_csv(run_dir / "crps_summary.csv", crps_summary)

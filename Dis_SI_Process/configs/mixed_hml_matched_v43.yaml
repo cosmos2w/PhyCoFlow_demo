@@ -1,0 +1,99 @@
+schema_version: figure5-mixed-hml-matched-v4.3
+run_namespace: mixed_hml
+run_prefix: mixed_hml
+uq_schema_version: figure5-mixed-hml-uq-v4.3-1
+cost_schema_version: figure5-mixed-hml-cost-v4.3-1
+
+scenario:
+  recipe: 3_Mixed_HML
+  label: Mixed-HML
+  field: density
+  sensor_count: 256
+  native_query_count: 16384
+  checkpoint_kind: best
+  generative_methods: [DMF-Gen, FFM-Perceiver]
+  all_methods: [DMF-Gen, FFM-Perceiver, MLP-RBF, Senseiver]
+  model_keys:
+    DMF-Gen: DMFGen
+    FFM-Perceiver: FFM_Perceiver
+    MLP-RBF: MLP_RBF
+    Senseiver: Senseiver
+  consistency_modes:
+    DMF-Gen: default_hard
+    FFM-Perceiver: endpoint_smooth
+  n_steps: 2
+  ode_solver: euler
+  training_resolutions: [L, M, H]
+  training_resolution_weights: {L: 0.3333333333333333, M: 0.3333333333333333, H: 0.3333333333333333}
+
+cohort:
+  sensor_plan: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/SensorPlans/SensorPlan_formal_20260712.csv
+  sensor_plan_sha256: 05fdd36e16ff23d32c199e46d9a355c95f6fa4ab3f9814b831e46266206c6a9c
+  accuracy_per_snapshot: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/QuestionA_DataBenefit/QuestionA_per_snapshot_2026-08-06_11-24.csv
+  accuracy_summary: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Results/QuestionA_DataBenefit/QuestionA_summary_2026-08-06_11-24.csv
+  uq_states: 200
+  accuracy_states: 300
+  pilot_states: 12
+  pilot_draws: 8
+  formal_draws: 64
+
+checkpoints:
+  DMF-Gen:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/DMF_Gen/3_Mixed_HML/best.pt
+    sha256: 90cd470b29886ea7946655d1257b18278d1cdc2888d7b890d3195a53c0b27177
+  FFM-Perceiver:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/FFM_Perceiver/3_Mixed_HML/best.pt
+    sha256: 46b2f05673f19a4be86fbdb5a7edea831d53dde6e5ad03806b3c592239866e8a
+  MLP-RBF:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/MLP_RBF/3_Mixed_HML/best.pt
+    sha256: 4293451b84cd517ee47a471df9db32c23bc5de3f6c492c2dfe7f9b828216fdef
+  Senseiver:
+    path: 1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/Senseiver/3_Mixed_HML/best.pt
+    sha256: b8c7dddd97beab6e83bbc816ab064757c76b0c94cc2d43f3f828eb05570d202c
+
+bootstrap:
+  replicates: 2000
+  confidence_level: 0.95
+  seed: 20260831
+  unit: unique_case_time_pair
+
+uq_output_root: Dis_SI_Process/results/ValidationV43/MixedHML/UQ
+cost_output_root: Dis_SI_Process/results/ValidationV43/MixedHML/Cost
+
+formal_runs:
+  uq_run_id: mixed_hml_uq_formal_v43
+  cost_run_id: mixed_hml_cost_formal_v43
+
+figure:
+  width_mm: 183
+  height_mm: 116
+  output_stems:
+    a: fig5a_mixed_hml_normalized_crps_v43
+    b: fig5b_mixed_hml_spread_error_v43
+    c: fig5c_mixed_hml_accuracy_latency_v43
+    d: fig5d_mixed_hml_accuracy_training_update_v43
+    composed: fig5_mixed_hml_matched_v43
+  layout:
+    left: 0.115
+    right: 0.985
+    bottom: 0.17
+    top: 0.955
+    wspace: 0.14
+    hspace: 0.57
+
+paper_contract:
+  generative_method_order: [DMF-Gen, FFM-Perceiver]
+  method_order: [DMF-Gen, FFM-Perceiver, MLP-RBF, Senseiver]
+
+style:
+  font_family: [Arial, DejaVu Sans, Liberation Sans]
+  method_colors:
+    DMF-Gen: "#E63946"
+    FFM-Perceiver: "#457B9D"
+    MLP-RBF: "#2A9D8F"
+    Senseiver: "#8D99AE"
+  method_markers:
+    DMF-Gen: o
+    FFM-Perceiver: D
+    MLP-RBF: P
+    Senseiver: h

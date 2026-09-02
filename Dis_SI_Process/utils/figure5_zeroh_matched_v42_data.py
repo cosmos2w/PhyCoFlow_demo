@@ -37,13 +37,14 @@ def _load_run(directory: Path, schema: str, tables: list[str]) -> dict[str, Any]
 
 def _bootstrap_samples(states: pd.DataFrame, summary: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
     spec = config["bootstrap"]
+    namespace = str(config.get("run_namespace", "zeroh"))
     rows: list[dict[str, Any]] = []
     alpha = (1.0 - float(spec["confidence_level"])) / 2.0
     for method in config["scenario"]["generative_methods"]:
         group = states.loc[states["method"].astype(str).eq(method)].sort_values("state")
         spread = group["normalized_spread"].to_numpy(dtype=float)
         error = group["ensemble_mean_relative_l2"].to_numpy(dtype=float)
-        rng = np.random.default_rng(_seed(int(spec["seed"]), f"zeroh|rho|{method}"))
+        rng = np.random.default_rng(_seed(int(spec["seed"]), f"{namespace}|rho|{method}"))
         values = np.empty(int(spec["replicates"]), dtype=float)
         for replicate in range(len(values)):
             selected = rng.integers(0, len(group), size=len(group))
@@ -59,8 +60,8 @@ def _bootstrap_samples(states: pd.DataFrame, summary: pd.DataFrame, config: dict
 def load_zeroh_matched_v42(config: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     uq_dir = _resolve(repo_root, config["uq_output_root"]) / config["formal_runs"]["uq_run_id"]
     cost_dir = _resolve(repo_root, config["cost_output_root"]) / config["formal_runs"]["cost_run_id"]
-    uq = _load_run(uq_dir, "figure5-zeroh-uq-v4.2-1", ["per_state_method.csv", "crps_summary.csv", "spread_error_summary.csv"])
-    cost = _load_run(cost_dir, "figure5-zeroh-cost-v4.2-1", ["native_cost_summary.csv", "training_update_summary.csv"])
+    uq = _load_run(uq_dir, str(config.get("uq_schema_version", "figure5-zeroh-uq-v4.2-1")), ["per_state_method.csv", "crps_summary.csv", "spread_error_summary.csv"])
+    cost = _load_run(cost_dir, str(config.get("cost_schema_version", "figure5-zeroh-cost-v4.2-1")), ["native_cost_summary.csv", "training_update_summary.csv"])
     states = pd.read_csv(uq_dir / "per_state_method.csv")
     crps = pd.read_csv(uq_dir / "crps_summary.csv")
     spread = pd.read_csv(uq_dir / "spread_error_summary.csv")
@@ -68,8 +69,8 @@ def load_zeroh_matched_v42(config: dict[str, Any], repo_root: Path) -> dict[str,
     training = pd.read_csv(cost_dir / "training_update_summary.csv")
     if list(crps["method"].astype(str)) != config["scenario"]["generative_methods"] or list(spread["method"].astype(str)) != config["scenario"]["generative_methods"]:
         raise ValueError("Zero-H UQ method order differs from the two adopted generative methods")
-    if len(states) != int(config["cohort"]["uq_states"]) * 2 or states["case_id"].nunique() != int(config["cohort"]["uq_states"]):
-        raise ValueError("Zero-H UQ cohort is not the paired 200 unique-case cohort")
+    if len(states) != int(config["cohort"]["uq_states"]) * len(config["scenario"]["generative_methods"]) or states["case_id"].nunique() != int(config["cohort"]["uq_states"]):
+        raise ValueError("Scenario UQ cohort is not the configured paired unique-case cohort")
     if list(native["method"].astype(str)) != config["scenario"]["all_methods"] or list(training["method"].astype(str)) != config["scenario"]["all_methods"]:
         raise ValueError("Zero-H cost method order differs from the four adopted checkpoints")
     if set(native["status"].astype(str)) != {"ok"} or set(training["status"].astype(str)) != {"ok"}:
@@ -90,7 +91,10 @@ def load_zeroh_matched_v42(config: dict[str, Any], repo_root: Path) -> dict[str,
         "uq_spread": spread,
         "cost_native": native,
         "training_cost": training,
-        "training_metric_label": "Canonical L/M training update time (ms/update)",
+        "training_metric_label": f"Canonical {'/'.join(config['scenario'].get('training_resolutions', ['L', 'M']))} training update time (ms/update)",
         "uq": uq,
         "cost": cost,
     }
+
+
+load_superres_matched = load_zeroh_matched_v42

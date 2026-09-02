@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Clean Zero-H native inference and canonical mixed-resolution update replay."""
+"""Clean scenario-configured native inference and canonical mixed-resolution update replay."""
 from __future__ import annotations
 
 import argparse
@@ -215,11 +215,11 @@ def _resolution_batch(loaded: Any, resolution: str, batch_size: int) -> dict[str
     return batch
 
 
-def _prepare_training(loaded: Any, method: str) -> tuple[dict[str, Callable[[], float]], int]:
+def _prepare_training(loaded: Any, method: str, resolutions: tuple[str, ...]) -> tuple[dict[str, Callable[[], float]], int]:
     if loaded.family == "pointcloud_ffm":
         batch_size = int(loaded.config["batch_size"])
         optimizer = _optimizer_for_pointcloud(loaded)
-        batches = {resolution: _resolution_batch(loaded, resolution, batch_size) for resolution in ("L", "M")}
+        batches = {resolution: _resolution_batch(loaded, resolution, batch_size) for resolution in resolutions}
         def make(batch):
             return lambda: _quiet(pointcloud_train, lambda: pointcloud_train.run_epoch(
                 model=loaded.model, loader=[batch], optimizer=optimizer, device=loaded.device,
@@ -233,7 +233,7 @@ def _prepare_training(loaded: Any, method: str) -> tuple[dict[str, Callable[[], 
     adapter = baseline_lib.get_baseline_adapter(str(loaded.config["baseline_model"]).lower())
     stage_cfg = baseline_lib.resolve_stage_config(bundle.config)
     batch_size = int(stage_cfg["training"]["batch_size"])
-    batches = {resolution: _resolution_batch(loaded, resolution, batch_size) for resolution in ("L", "M")}
+    batches = {resolution: _resolution_batch(loaded, resolution, batch_size) for resolution in resolutions}
     def make(batch):
         return lambda: _quiet(baseline_lib, lambda: adapter.run_epoch(bundle, [batch], training=True, epoch=0))
     return {resolution: make(batch) for resolution, batch in batches.items()}, batch_size
@@ -252,7 +252,8 @@ def _time_update(call: Callable[[], float], device: torch.device) -> tuple[float
 def main() -> int:
     args = _args(); config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     formal = args.job == "FORMAL"
-    run_id = args.run_id or f"zeroh_cost_{args.job.lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_prefix = str(config.get("run_prefix", "zeroh"))
+    run_id = args.run_id or f"{run_prefix}_cost_{args.job.lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     run_dir = _resolve(config["cost_output_root"]) / run_id
     if run_dir.exists(): raise RuntimeError(f"Refusing to overwrite {run_dir}")
     _assert_clean(args.device, allow_current=False); run_dir.mkdir(parents=True)
@@ -264,13 +265,18 @@ def main() -> int:
         if _sha(_resolve(item["path"])) != item["sha256"]: raise RuntimeError(f"Checkpoint identity mismatch: {method}")
     super_cfg = load_config(); specs = {row["label"]: row for row in method_items(super_cfg)}
     recipe, recipe_spec = config["scenario"]["recipe"], super_cfg["recipes"][config["scenario"]["recipe"]]
+    resolutions = tuple(str(value) for value in config["scenario"].get("training_resolutions", ["L", "M"]))
+    weights = {str(key): float(value) for key, value in config["scenario"].get("training_resolution_weights", {resolution: 1.0 / len(resolutions) for resolution in resolutions}).items()}
+    if not resolutions or set(weights) != set(resolutions) or any(value <= 0 for value in weights.values()) or not math.isclose(sum(weights.values()), 1.0, rel_tol=0.0, abs_tol=1.0e-12):
+        raise ValueError("Training resolutions require positive weights summing to one")
+    resolution_weights = ";".join(f"{resolution}={weights[resolution]:.12g}" for resolution in resolutions)
     manifest = {
-        "schema_version": "figure5-zeroh-cost-v4.2-1", "status": "running", "formal": formal, "run_id": run_id,
+        "schema_version": str(config.get("cost_schema_version", "figure5-zeroh-cost-v4.2-1")), "status": "running", "formal": formal, "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(), "scenario": config["scenario"],
         "environment": {"python": sys.version, "platform": platform.platform(), "torch": torch.__version__, "cuda": torch.version.cuda, "device": args.device, "gpu": torch.cuda.get_device_name(torch.device(args.device))},
         "protocol": {
             "inference": {"warmups": 20 if formal else 2, "minimum_repeats": 30 if formal else 6, "minimum_seconds": 10.0 if formal else 0.0, "boundary": "preloaded warm model core; includes stochastic source, conditioning, model evaluations, observation consistency, device output"},
-            "training": {"warmups": 20 if formal else 4, "measured_updates": 100 if formal else 12, "resolution_schedule": "strict L/M alternation for the adopted 1:1:0 recipe", "promoted_metric": "equal-weight mean of L and M median synchronized wall ms/update", "boundary": "preloaded batch; conditioning, query selection, forward, loss, backward, gradient clipping, optimizer step"},
+            "training": {"warmups": 20 if formal else 4, "measured_updates": 100 if formal else 12, "resolution_schedule": f"strict {'/'.join(resolutions)} cycle for the adopted recipe", "promoted_metric": f"configured-weight mean of {'/'.join(resolutions)} median synchronized wall ms/update", "resolution_weights": weights, "boundary": "preloaded batch; conditioning, query selection, forward, loss, backward, gradient clipping, optimizer step"},
             "excluded": ["model_loading", "dataset_IO", "dataloader_workers", "host_transfer", "metrics", "logging", "checkpointing"],
         },
     }
@@ -298,24 +304,24 @@ def main() -> int:
         loaded = load_model(specs[method], recipe, recipe_spec, checkpoint="best", split="train", eval_resolution="H", device=args.device)
         try:
             # The post-processing loader forces H-resolution output even for a
-            # train split. Restore the checkpoint's native mixed L/M training
-            # entries before selecting the two canonical replay batches.
+            # train split. Restore the checkpoint's native mixed-resolution
+            # entries before selecting the canonical replay batches.
             loaded.dataset.force_resolution = None
             loaded.dataset.output_resolution = None
             loaded.dataset.num_points = None
             loaded.dataset.coords = None
             loaded.dataset.coords_raw = None
             loaded.dataset.requires_grouped_batches = True
-            calls, batch_size = _prepare_training(loaded, method)
-            for index in range(train_warmups): _time_update(calls[("L", "M")[index % 2]], loaded.device)
-            by_resolution = {"L": [], "M": []}
+            calls, batch_size = _prepare_training(loaded, method, resolutions)
+            for index in range(train_warmups): _time_update(calls[resolutions[index % len(resolutions)]], loaded.device)
+            by_resolution = {resolution: [] for resolution in resolutions}
             for index in range(train_repeats):
-                resolution = ("L", "M")[index % 2]
+                resolution = resolutions[index % len(resolutions)]
                 loss, elapsed, peak = _time_update(calls[resolution], loaded.device)
                 by_resolution[resolution].append(elapsed)
                 training_rows.append({"method": method, "update": index, "resolution": resolution, "elapsed_ms": elapsed, "loss": loss, "peak_allocated_mib": peak})
             summaries = {resolution: np.quantile(values, [0.25, 0.5, 0.75]) for resolution, values in by_resolution.items()}
-            mixed = np.mean(np.stack([summaries["L"], summaries["M"]]), axis=0)
+            mixed = np.sum(np.stack([weights[resolution] * summaries[resolution] for resolution in resolutions]), axis=0)
             blocks = 5 if formal else 2
             stability = {}
             for resolution, values in by_resolution.items():
@@ -323,7 +329,11 @@ def main() -> int:
                 medians = [float(np.median(chunk)) for chunk in chunks]
                 split = len(medians) // 2
                 stability[resolution] = abs(statistics.median(medians[:split]) - statistics.median(medians[split:])) / max(float(summaries[resolution][1]), 1.0e-12)
-            training_summary.append({"method": method, "status": "ok" if max(stability.values()) <= 0.25 else "unstable", "cost_value": mixed[1], "cost_low": mixed[0], "cost_high": mixed[2], "training_update_time_ms": mixed[1], "L_median_ms": summaries["L"][1], "M_median_ms": summaries["M"][1], "L_stability_fraction": stability["L"], "M_stability_fraction": stability["M"], "batch_size": batch_size, "resolution_weights": "L=0.5;M=0.5;H=0", **accuracy[method], "checkpoint_path": str(loaded.checkpoint_path.relative_to(REPO_ROOT)), "checkpoint_sha256": config["checkpoints"][method]["sha256"]})
+            resolution_details = {}
+            for resolution in resolutions:
+                resolution_details[f"{resolution}_median_ms"] = summaries[resolution][1]
+                resolution_details[f"{resolution}_stability_fraction"] = stability[resolution]
+            training_summary.append({"method": method, "status": "ok" if max(stability.values()) <= 0.25 else "unstable", "cost_value": mixed[1], "cost_low": mixed[0], "cost_high": mixed[2], "training_update_time_ms": mixed[1], **resolution_details, "batch_size": batch_size, "resolution_weights": resolution_weights, **accuracy[method], "checkpoint_path": str(loaded.checkpoint_path.relative_to(REPO_ROOT)), "checkpoint_sha256": config["checkpoints"][method]["sha256"]})
         except torch.cuda.OutOfMemoryError as exc:
             training_summary.append({"method": method, "status": "unavailable", "unavailable_reason": f"canonical batch OOM: {exc}", **accuracy[method], "checkpoint_path": config["checkpoints"][method]["path"], "checkpoint_sha256": config["checkpoints"][method]["sha256"]})
             torch.cuda.empty_cache()
@@ -336,11 +346,11 @@ def main() -> int:
     qa = {
         "status": "pass", "formal": formal,
         "all_four_inference_methods": len(inference_summary) == 4 and all(row["status"] == "ok" for row in inference_summary),
-        "native_problem_exact": all(row["N"] == 16384 and row["sensor_count"] == 256 for row in inference_summary),
+        "native_problem_exact": all(row["N"] == int(config["scenario"]["native_query_count"]) and row["sensor_count"] == int(config["scenario"]["sensor_count"]) for row in inference_summary),
         "inference_quartiles_ordered": all(row["cost_low"] <= row["cost_value"] <= row["cost_high"] for row in inference_summary),
         "all_four_training_attempted": len(training_summary) == 4,
         "training_status_explicit": all(row["status"] in {"ok", "unavailable"} for row in training_summary),
-        "training_stability_pass": all(row["status"] != "ok" or max(row["L_stability_fraction"], row["M_stability_fraction"]) <= 0.25 for row in training_summary),
+        "training_stability_pass": all(row["status"] != "ok" or max(float(row[f"{resolution}_stability_fraction"]) for resolution in resolutions) <= 0.25 for row in training_summary),
         "frozen_accuracy_n_exact": all(row["error_n"] == 300 for row in inference_summary),
         "checkpoint_identity_pass": True, "gpu_clean_before": True, "gpu_clean_after": True,
         "no_cond_t_cost_reuse": True, "no_training_performed_beyond_ephemeral_replay": True,
