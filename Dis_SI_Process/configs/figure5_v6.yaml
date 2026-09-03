@@ -1,0 +1,79 @@
+schema_version: figure5-v6-1
+timestamp: '20260903_1018'
+
+figure:
+  width_mm: 183
+  composed_height_mm: 128
+  standalone_top_width_mm: 89
+  standalone_top_height_mm: 67
+  standalone_d_width_mm: 183
+  standalone_d_height_mm: 62
+  formats: [svg]
+  layout: 3_plus_1
+
+paper_contract:
+  dataset: turbulent_combustion
+  task: missing_channel_reconstruction
+  condition: Cond_T
+  sensor_count: 256
+  native_query_count: 40300
+  unobserved_fields: [Y_CH4, Y_CO, U1, p]
+  generative_method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT]
+  scorecard_method_order: [DMF-Gen, Senseiver, SiT, Geo-FNO, FFM-Perceiver, FFM-FNO, MLP-RBF, Latent FM]
+  panel_titles:
+    a: Probabilistic reconstruction
+    b: Uncertainty tracks difficult states
+    c: Uncertainty supports selective reconstruction
+    d: Accuracy and computational footprint
+  scorecard_columns: [Reconstruction error, Training time, Training memory, Inference time, Inference memory]
+
+sources:
+  v5_display: Dis_SI_Process/results/derived/20260831_1409/figure5_v5_source.csv
+  v5_manifest: Dis_SI_Process/results/derived/20260831_1409/build_manifest.json
+  v5_qa: Dis_SI_Process/results/derived/20260831_1409/qa.json
+  v51_selective_risk: Dis_SI_Process/results/ValidationV51/PanelC/panel_c_exploration_20260902_1129/selective_risk.csv
+  v51_panel_c_manifest: Dis_SI_Process/results/ValidationV51/PanelC/panel_c_exploration_20260902_1129/manifest.json
+  v51_panel_c_qa: Dis_SI_Process/results/ValidationV51/PanelC/panel_c_exploration_20260902_1129/qa.json
+  v51_scorecard: Dis_SI_Process/results/ValidationV51/Derived/20260902_1129/panel_d_plot_source_common_b32.csv
+  v51_scorecard_stages: Dis_SI_Process/results/ValidationV51/Derived/20260902_1129/panel_d_stage_source_common_b32.csv
+  v51_scorecard_manifest: Dis_SI_Process/results/ValidationV51/Derived/20260902_1129/panel_d_manifest_common_b32.json
+  v51_scorecard_qa: Dis_SI_Process/results/ValidationV51/Derived/20260902_1129/panel_d_qa_common_b32.json
+  inference_memory: Dis_SI_Process/results/ValidationV51/InferenceMemory/inference_memory_native_v51_20260903_094021/inference_memory_summary.csv
+  inference_memory_manifest: Dis_SI_Process/results/ValidationV51/InferenceMemory/inference_memory_native_v51_20260903_094021/manifest.json
+  inference_memory_qa: Dis_SI_Process/results/ValidationV51/InferenceMemory/inference_memory_native_v51_20260903_094021/qa.json
+
+protocol:
+  uq_states: 200
+  uq_draws: 64
+  bootstrap_replicates: 2000
+  bootstrap_block_length: 25
+  selective_coverages: [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00]
+  selective_kind: normalized
+  training_batch_size: 32
+  training_memory: peak_allocated
+  latent_training_display: per_column_maximum_nonconcurrent_stage
+  inference_batch_size: 1
+  inference_context: torch.inference_mode
+  inference_memory_open: model_state_mib
+  inference_memory_filled: inference_peak_allocated_mib
+
+style:
+  font_family: [Arial, DejaVu Sans, Liberation Sans]
+  method_colors:
+    DMF-Gen: '#E63946'
+    FFM-FNO: '#1D3557'
+    FFM-Perceiver: '#457B9D'
+    Latent FM: '#6A4C93'
+    SiT: '#A28BC4'
+    MLP-RBF: '#2A9D8F'
+    Geo-FNO: '#F4A261'
+    Senseiver: '#8D99AE'
+  method_markers:
+    DMF-Gen: o
+    FFM-FNO: s
+    FFM-Perceiver: D
+    Latent FM: ^
+    SiT: v
+    MLP-RBF: P
+    Geo-FNO: X
+    Senseiver: h

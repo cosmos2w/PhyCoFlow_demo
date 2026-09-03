@@ -1,0 +1,68 @@
+{
+  "schema_version": "figure5-v6-qa-1",
+  "status": "pass",
+  "backend": "Python/Matplotlib (fig environment)",
+  "svg_checks": {
+    "a": {
+      "parseable_svg": true,
+      "editable_text": true,
+      "viewbox_present": true,
+      "required_text_present": true,
+      "bytes": 28137
+    },
+    "b": {
+      "parseable_svg": true,
+      "editable_text": true,
+      "viewbox_present": true,
+      "required_text_present": true,
+      "bytes": 30328
+    },
+    "c": {
+      "parseable_svg": true,
+      "editable_text": true,
+      "viewbox_present": true,
+      "required_text_present": true,
+      "bytes": 26912
+    },
+    "d": {
+      "parseable_svg": true,
+      "editable_text": true,
+      "viewbox_present": true,
+      "required_text_present": true,
+      "bytes": 79342
+    },
+    "composed": {
+      "parseable_svg": true,
+      "editable_text": true,
+      "viewbox_present": true,
+      "required_text_present": true,
+      "bytes": 153790
+    }
+  },
+  "data_checks": {
+    "panel_a_five_methods_200_states": true,
+    "panel_b_five_methods_2000_bootstraps": true,
+    "panel_c_c1b_only": true,
+    "panel_c_linear_scale_contract": true,
+    "panel_c_all_end_at_one": true,
+    "panel_d_eight_accuracy_sorted_methods": true,
+    "panel_d_column_order_exact": true,
+    "panel_d_no_stage_count": true,
+    "panel_d_inference_peak_not_below_model_state": true,
+    "panel_d_latent_per_column_maxima": true,
+    "no_broad_validation_or_inference_rerun": true,
+    "composed_width_183_mm": true,
+    "composed_height_128_mm": true
+  },
+  "visual_qa": {
+    "status": "pass",
+    "preview_directory": null,
+    "review": "Print-size Python previews checked for title fit, legend/annotation occlusion, row and plot-area alignment, readable labels, and inference-memory dumbbell density."
+  },
+  "regression_tests": {
+    "status": "pass",
+    "tests": 10,
+    "command": "/home/wanglz/miniconda3/envs/phycoflow_env/bin/python -m pytest -q Dis_SI_Process/tests/test_figure5_v5.py Dis_SI_Process/tests/test_figure5_v51_panel_d.py Dis_SI_Process/tests/test_inference_memory_native_v51.py",
+    "note": "The fig environment performed all figure rendering and preview export; the repository test environment supplied pytest for non-scientific regression checks."
+  }
+}

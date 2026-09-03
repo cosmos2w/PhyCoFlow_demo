@@ -1,0 +1,74 @@
+{
+  "schema_version": "figure5-v6-build-1",
+  "status": "complete",
+  "timestamp": "20260903_1018",
+  "git_head": "f0aa4e7ca76bf15af2972fa434f295678ef1bfca",
+  "git_branch": "paper/postprocessing-multifield-superresolution",
+  "config": "Dis_SI_Process/configs/figure5_v6.yaml",
+  "config_sha256": "18a8cee9d6feed672c9c48c2c79fc7278a33decb6dadba7165116259ab303e50",
+  "backend": "Python/Matplotlib in conda environment fig",
+  "no_new_scientific_calculation": true,
+  "source_reuse": [
+    {
+      "panel": "a,b",
+      "role": "panels a/b accepted plotted samples and summaries",
+      "source_path": "Dis_SI_Process/results/derived/20260831_1409/figure5_v5_source.csv",
+      "sha256": "8753eec426d6fbfc83ff5f3a469d05b8b2596dab114f9c28aaa192b973ce1615",
+      "rows": 11074,
+      "action": "reused_in_place"
+    },
+    {
+      "panel": "c",
+      "role": "panel c accepted C1b curves and intervals",
+      "source_path": "Dis_SI_Process/results/ValidationV51/PanelC/panel_c_exploration_20260902_1129/selective_risk.csv",
+      "sha256": "6144766d3b9c89027971b310c8a1ba982c1af06ac534826bac4616cacb3b3679",
+      "rows": 90,
+      "action": "reused_in_place"
+    },
+    {
+      "panel": "d",
+      "role": "panel d accuracy and inference-time summaries",
+      "source_path": "Dis_SI_Process/results/ValidationV51/Derived/20260902_1129/panel_d_plot_source_common_b32.csv",
+      "sha256": "3c966c0f75a0b5c927267aceb77bb3625e006af086aaaac69b96df52984cd6e8",
+      "rows": 8,
+      "action": "reused_in_place"
+    },
+    {
+      "panel": "d",
+      "role": "panel d common-B32 training time and memory",
+      "source_path": "Dis_SI_Process/results/ValidationV51/Derived/20260902_1129/panel_d_stage_source_common_b32.csv",
+      "sha256": "79d3491f9268ba668a2a8a68535aade89e2df7e73f4e6d716cfae71f34407ac4",
+      "rows": 9,
+      "action": "reused_in_place"
+    },
+    {
+      "panel": "d",
+      "role": "panel d dedicated inference-memory dumbbells",
+      "source_path": "Dis_SI_Process/results/ValidationV51/InferenceMemory/inference_memory_native_v51_20260903_094021/inference_memory_summary.csv",
+      "sha256": "60af88d21ca33e3585ba9e8b142de1f42f267169a64a56b018c5a2b84529c6b2",
+      "rows": 8,
+      "action": "reused_in_place"
+    }
+  ],
+  "derived_tables": [
+    "Dis_SI_Process/results/derived/20260903_1018/figure5_v6_source_index.csv",
+    "Dis_SI_Process/results/derived/20260903_1018/figure5_v6_panel_d_source.csv"
+  ],
+  "figures": [
+    "Dis_SI_Process/figures/generated/20260903_1018/fig5a_probabilistic_reconstruction_20260903_1018.svg",
+    "Dis_SI_Process/figures/generated/20260903_1018/fig5b_uncertainty_tracks_difficult_states_20260903_1018.svg",
+    "Dis_SI_Process/figures/generated/20260903_1018/fig5c_selective_reconstruction_20260903_1018.svg",
+    "Dis_SI_Process/figures/generated/20260903_1018/fig5d_accuracy_computational_footprint_20260903_1018.svg",
+    "Dis_SI_Process/figures/generated/20260903_1018/fig5_composed_v6_20260903_1018.svg"
+  ],
+  "companions": [
+    "Dis_SI_Process/docs/generated/20260903_1018/fig5a_probabilistic_reconstruction_20260903_1018.md",
+    "Dis_SI_Process/docs/generated/20260903_1018/fig5b_uncertainty_tracks_difficult_states_20260903_1018.md",
+    "Dis_SI_Process/docs/generated/20260903_1018/fig5c_selective_reconstruction_20260903_1018.md",
+    "Dis_SI_Process/docs/generated/20260903_1018/fig5d_accuracy_computational_footprint_20260903_1018.md",
+    "Dis_SI_Process/docs/generated/20260903_1018/fig5_composed_v6_20260903_1018.md"
+  ],
+  "qa": "Dis_SI_Process/results/derived/20260903_1018/qa.json",
+  "regression_tests": "10 passed in 3.64 s",
+  "temporary_previews_retained": false
+}
