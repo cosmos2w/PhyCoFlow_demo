@@ -36,6 +36,10 @@
 !/Dis_SI_Process/**/*.md
 !/Dis_SI_Process/.gitignore
 
+# Figure 5 V5.1 exploration narratives are local review artifacts. Keep the
+# scripts/configuration publishable without staging the generated Markdown set.
+/Dis_SI_Process/docs/exploration/figure5_v51/**
+
 # Figure 5 workflow: keep code/config/contracts/docs, not generated products.
 /Dis_SI_Process/results/**
 /Dis_SI_Process/figures/generated/**

@@ -1,0 +1,53 @@
+schema_version: figure5-v51-native-inference-memory-1
+
+condition: Cond_T
+split: test
+state_index: 0
+sensor_count: 256
+query_count: 40300
+batch_size: 1
+dtype: float32
+device: cuda:2
+
+validation_plan: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_ValidationPlans/validation_v1.yaml
+
+protocol:
+  inference_context: torch.inference_mode
+  warmups: 5
+  measured_repeats: 10
+  minimum_free_memory_gib: 6
+  allow_shared_gpu: true
+  timing_claim: false
+  memory_counter: torch.cuda.max_memory_allocated
+  model_state_definition: unique parameter and persistent-buffer storage used by the inference modules
+  ready_state_definition: process allocation after model load, training-state removal, fixed input preparation and persistent geometry-cache preparation
+  workspace_definition: peak allocated during one inference minus ready-state allocation immediately before that inference
+  total_peak_definition: process-local peak allocated during one inference
+
+execution:
+  DMF-Gen:
+    mode: cached_streamed
+    cache_level: static_features
+    query_chunk_size: 8192
+  FFM-FNO: {mode: legacy_full, cache_level: none, query_chunk_size: 8192}
+  FFM-Perceiver: {mode: legacy_full, cache_level: none, query_chunk_size: 8192}
+  Latent FM: {mode: native_baseline_adapter, cache_level: none, query_chunk_size: 8192}
+  SiT: {mode: native_baseline_adapter, cache_level: none, query_chunk_size: 8192}
+  MLP-RBF: {mode: native_baseline_adapter, cache_level: none, query_chunk_size: 8192}
+  Geo-FNO: {mode: native_baseline_adapter, cache_level: none, query_chunk_size: 8192}
+  Senseiver: {mode: native_baseline_adapter_unstreamed, cache_level: none, query_chunk_size: 8192}
+
+methods:
+  - DMF-Gen
+  - FFM-FNO
+  - FFM-Perceiver
+  - Latent FM
+  - SiT
+  - MLP-RBF
+  - Geo-FNO
+  - Senseiver
+
+output:
+  root: Dis_SI_Process/results/ValidationV51/InferenceMemory
+  run_id: inference_memory_native_v51
+

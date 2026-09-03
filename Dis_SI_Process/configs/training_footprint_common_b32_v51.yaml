@@ -1,0 +1,195 @@
+schema_version: figure5-training-footprint-common-b32-v51
+
+# This is a measurement contract, not a training launch configuration.  The
+# runner refuses to execute unless --execute and --confirm-clean-gpu are both
+# supplied and the selected CUDA device passes the clean-GPU gate.
+condition: Cond_T
+# Training timing is measured on a held-in-training, fixed input batch.  The
+# batch is never used for validation or accuracy claims.
+split: train
+batch_size: 32
+sensor_count: 256
+query_target_count: 4096
+native_grid_target_count: 40300
+num_x: 403
+num_y: 100
+dtype: float32
+device: cuda:2
+state_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+                30, 31]
+
+sensor_plan:
+  path: null
+  sha256: null
+  condition: Cond_T
+  rule: deterministic truth-only point-index sampling without replacement from
+    the fixed mesh using stable_seed(sensor_seed_base, condition, state)
+  selection_seed_base: 20260902
+  observed_field: T
+  field_index: 2
+
+fixed_batch:
+  state_rule: first 32 local train-split states (indices frozen above)
+  query_rule: for each state, include its 256 M256 sensor indices and draw the
+    remaining 3840 points without replacement from the complement using the
+    declared stable seed; sort the resulting 4096 indices
+  query_seed_base: 20260903
+  same_batch_across_methods: true
+  host_to_device_transfer_inside_timing: false
+  data_io_inside_timing: false
+
+protocol:
+  warmup_updates: 20
+  measured_blocks: 10
+  updates_per_block: 10
+  measured_updates: 100
+  timing_boundary: synchronized_device_update_preloaded_fixed_batch
+  timing_includes:
+    - device_side_condition_preparation
+    - forward
+    - canonical_training_loss
+    - backward
+    - gradient_clipping
+    - optimizer_step
+    - ema_update_if_native
+  timing_excludes:
+    - dataset_io
+    - dataloader_workers
+    - host_to_device_transfer
+    - validation
+    - logging
+    - plotting
+    - checkpointing
+  drift_gate:
+    statistic: absolute(first_half_block_median-last_half_block_median)/overall_median
+    tolerance_fraction: 0.25
+
+memory:
+  units: MiB
+  allocated_counter: torch.cuda.max_memory_allocated
+  reserved_counter: torch.cuda.max_memory_reserved
+  process_counter: nvidia-smi NVML process usage sampled asynchronously
+  poll_interval_seconds: 0.01
+  activation_workspace_definition: peak allocated minus model+buffers,
+    optimizer state, gradients, EMA and fixed input batch; tiny negative values
+    are clamped to zero
+
+clean_gpu_gate:
+  require_no_foreign_compute_process: true
+  max_idle_utilization_percent: 10
+  max_idle_memory_mib: 2048
+  require_explicit_cuda_index: true
+
+target_policy:
+  query_evaluable:
+    - DMF-Gen
+    - FFM-Perceiver
+    - MLP-RBF
+    - Senseiver
+  native_full_grid:
+    - FFM-FNO
+    - Latent FM
+    - SiT
+    - Geo-FNO
+  geo_fno_policy: attempt batch 32 on one GPU; if OOM, record
+    OOM_at_common_batch and never reduce batch or extrapolate
+  latent_fm_policy: required stage 1 and stage 2 are separate rows; method
+    peak memory is the maximum of their non-concurrent stage peaks
+
+method_order: [DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+stages:
+  - method: DMF-Gen
+    stage_ordinal: 1
+    stage_id: dmf_gen__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/DMF_Gen/Cond_T/last.pt
+    checkpoint_sha256: 857a505ff96cc3512c20f45641250d9db9d448c1f1e33b8c4a1c792acb1e4a06
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/DMF_Gen/Cond_T/run_config.yaml
+    config_sha256: e24de2d9b8909daa520b7b390a4a62396832ceb6e6810cd67f90673d9cf2f6c1
+    training_target_mode: query_4096
+    n_training_targets: 4096
+  - method: FFM-FNO
+    stage_ordinal: 1
+    stage_id: ffm_fno__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_FNO/Cond_T/last.pt
+    checkpoint_sha256: 9819ad702a9463c88409a67dff81eab8a2f5b043465fdd7063abfb116d5836bf
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_FNO/Cond_T/run_config.yaml
+    config_sha256: 9ae72a052211f0a619f138c212e83f1c0f6e8408cea56623a844e4d3858d89d3
+    training_target_mode: native_full_grid
+    n_training_targets: 40300
+  - method: FFM-Perceiver
+    stage_ordinal: 1
+    stage_id: ffm_perceiver__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_Perceiver/Cond_T/last.pt
+    checkpoint_sha256: c35041c26835b2fd3e513b1afa4faeef9e4515dad7b38669de1a9c6002f94d5b
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/FFM_Perceiver/Cond_T/run_config.yaml
+    config_sha256: d859774c01bcb6aaa49cc0c491be61cdf13c283845e2b1483b37ecf339b36588
+    training_target_mode: query_4096
+    n_training_targets: 4096
+  - method: Latent FM
+    stage_ordinal: 1
+    stage_id: latent_fm__required_stage_1
+    stage_role: required_stage_1
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Stage0/last.pt
+    checkpoint_sha256: bd96a517cd307da7dc84407c6f9382cb4e02eddaf40048e2e1a2f259466d7aa7
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Stage0/run_config.yaml
+    config_sha256: 61f3840720cff0b72af0919071b3c9621b2b8e69c37b000aaf596a5bca3919e2
+    training_target_mode: native_full_grid
+    n_training_targets: 40300
+  - method: Latent FM
+    stage_ordinal: 2
+    stage_id: latent_fm__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Cond_T/last.pt
+    checkpoint_sha256: d2257080b4379fd8d2560d38b0e0e8225d80ba763df98bae7495ab95e07e009c
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Latent_FM/Cond_T/run_config.yaml
+    config_sha256: 538facf6737a084f646f4bc547b3c69ca1c5e2ae81d4bc20d27a1724f47f15bc
+    training_target_mode: native_full_grid
+    n_training_targets: 40300
+  - method: SiT
+    stage_ordinal: 1
+    stage_id: sit__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/SiT/Cond_T/last.pt
+    checkpoint_sha256: 1d20713b43bc3b44dc8610d93d5e6bc9454d1c2933372422802f7fd6953ee4af
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/SiT/Cond_T/run_config.yaml
+    config_sha256: 786968d040bb98c345e5d8ae358783bb8266bc4c987b4276dfd94c079cae91c1
+    training_target_mode: native_full_grid
+    n_training_targets: 40300
+  - method: MLP-RBF
+    stage_ordinal: 1
+    stage_id: mlp_rbf__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/MLP_RBF/Cond_T/last.pt
+    checkpoint_sha256: a528358e6db159af6bc407f1d45588be0b0ef696b1ce38bc7a1dd50ecb56420d
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/MLP_RBF/Cond_T/run_config.yaml
+    config_sha256: 7a4b0021fdd62cc48a33f8580131dc6199720c3b0224d3c831ff4c4f443b1661
+    training_target_mode: query_4096
+    n_training_targets: 4096
+  - method: Geo-FNO
+    stage_ordinal: 1
+    stage_id: geo_fno__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/GeoFNO/Cond_T/last.pt
+    checkpoint_sha256: 56208012cebc98c4a4143382641a99ec28f495dc5e3ccf3ab211e6d63d0f19da
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/GeoFNO/Cond_T/run_config.yaml
+    config_sha256: 968d0ab21807f3c971ce189b7ead3be8e0cde557ee7e61a7e0d43a3d69cbacc3
+    training_target_mode: native_full_grid
+    n_training_targets: 40300
+  - method: Senseiver
+    stage_ordinal: 1
+    stage_id: senseiver__adopted_checkpoint_training_stage
+    stage_role: adopted_checkpoint_training_stage
+    checkpoint_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Senseiver/Cond_T/last.pt
+    checkpoint_sha256: b055ccc8ad86ab2d4d44a527620f4c0db06009c26de26d8d52db44065fc48503
+    config_path: 0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/Senseiver/Cond_T/run_config.yaml
+    config_sha256: 92e9ffa36c0b8b7c90bd440271f424d16dd57745ccf124a9fc8b53c996681ae6
+    training_target_mode: query_4096
+    n_training_targets: 4096
+
+output:
+  root: Dis_SI_Process/results/ValidationV51/TrainingFootprint
+  run_id: training_footprint_common_b32_v51
