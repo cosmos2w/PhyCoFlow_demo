@@ -1,0 +1,38 @@
+schema_version: figure5-v7-ablation-1
+benchmark_release: '20260904_1200'
+evaluation_root: 0_demo_TurbulentCombustion/Save_TrainedModel/ablation_condT/evaluation_20260910
+figure:
+  width_mm: 183
+  height_mm: 205
+  formats: [svg, png]
+  png_dpi: 600
+  font_family: Arial
+  axis_label_pt: 6.6
+  row_tick_pt: 6.0
+  panel_tag_pt: 8.5
+stochastic_order: [A0, A2, A3, A5, A4]
+inherited_display:
+  inference_memory_filled: model_state_mib
+  inference_memory_hollow: inference_peak_allocated_mib
+  training_time_label: Training update time
+  training_time_unit: ms / update
+styles:
+  A0: {label: Full model, color: '#E63946', marker: o}
+  A2: {label: No sensor feedback, color: '#64748B', marker: s}
+  A3: {label: No local conditioning, color: '#7D8794', marker: '^'}
+  A5: {label: Local-only conditioning, color: '#485564', marker: v}
+  A4: {label: IID Gaussian prior, color: '#BE873D', marker: D}
+  A1: {label: Deterministic regression, color: '#596674', marker: s}
+comparison_scope:
+  type: saved_checkpoint_comparison
+  matched_evaluation_states: true
+  matched_measurements: true
+  matched_training_budget: false
+  multiple_training_seeds: false
+  independent_untouched_test_set: false
+  matched_backbone_initialization_verified: false
+  generative_draws_per_ablation_state: 1
+  primary_checkpoint_policy: last
+  sensitivity_checkpoint_policy: best
+  new_ablation_reference_separate_from_benchmark: true
+  deterministic_objective_control_retained_in_si: true

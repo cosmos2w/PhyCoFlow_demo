@@ -7,3 +7,7 @@ results/*
 
 figures/generated/*
 !figures/generated/.gitkeep
+
+# Coordinate-heavy SI companions are reproducible local data products.
+# Keep the compact release reports and SI group narratives publishable.
+docs/generated/*/si_companions/si0*_companion.md

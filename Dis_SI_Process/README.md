@@ -1,5 +1,27 @@
 # Figure 5 V4 validation workflow
 
+## Figure 5 V7 architectural controls
+
+V7 adds a dedicated right-hand stochastic architecture/prior column and six
+focused supplementary figures. It uses only the accepted `20260904_1200`
+benchmark release and frozen `evaluation_20260910` ablation artifacts. The
+benchmark and new full reference retain separate checkpoint identities.
+
+Run the complete saved-data post-processing bundle from the repository root:
+
+```bash
+rtk proxy conda run -n fig python Dis_SI_Process/scripts/build_figure5_v7_bundle.py \
+  --timestamp 20260910_1540 --strict-formal
+rtk proxy conda run -n fig python -m unittest Dis_SI_Process.tests.test_figure5_v7_ablation
+```
+
+The bundle writes SVG and 600-dpi PNG figures, compact source tables, reusable
+LaTeX inserts and quantitative companions to the timestamped `figures/generated`,
+`results/derived` and `docs/generated` directories. Strict promotion requires
+source validation and a current recorded visual review. A changed layout or
+source requires renewed review. This workflow performs no training, model
+inference, GPU timing, or reconstruction-cache regeneration.
+
 ## V5 focused four-panel validation
 
 V5 is additive and preserves every V2–V4.2 artifact. Panels a/b reuse the
