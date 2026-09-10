@@ -254,6 +254,11 @@ def draw_panel_b(parent, ctx, *, standalone=False, show_legend=True, **_):
     parent.set_xticks(range(len(models)), model_tick_labels, rotation=0, ha="center")
     parent.tick_params(axis="x", pad=1.5)
     parent.set_ylabel("Physical relative $L_2$\n" f"({count} sensors)", labelpad=0)
+    hidden_spines = [str(value) for value in v2["panel_b"].get("hidden_spines", [])]
+    for side in hidden_spines:
+        if side not in parent.spines:
+            raise ValueError(f"Unknown panel-b spine {side!r}")
+        parent.spines[side].set_visible(False)
     parent.grid(axis="y", which="major", color=COLOR_GRID, lw=LW_GRID, zorder=0)
     fully_missing_recipes = [
         recipe for recipe in recipes
@@ -285,6 +290,7 @@ def draw_panel_b(parent, ctx, *, standalone=False, show_legend=True, **_):
         "sensor_count": count, "source_table": source_prefix,
         "fully_missing_recipes": fully_missing_recipes,
         "axis_scale": "log", "statistic": "mean with bootstrap 95% CI", "missing": missing,
+        "visual_style": {"hidden_spines": hidden_spines},
         "connections": [["2_H_limited", "3_Mixed_HML", "solid"], ["4_ZeroH_Balanced", "5_ZeroH_MRich", "dashed"]],
     }
 
@@ -495,12 +501,34 @@ def _compact_inset_grid(parent, n_data_columns, layout_cfg, *, standalone=False)
     # User-facing IMAGE_ROW_GAP is injected here by panel_c_tuning.py.
     row_gap = float(layout_cfg.get("row_gap", .105))
 
-    width_ratios = [1.0] * n_data_columns + [colorbar_ratio]
-    unit_width = (right - left) / (sum(width_ratios) + column_gap * (len(width_ratios) - 1))
-    x_positions, cursor = [], left
-    for ratio in width_ratios:
-        x_positions.append(cursor)
-        cursor += ratio * unit_width + column_gap * unit_width
+    explicit_cbar_width = layout_cfg.get("colorbar_width_parent")
+    explicit_cbar_gap = layout_cfg.get("colorbar_gap_parent")
+    if explicit_cbar_width is not None or explicit_cbar_gap is not None:
+        if explicit_cbar_width is None or explicit_cbar_gap is None:
+            raise ValueError(
+                "panel_c colorbar_width_parent and colorbar_gap_parent must be set together"
+            )
+        cbar_width = float(explicit_cbar_width)
+        cbar_gap = float(explicit_cbar_gap)
+        usable = right - left - cbar_width - cbar_gap
+        unit_width = usable / (n_data_columns + column_gap * (n_data_columns - 1))
+        if unit_width <= 0.0 or cbar_width <= 0.0 or cbar_gap < 0.0:
+            raise ValueError("panel_c explicit colorbar geometry leaves no positive image width")
+        x_positions = [
+            left + index * unit_width * (1.0 + column_gap)
+            for index in range(n_data_columns)
+        ]
+        cbar_x = right - cbar_width
+        x_positions.append(cbar_x)
+    else:
+        width_ratios = [1.0] * n_data_columns + [colorbar_ratio]
+        unit_width = (right - left) / (sum(width_ratios) + column_gap * (len(width_ratios) - 1))
+        x_positions, cursor = [], left
+        for ratio in width_ratios:
+            x_positions.append(cursor)
+            cursor += ratio * unit_width + column_gap * unit_width
+        cbar_x = x_positions[-1]
+        cbar_width = colorbar_ratio * unit_width
 
     unit_height = (top - bottom) / (3.0 + 2.0 * row_gap)
     row_bottoms = [top - (row + 1) * unit_height - row * row_gap * unit_height for row in range(3)]
@@ -509,8 +537,6 @@ def _compact_inset_grid(parent, n_data_columns, layout_cfg, *, standalone=False)
          for col in range(n_data_columns)]
         for row in range(3)
     ]
-    cbar_x = x_positions[-1]
-    cbar_width = colorbar_ratio * unit_width
     field_full_height = 2.0 * unit_height + row_gap * unit_height
     field_height = field_full_height * field_colorbar_length_ratio
     field_bottom = row_bottoms[1] + 0.5 * (field_full_height - field_height)
@@ -539,6 +565,7 @@ def _draw_panel_c_compact(parent, ctx, *, standalone=False, show_legend=True, ve
         shared_snapshot,
         int(v2["panel_c"].get("sensor_count", cfg["sensor_plan"]["default_count"])),
         version,
+        use_module_overrides=v2["panel_c"].get("layout_controls_source") != "yaml",
     )
     payload = _qualitative_payload(ctx, [strip], snapshot, count)
     available = [loaded for loaded in payload.values() if loaded is not None]
@@ -629,12 +656,19 @@ def _draw_panel_c_compact(parent, ctx, *, standalone=False, show_legend=True, ve
                 )
                 relative_l2_label = axes[2].text(
                     .04, .05, rf"Rel. $L_2$ = {relative_l2(truth, pred):.3f}",
-                    transform=axes[2].transAxes, ha="left", va="bottom", color="white",
+                    transform=axes[2].transAxes, ha="left", va="bottom",
+                    color=str(layout_cfg.get("relative_l2_text_color", "white")),
+                    gid="qualitative-relative-l2",
                     fontsize=float(layout_cfg.get(
                         "relative_l2_fontsize",
                         max(4.3, cfg["figure_style"]["font_sizes"]["tick"] - 1.2),
                     )),
-                    bbox=dict(boxstyle="round,pad=.10", fc="black", ec="none", alpha=.58),
+                    bbox=dict(
+                        boxstyle=f"round,pad={float(layout_cfg.get('relative_l2_box_pad', .10)):.3f}",
+                        fc=str(layout_cfg.get("relative_l2_box_facecolor", "black")),
+                        ec=str(layout_cfg.get("relative_l2_box_edgecolor", "none")),
+                        alpha=float(layout_cfg.get("relative_l2_box_alpha", .58)),
+                    ),
                 )
                 manuscript.tag_font_role(
                     relative_l2_label, "annotation",
@@ -659,10 +693,27 @@ def _draw_panel_c_compact(parent, ctx, *, standalone=False, show_legend=True, ve
     colorbar_label_size = float(layout_cfg.get(
         "colorbar_label_fontsize", max(5.6, cfg["figure_style"]["font_sizes"]["axis"] - 1.0),
     ))
+    colorbar_tick_length = float(layout_cfg.get("colorbar_tick_length_pt", 2.0))
+    colorbar_tick_width = layout_cfg.get("colorbar_tick_width_pt")
+    colorbar_tick_pad = float(layout_cfg.get("colorbar_tick_pad_pt", 1.5))
+    colorbar_outline_width = layout_cfg.get("colorbar_outline_width_pt")
+
+    def style_colorbar(colorbar):
+        tick_kwargs = {
+            "labelsize": colorbar_tick_size,
+            "length": colorbar_tick_length,
+            "pad": colorbar_tick_pad,
+        }
+        if colorbar_tick_width is not None:
+            tick_kwargs["width"] = float(colorbar_tick_width)
+        colorbar.ax.tick_params(**tick_kwargs)
+        if colorbar_outline_width is not None:
+            colorbar.outline.set_linewidth(float(colorbar_outline_width))
+
     field_tick_format = error_tick_format = None
     if field_artist is not None:
         field_cb = fig.colorbar(field_artist, cax=field_cax, orientation="vertical")
-        field_cb.ax.tick_params(labelsize=colorbar_tick_size, length=2, pad=1.5)
+        style_colorbar(field_cb)
         field_cb.set_ticks(field_ticks)
         field_cb.set_label(
             "Field value", rotation=270,
@@ -683,7 +734,7 @@ def _draw_panel_c_compact(parent, ctx, *, standalone=False, show_legend=True, ve
         field_cax.set_axis_off()
     if error_artist is not None:
         error_cb = fig.colorbar(error_artist, cax=error_cax, orientation="vertical")
-        error_cb.ax.tick_params(labelsize=colorbar_tick_size, length=2, pad=1.5)
+        style_colorbar(error_cb)
         error_cb.set_ticks(error_ticks)
         error_cb.set_label(
             "Absolute error", rotation=270,
@@ -745,12 +796,21 @@ def _draw_panel_c_compact(parent, ctx, *, standalone=False, show_legend=True, ve
             ha="center", va="top", fontweight="normal",
             gid="panel-c-recipe-header",
         )
-        manuscript.tag_font_role(header, "subplot_title", size_pt=scheme_header_size)
+        recipe_header_role = str(layout_cfg.get("recipe_header_font_role", "subplot_title"))
+        manuscript.tag_font_role(header, recipe_header_role, size_pt=scheme_header_size)
 
     sensor_layout_title = image_axes[2][0].set_title("Sensor layout", pad=.6)
     manuscript.tag_font_role(sensor_layout_title, "axis_label", size_pt=scheme_header_size)
-    absolute_error_title = image_axes[2][len(columns) // 2].set_title("Absolute error", pad=.6)
-    manuscript.tag_font_role(absolute_error_title, "axis_label", size_pt=scheme_header_size)
+    show_absolute_error_row_title = bool(
+        layout_cfg.get("show_absolute_error_row_title", True)
+    )
+    if show_absolute_error_row_title:
+        absolute_error_title = image_axes[2][len(columns) // 2].set_title(
+            "Absolute error", pad=.6
+        )
+        manuscript.tag_font_role(
+            absolute_error_title, "axis_label", size_pt=scheme_header_size
+        )
 
     divider_x = []
     divider_y_min = float(layout_cfg.get("vertical_divider_y_min", .05))
@@ -803,6 +863,23 @@ def _draw_panel_c_compact(parent, ctx, *, standalone=False, show_legend=True, ve
             "scheme_header_fontsize_pt": scheme_header_size,
             "colorbar_label_fontsize_pt": colorbar_label_size,
             "colorbar_tick_fontsize_pt": colorbar_tick_size,
+            "colorbar_width_parent_fraction": float(
+                layout_cfg["colorbar_width_parent"]
+                if "colorbar_width_parent" in layout_cfg
+                else layout_cfg.get("colorbar_width_ratio", .085) * unit_width
+            ),
+            "colorbar_gap_parent_fraction": (
+                float(layout_cfg["colorbar_gap_parent"])
+                if "colorbar_gap_parent" in layout_cfg else float(layout_cfg.get("column_gap", .055) * unit_width)
+            ),
+            "colorbar_tick_style": {
+                "length_pt": colorbar_tick_length,
+                "width_pt": None if colorbar_tick_width is None else float(colorbar_tick_width),
+                "pad_pt": colorbar_tick_pad,
+                "outline_width_pt": (
+                    None if colorbar_outline_width is None else float(colorbar_outline_width)
+                ),
+            },
             "base_column_gap": float(layout_cfg.get("column_gap_base", layout_cfg.get("column_gap", .055))),
             "effective_column_gap": float(layout_cfg.get("column_gap", .055)),
             "image_row_gap_relative_to_row_height": float(layout_cfg.get("row_gap", .105)),
@@ -831,7 +908,16 @@ def _draw_panel_c_compact(parent, ctx, *, standalone=False, show_legend=True, ve
             },
             "colorbar_labels": {"field": "Field value", "error": "Absolute error"},
             "row_labels": ["Full H-resolution field", "Zoomed-in region"],
-            "bottom_row_headers": {"reference": "Sensor layout", "models": "Absolute error"},
+            "bottom_row_headers": {
+                "reference": "Sensor layout",
+                "models": "Absolute error" if show_absolute_error_row_title else None,
+            },
+            "relative_l2_annotation_style": {
+                "text_color": str(layout_cfg.get("relative_l2_text_color", "white")),
+                "box_facecolor": str(layout_cfg.get("relative_l2_box_facecolor", "black")),
+                "box_alpha": float(layout_cfg.get("relative_l2_box_alpha", .58)),
+                "box_pad": float(layout_cfg.get("relative_l2_box_pad", .10)),
+            },
             "subplot_borders": "solid black on the middle zoomed-in row and row 3 column 1",
         },
     }

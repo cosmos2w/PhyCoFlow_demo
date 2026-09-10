@@ -11,6 +11,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgba
+from matplotlib.patches import Patch
 import yaml
 import global_style as manuscript
 
@@ -39,7 +41,22 @@ from common.publication_panels_unified_v2 import draw_panel, panel_label
 
 def _load_layout(path):
     with Path(path).open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+        payload = yaml.safe_load(handle)
+    parent = payload.pop("extends", None)
+    if parent is None:
+        return payload
+    parent_path = (Path(path).resolve().parent / parent).resolve()
+    return _deep_merge(_load_layout(parent_path), payload)
+
+
+def _deep_merge(base, override):
+    """Recursively merge a compact, versioned layout override into its base."""
+    if not isinstance(base, dict) or not isinstance(override, dict):
+        return override
+    merged = dict(base)
+    for key, value in override.items():
+        merged[key] = _deep_merge(merged[key], value) if key in merged else value
+    return merged
 
 
 def _publication_timestamp(value=None):
@@ -132,6 +149,119 @@ def _panel_c_overlap_audit(fig):
     }
 
 
+def _enforce_frame_lineweights(fig, linewidth_pt):
+    """Standardize structural strokes without touching data-bearing lines."""
+    if linewidth_pt is None:
+        return {"applied": False, "passed": True, "linewidth_pt": None}
+    target = float(linewidth_pt)
+    if target <= 0.0:
+        raise ValueError("uniform_frame_linewidth_pt must be positive")
+    axes = []
+    seen = set()
+
+    def collect_axis(ax):
+        if id(ax) in seen:
+            return
+        seen.add(id(ax)); axes.append(ax)
+        for child in getattr(ax, "child_axes", []):
+            collect_axis(child)
+
+    for ax in fig.axes:
+        collect_axis(ax)
+    spine_count = 0
+    tick_count = 0
+    for ax in axes:
+        for spine in ax.spines.values():
+            spine.set_linewidth(target)
+            if spine.get_visible():
+                spine_count += 1
+        ax.tick_params(axis="both", which="both", width=target)
+        for axis in (ax.xaxis, ax.yaxis):
+            for tick in (*axis.get_major_ticks(), *axis.get_minor_ticks()):
+                for line in (tick.tick1line, tick.tick2line):
+                    line.set_markeredgewidth(target)
+                    if line.get_visible():
+                        tick_count += 1
+    patch_count = 0
+    for patch in fig.findobj(match=lambda item: isinstance(item, Patch)):
+        if not patch.get_visible() or float(patch.get_linewidth()) <= 0.0:
+            continue
+        edge = to_rgba(patch.get_edgecolor())
+        if edge[3] <= 0.0:
+            continue
+        patch.set_linewidth(target)
+        patch_count += 1
+    return {
+        "applied": True, "passed": True, "linewidth_pt": target,
+        "visible_spine_count": spine_count,
+        "visible_tick_mark_count": tick_count,
+        "visible_frame_patch_count": patch_count,
+    }
+
+
+def _panel_f_cell_alignment_audit(fig, tolerance_px=.05):
+    """Verify rendered numerical bbox centers against their matrix cells."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    records = []
+    for text in fig.findobj(match=lambda item: isinstance(item, matplotlib.text.Text)):
+        if text.get_gid() != "panel-f-cell-value" or not text.get_visible():
+            continue
+        expected = text.axes.transData.transform(text._panel_f_cell_center_data)
+        bbox = text.get_window_extent(renderer)
+        observed = ((bbox.x0 + bbox.x1) / 2.0, (bbox.y0 + bbox.y1) / 2.0)
+        records.append({
+            "text": text.get_text(),
+            "dx_px": float(observed[0] - expected[0]),
+            "dy_px": float(observed[1] - expected[1]),
+        })
+    passed = bool(records) and all(
+        abs(item["dx_px"]) <= tolerance_px and abs(item["dy_px"]) <= tolerance_px
+        for item in records
+    )
+    result = {
+        "passed": passed, "cell_value_count": len(records),
+        "tolerance_px": float(tolerance_px),
+        "max_abs_dx_px": max((abs(item["dx_px"]) for item in records), default=None),
+        "max_abs_dy_px": max((abs(item["dy_px"]) for item in records), default=None),
+    }
+    if not passed:
+        raise ValueError(f"Panel F cell-value alignment failed: {result}")
+    return result
+
+
+def _panel_b_open_axis_audit(axis):
+    visibility = {side: bool(spine.get_visible()) for side, spine in axis.spines.items()}
+    result = {
+        "passed": not visibility.get("top", True) and not visibility.get("right", True),
+        "spine_visibility": visibility,
+    }
+    if not result["passed"]:
+        raise ValueError(f"Panel B open-axis audit failed: {result}")
+    return result
+
+
+def _relative_l2_contrast_audit(fig):
+    annotations = [
+        text for text in fig.findobj(match=lambda item: isinstance(item, matplotlib.text.Text))
+        if text.get_gid() == "qualitative-relative-l2" and text.get_visible()
+    ]
+    records = []
+    for text in annotations:
+        rgba = to_rgba(text.get_color())
+        patch = text.get_bbox_patch()
+        records.append({
+            "text": text.get_text(),
+            "text_rgba": [float(value) for value in rgba],
+            "box_alpha": None if patch is None else float(patch.get_alpha()),
+        })
+    passed = bool(records) and all(item["text_rgba"] == [1.0, 1.0, 1.0, 1.0] for item in records)
+    result = {"passed": passed, "annotation_count": len(records), "annotations": records}
+    if not passed:
+        raise ValueError(f"Qualitative annotation contrast audit failed: {result}")
+    return result
+
+
 def _sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -213,6 +343,10 @@ def _source_manifest(ctx, panel_meta, outputs, cfg, v2, args, rid, canvas_plan, 
             "model_line_qa": canvas_plan["model_line_qa"],
             "colorbar_multiplier_qa": canvas_plan["colorbar_multiplier_qa"],
             "panel_c_overlap_qa": canvas_plan["panel_c_overlap_qa"],
+            "panel_f_cell_alignment_qa": canvas_plan["panel_f_cell_alignment_qa"],
+            "frame_lineweight_qa": canvas_plan["frame_lineweight_qa"],
+            "panel_b_open_axis_qa": canvas_plan["panel_b_open_axis_qa"],
+            "relative_l2_contrast_qa": canvas_plan["relative_l2_contrast_qa"],
         },
         "recipe_registry": {
             key: {
@@ -359,9 +493,17 @@ def main():
     parser.add_argument("--width-mm", type=float, help="Override the configured master-canvas width.")
     parser.add_argument("--height-mm", type=float, help="Override automatic master-canvas height planning.")
     args = parser.parse_args()
+    raw_v2 = _load_layout(args.layout)
+    strict_font = bool(raw_v2.get("figure", {}).get("strict_arial", False))
+    registered_fonts = manuscript.register_local_arial() if strict_font else []
     cfg = load_config(args.config); apply_style(cfg); ensure_output_dirs()
+    if strict_font and not manuscript.arial_available():
+        raise RuntimeError(
+            "The selected layout requires Arial, but Matplotlib cannot resolve it. "
+            f"Registered candidates: {registered_fonts}"
+        )
     # Shared Panel C tuning API: edit common/panel_c_tuning.py, not this runner.
-    v2 = apply_panel_c_tuning(_load_layout(args.layout))
+    v2 = apply_panel_c_tuning(raw_v2)
     rid = _publication_timestamp(args.run_id)
     ctx = _context(args, cfg, v2, rid)
     figure_cfg = v2["figure"]
@@ -384,7 +526,12 @@ def main():
         )
         version = int(args.qualitative_version or v2["panel_c"]["default_version"]) if label == "c" else None
         meta[label] = draw_panel(label, ax, ctx, standalone=False, show_legend=True, version=version)
-    typography_qa = manuscript.enforce_figure_typography(fig)
+    frame_lineweight_qa = _enforce_frame_lineweights(
+        fig, figure_cfg.get("uniform_frame_linewidth_pt"),
+    )
+    typography_qa = manuscript.enforce_figure_typography(
+        fig, font_family=manuscript.FONT_FAMILY if strict_font else "sans-serif",
+    )
     model_line_qa = validate_model_line_contract(fig, cfg)
     geometric_axis_count = _enforce_geometric_aspects(fig)
     colorbar_multiplier_qa = finalize_colorbar_multiplier_alignment(fig)
@@ -395,6 +542,13 @@ def main():
     panel_c_overlap_qa = _panel_c_overlap_audit(fig)
     if not panel_c_overlap_qa["passed"]:
         raise ValueError(f"Panel C text overlap detected: {panel_c_overlap_qa}")
+    panel_f_cell_alignment_qa = _panel_f_cell_alignment_audit(fig)
+    panel_b_open_axis_qa = _panel_b_open_axis_audit(axes["b"])
+    relative_l2_contrast_qa = (
+        _relative_l2_contrast_audit(fig)
+        if bool(figure_cfg.get("require_pure_white_relative_l2", False))
+        else {"passed": True, "applied": False, "annotation_count": 0, "annotations": []}
+    )
     panel_geometry = measured_geometry
     canvas_plan = {
         "width_mm": width_mm, "height_mm": height_mm,
@@ -407,6 +561,10 @@ def main():
         "model_line_qa": model_line_qa,
         "colorbar_multiplier_qa": colorbar_multiplier_qa,
         "panel_c_overlap_qa": panel_c_overlap_qa,
+        "panel_f_cell_alignment_qa": panel_f_cell_alignment_qa,
+        "frame_lineweight_qa": frame_lineweight_qa,
+        "panel_b_open_axis_qa": panel_b_open_axis_qa,
+        "relative_l2_contrast_qa": relative_l2_contrast_qa,
     }
     out = FIGURES_DIR / "Assembled" / f"{figure_cfg['output_name']}_{rid}"
     outputs = save_figure(

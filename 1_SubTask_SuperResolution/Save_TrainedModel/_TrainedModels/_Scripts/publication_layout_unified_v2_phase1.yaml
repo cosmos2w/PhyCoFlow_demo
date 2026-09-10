@@ -1,0 +1,89 @@
+extends: publication_layout_unified_v2.yaml
+
+figure:
+  output_name: MixedResolution_unified_v2_phase1
+  aesthetic_profile: nature_phase1_20260903
+  strict_arial: true
+
+panel_c:
+  # Freeze this versioned profile in YAML so the baseline tuning module remains
+  # the exact default rebuild path.
+  layout_controls_source: yaml
+  sensor_count: 512
+  show_sensors_on_full_ground_truth: false
+  compact_layout:
+    grid_left: 0.005
+    grid_right: 0.970
+    grid_bottom: 0.036
+    grid_top_standalone: 0.850
+    grid_top_composite: 0.850
+    row_gap: 0.18
+    column_gap: 0.012
+    # Exact parent fractions yield a 1.20 mm bar and 2.00 mm heatmap gap.
+    colorbar_width_parent: 0.006802
+    colorbar_gap_parent: 0.011337
+    field_colorbar_length_ratio: 1.0
+    error_colorbar_length_ratio: 1.0
+    model_header_y: 0.985
+    model_header_y_composite: 0.985
+    recipe_header_y: 0.935
+    recipe_header_y_composite: 0.935
+    model_header_fontsize: 6.5
+    scheme_header_fontsize: 6.0
+    recipe_header_font_role: axis_label
+    side_label_fontsize: 6.0
+    scheme_header_pad: 2.0
+    vertical_divider_y_min: 0.036
+    vertical_divider_y_max: 0.875
+    colorbar_label_fontsize: 6.0
+    colorbar_tick_fontsize: 5.5
+    colorbar_labelpad: 7.0
+    colorbar_tick_length_pt: 1.6
+    colorbar_tick_width_pt: 0.45
+    colorbar_tick_pad_pt: 1.5
+    colorbar_outline_width_pt: 0.45
+    relative_l2_fontsize: 5.5
+    derived_panel_height_mm: 58.0
+    physical_height_reference_mm: 58.0
+    physical_height_reference_row_gap: 0.18
+
+panel_d:
+  layout:
+    left: 0.048
+    right: 0.995
+    column_gap: 0.016
+    axis_bottom: 0.255
+    axis_height: 0.565
+    legend_y: 0.995
+    title_pad_pt: 1.5
+    separate_secondary_ticks: true
+    primary_tick_pad_pt: 1.5
+    secondary_tick_y_axes: -0.155
+    x_label_y_axes: -0.325
+    y_major_ticks: [0.01, 0.1, 1.0]
+
+panel_e:
+  layout:
+    # Panel-e parent width is 82.4642 mm in the composite.
+    residual_colorbar_left: 0.824253
+    residual_colorbar_width: 0.014552
+    colorbar_tick_length_pt: 1.6
+    colorbar_tick_width_pt: 0.45
+    colorbar_tick_pad_pt: 1.5
+    colorbar_outline_width_pt: 0.45
+    colorbar_tick_fontsize: 5.5
+    colorbar_label_fontsize: 6.0
+    colorbar_label_pad_pt: 6.0
+
+panel_f:
+  layout:
+    # Panel-f parent width is 96.8058 mm in the composite.
+    colorbar_left: 0.865660
+    colorbar_width: 0.012396
+    colorbar_tick_length_pt: 1.6
+    colorbar_tick_width_pt: 0.45
+    colorbar_tick_pad_pt: 1.5
+    colorbar_outline_width_pt: 0.45
+    colorbar_tick_fontsize: 5.5
+    colorbar_label_fontsize: 6.0
+    colorbar_label_pad_pt: 8.0

@@ -332,6 +332,16 @@ def draw_panel_a(parent, ctx: PublicationContext, *, standalone=False):
     )
     title_y = _float(protocol_cfg.get("title_y", 1.045), 1.045)
     legend_y = _float(protocol_cfg.get("legend_y", .355), .355)
+    phase_layout = (
+        getattr(ctx, "v2", {}).get("panel_a", {}).get("layout", {})
+        if isinstance(getattr(ctx, "v2", {}), dict) else {}
+    )
+    resolution_legend_y = _float(
+        phase_layout.get("resolution_legend_y", legend_y), legend_y,
+    )
+    exposure_label_y = _float(
+        phase_layout.get("exposure_label_y", legend_y), legend_y,
+    )
     bar_bounds = [_float(v) for v in protocol_cfg.get("bar_bounds", [.055, .035, .91, .245])]
     if len(bar_bounds) != 4:
         raise ValueError("resolution_protocol.bar_bounds must contain [left, bottom, width, height]")
@@ -375,7 +385,7 @@ def draw_panel_a(parent, ctx: PublicationContext, *, standalone=False):
     first = fields[0]
     # Horizontal, fixed-order resolution legend above the bars.
     handles = [Rectangle((0, 0), 1, 1, fc=RESOLUTION_COLORS[tag], ec="none", label=tag) for tag in "LMH"]
-    parent.legend(handles=handles, ncol=3, loc="center", bbox_to_anchor=(.20, legend_y),
+    parent.legend(handles=handles, ncol=3, loc="center", bbox_to_anchor=(.20, resolution_legend_y),
                   handlelength=1.0, columnspacing=1.3)
     bar = _inset(parent, bar_bounds)
     x = np.arange(len(budgets)); bottom = np.zeros(len(budgets))
@@ -397,7 +407,7 @@ def draw_panel_a(parent, ctx: PublicationContext, *, standalone=False):
         bar.text(i, bottom[i] + ymax * .035, f"{_float(row['spatial_dof_budget_normalized_H_only']):.2f}×",
                  ha="center", va="bottom", fontsize=cfg["figure_style"]["font_sizes"]["tick"])
     exposure_label = parent.text(
-        .68, legend_y,
+        .68, exposure_label_y,
         r"Relative spatial-field exposure, $B_{\mathrm{DOF}}/B_{\mathrm{H-only}}$",
         transform=parent.transAxes, ha="center", va="center", color=NEUTRAL_DARK,
         zorder=30,
@@ -413,6 +423,8 @@ def draw_panel_a(parent, ctx: PublicationContext, *, standalone=False):
             "left": image_left, "bottom": image_bottom, "width": image_width,
             "height": image_height, "horizontal_step": image_step,
             "title_font_size": title_size, "title_y": title_y,
+            "resolution_legend_y": resolution_legend_y,
+            "exposure_label_y": exposure_label_y,
         },
         "removed_elements": ["field colorbar", "same-state subtitle"],
         "grid_validation": "complete finite Cartesian grids; declared dimensions enforced",

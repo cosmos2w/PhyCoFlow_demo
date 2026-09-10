@@ -1,0 +1,38 @@
+extends: publication_layout_unified_v2_phase1.yaml
+
+figure:
+  output_name: MixedResolution_unified_v2_phase2
+  aesthetic_profile: nature_phase2_20260903
+  uniform_frame_linewidth_pt: 0.75
+  require_pure_white_relative_l2: true
+
+panel_a:
+  layout:
+    # The bar chart occupies y=0.025..0.385 in panel coordinates.
+    resolution_legend_y: 0.415
+    exposure_label_y: 0.455
+
+panel_b:
+  hidden_spines: [top, right]
+
+panel_c:
+  compact_layout:
+    show_absolute_error_row_title: false
+    relative_l2_text_color: "#FFFFFF"
+    relative_l2_box_facecolor: "#000000"
+    relative_l2_box_edgecolor: none
+    relative_l2_box_alpha: 0.52
+    relative_l2_box_pad: 0.07
+
+panel_e:
+  layout:
+    relative_l2_text_color: "#FFFFFF"
+    relative_l2_box_facecolor: "#000000"
+    relative_l2_box_edgecolor: none
+    relative_l2_box_alpha: 0.52
+    relative_l2_box_pad: 0.07
+
+panel_f:
+  layout:
+    cell_text_horizontal_alignment: center
+    cell_text_vertical_alignment: center

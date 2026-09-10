@@ -76,6 +76,22 @@ CANVAS_BOUNDARY_TOLERANCE_MM = 0.02
 FONT_FAMILY = "Arial"
 FONT_FALLBACKS = ("Liberation Sans", "DejaVu Sans")
 
+
+def register_local_arial() -> list[str]:
+    """Register user-installed Arial faces with Matplotlib for this process.
+
+    Fontconfig can see fonts added below ``~/.local/share/fonts`` before an
+    existing Matplotlib font cache does.  Phase-specific publication profiles
+    call this helper explicitly; baseline rendering remains unchanged.
+    """
+    registered = []
+    font_root = Path.home() / ".local" / "share" / "fonts" / "Arial"
+    for pattern in ("*.ttf", "*.TTF", "*.otf", "*.OTF"):
+        for path in sorted(font_root.glob(pattern)):
+            font_manager.fontManager.addfont(str(path))
+            registered.append(str(path))
+    return registered
+
 # Explicit hierarchy in points.  These values are legible on a 7.2-in
 # double-column page while remaining compact enough for dense multi-panels.
 SIZE_PANEL_LABEL = 8.5       # a/b/c/d tags; largest
@@ -149,7 +165,9 @@ def _figure_axes_recursive(fig):
     return axes
 
 
-def enforce_figure_typography(fig, *, tolerance_pt: float = 1.0e-6) -> dict:
+def enforce_figure_typography(
+    fig, *, tolerance_pt: float = 1.0e-6, font_family: str = "sans-serif",
+) -> dict:
     """Apply the global font hierarchy to every visible figure text artist.
 
     Matplotlib-generated titles, axis labels, tick/offset labels, and legends
@@ -213,7 +231,7 @@ def enforce_figure_typography(fig, *, tolerance_pt: float = 1.0e-6) -> dict:
             artist, "_global_font_size_pt", FONT_ROLE_SIZES[role],
         ))
         artist.set_fontsize(expected)
-        artist.set_fontfamily("sans-serif")
+        artist.set_fontfamily(font_family)
         if artist.get_visible() and artist.get_text():
             counts[role] += 1
             if len(examples[role]) < 8:
@@ -227,6 +245,7 @@ def enforce_figure_typography(fig, *, tolerance_pt: float = 1.0e-6) -> dict:
     result = {
         "passed": not violations,
         "role_sizes_pt": dict(FONT_ROLE_SIZES),
+        "font_family": str(font_family),
         "local_size_overrides": [
             {
                 "text": artist.get_text(),

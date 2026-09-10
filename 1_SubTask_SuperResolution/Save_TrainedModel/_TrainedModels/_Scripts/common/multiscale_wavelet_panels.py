@@ -151,15 +151,31 @@ def draw_sensor_efficiency(parent, ctx, *, standalone=False, show_legend=True, v
                         elinewidth=LW_ERRORBAR, capsize=1.3)
         ax.set_yscale(v2["panel_d"].get("yscale", "log"))
         ax.set_ylim(ymin, ymax)
+        if layout.get("y_major_ticks") is not None:
+            ax.set_yticks([float(value) for value in layout["y_major_ticks"]])
         ax.set_xlim(min(counts) - 24, max(counts) + 24)
-        ax.set_xticks(counts, [f"{count}\n{pct:.1f}" for count, pct in zip(counts, density)])
-        ax.tick_params(axis="x", pad=1)
+        if bool(layout.get("separate_secondary_ticks", False)):
+            ax.set_xticks(counts, [str(count) for count in counts])
+            ax.tick_params(axis="x", pad=float(layout.get("primary_tick_pad_pt", 1.5)))
+            secondary_y = float(layout.get("secondary_tick_y_axes", -.17))
+            for count, pct in zip(counts, density):
+                secondary = ax.text(
+                    count, secondary_y, f"{pct:.1f}",
+                    transform=ax.get_xaxis_transform(), ha="center", va="top",
+                    color=NEUTRAL_MID, clip_on=False,
+                )
+                manuscript.tag_font_role(secondary, "tick_label")
+        else:
+            ax.set_xticks(counts, [f"{count}\n{pct:.1f}" for count, pct in zip(counts, density)])
+            ax.tick_params(axis="x", pad=1)
         ax.set_title(
             v2["recipes"]["short_labels"][recipe],
             pad=float(layout["title_pad_pt"]),
         )
         if index == 2:
             ax.set_xlabel("Sensor count / H-grid density (%)", labelpad=0)
+            if bool(layout.get("separate_secondary_ticks", False)):
+                ax.xaxis.set_label_coords(.5, float(layout.get("x_label_y_axes", -.34)))
         if index == 0:
             ax.set_ylabel(r"Physical relative $L_2$", labelpad=2)
         else:
@@ -184,6 +200,10 @@ def draw_sensor_efficiency(parent, ctx, *, standalone=False, show_legend=True, v
             model: str(method_line_style(index)) for index, model in enumerate(models)
         },
         "shared_x_label": "Sensor count / H-grid density (%)",
+        "secondary_tick_layout": (
+            "separate aligned row" if bool(layout.get("separate_secondary_ticks", False))
+            else "combined multiline tick labels"
+        ),
         "legend_line_style": "model-specific", "shared_y_range": [ymin, ymax], "missing": missing,
     }
 
@@ -352,8 +372,15 @@ def draw_multiscale_components(parent, ctx, *, standalone=False, show_legend=Tru
                 relative_l2_by_model_scale[model][scale] = relative_l2
                 annotation = ax.text(
                     .035, .035, rf"Rel. $L_2$ = {relative_l2:.2f}",
-                    transform=ax.transAxes, ha="left", va="bottom", color=NEUTRAL_DARK,
-                    bbox=dict(boxstyle="round,pad=.12", fc="#F7F7F5", ec="none", alpha=.78),
+                    transform=ax.transAxes, ha="left", va="bottom",
+                    color=str(layout.get("relative_l2_text_color", NEUTRAL_DARK)),
+                    gid="qualitative-relative-l2",
+                    bbox=dict(
+                        boxstyle=f"round,pad={float(layout.get('relative_l2_box_pad', .12)):.3f}",
+                        fc=str(layout.get("relative_l2_box_facecolor", "#F7F7F5")),
+                        ec=str(layout.get("relative_l2_box_edgecolor", "none")),
+                        alpha=float(layout.get("relative_l2_box_alpha", .78)),
+                    ),
                 )
                 manuscript.tag_font_role(annotation, "annotation")
         row_label = parent.text(
@@ -389,16 +416,34 @@ def draw_multiscale_components(parent, ctx, *, standalone=False, show_legend=Tru
         ticks = [-limit, 0.0, limit]
         colorbar.set_ticks(ticks)
         colorbar.ax.yaxis.set_ticks_position("right")
-        colorbar.ax.tick_params(
-            length=1.4, pad=.7,
-        )
+        tick_kwargs = {
+            "length": float(layout.get("colorbar_tick_length_pt", 1.4)),
+            "pad": float(layout.get("colorbar_tick_pad_pt", .7)),
+        }
+        if layout.get("colorbar_tick_width_pt") is not None:
+            tick_kwargs["width"] = float(layout["colorbar_tick_width_pt"])
+        colorbar.ax.tick_params(**tick_kwargs)
+        if layout.get("colorbar_outline_width_pt") is not None:
+            colorbar.outline.set_linewidth(float(layout["colorbar_outline_width_pt"]))
         if row_index == 1:
             colorbar.set_label(
                 label, rotation=270, labelpad=float(layout["colorbar_label_pad_pt"]),
             )
             colorbar.ax.yaxis.set_label_position("right")
+            colorbar_label_size = layout.get("colorbar_label_fontsize")
+            manuscript.tag_font_role(
+                colorbar.ax.yaxis.label, "axis_label",
+                **({"size_pt": float(colorbar_label_size)}
+                   if colorbar_label_size is not None else {}),
+            )
+        colorbar_tick_size = float(
+            layout.get("colorbar_tick_fontsize", manuscript.SIZE_TICK_LABEL)
+        )
+        for tick_label in colorbar.ax.get_yticklabels():
+            manuscript.tag_font_role(tick_label, "tick_label", size_pt=colorbar_tick_size)
         colorbar_tick_labels[scale] = compact_colorbar_ticks(
             colorbar, ticks, use_common_exponent=True,
+            tick_size_pt=colorbar_tick_size,
         )
 
     truth_residual_max_abs = max(
@@ -451,6 +496,12 @@ def draw_multiscale_components(parent, ctx, *, standalone=False, show_legend=Tru
         "colorbar_ticks": colorbar_tick_labels,
         "relative_l2_by_model_scale": relative_l2_by_model_scale,
         "relative_l2_annotation_format": "Rel. L_2 = {value:.2f}",
+        "relative_l2_annotation_style": {
+            "text_color": str(layout.get("relative_l2_text_color", NEUTRAL_DARK)),
+            "box_facecolor": str(layout.get("relative_l2_box_facecolor", "#F7F7F5")),
+            "box_alpha": float(layout.get("relative_l2_box_alpha", .78)),
+            "box_pad": float(layout.get("relative_l2_box_pad", .12)),
+        },
         "component_cmap": manuscript.CMAP_SIGNED_COMPONENT,
         "residual_cmap": residual_cmap,
         "colorbar_tick_formatter": "compact row-specific linear raw-value ticks with a shared exponent per bar",
@@ -486,9 +537,14 @@ def _annotate_heatmap(ax, artist, matrix, fmt, *, annotate, fontsize):
                 color = "white" if luminance < .50 else "black"
             else:
                 label, color = "Missing", "#4D4D4D"
-            ax.text(column_index, row_index, label, ha="center", va="center",
-                    fontsize=fontsize if np.isfinite(value) else max(3.5, fontsize - .7),
-                    color=color)
+            text = ax.text(
+                float(column_index), float(row_index), label,
+                transform=ax.transData, ha="center", va="center",
+                multialignment="center", rotation_mode="anchor", clip_on=True,
+                fontsize=fontsize if np.isfinite(value) else max(3.5, fontsize - .7),
+                color=color, gid="panel-f-cell-value",
+            )
+            setattr(text, "_panel_f_cell_center_data", (float(column_index), float(row_index)))
 
 
 def _style_heatmap_axis(
@@ -646,9 +702,15 @@ def draw_multiscale_fidelity(parent, ctx, *, standalone=False, show_legend=True,
         else:
             ticks = np.linspace(-bias_limit, bias_limit, 5)
         colorbar.set_ticks(ticks)
-        colorbar.ax.tick_params(
-            length=1.4, pad=float(layout["colorbar_tick_pad_pt"]),
-        )
+        tick_kwargs = {
+            "length": float(layout.get("colorbar_tick_length_pt", 1.4)),
+            "pad": float(layout["colorbar_tick_pad_pt"]),
+        }
+        if layout.get("colorbar_tick_width_pt") is not None:
+            tick_kwargs["width"] = float(layout["colorbar_tick_width_pt"])
+        colorbar.ax.tick_params(**tick_kwargs)
+        if layout.get("colorbar_outline_width_pt") is not None:
+            colorbar.outline.set_linewidth(float(layout["colorbar_outline_width_pt"]))
         colorbar.set_label(
             colorbar_label, rotation=270,
             labelpad=float(layout["colorbar_label_pad_pt"]),
@@ -692,6 +754,10 @@ def draw_multiscale_fidelity(parent, ctx, *, standalone=False, show_legend=True,
             "pattern_correlation": ".2f", "variance_fraction_bias_pp": "signed .2f; zero as 0.00",
         },
         "annotation_text_color": "rendered-cell luminance: white below 0.50, black otherwise",
+        "cell_text_alignment": {
+            "horizontal": "center", "vertical": "center",
+            "coordinate_system": "matrix-cell centers in data coordinates",
+        },
         "standalone_heatmap_titles": False,
         "colorbar_titles": {
             "pattern_correlation": "Spatial pattern correlation",

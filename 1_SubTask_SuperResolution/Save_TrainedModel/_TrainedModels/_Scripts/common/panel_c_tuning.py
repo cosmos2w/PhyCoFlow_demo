@@ -165,6 +165,11 @@ VALID_SENSOR_COUNTS_BY_VERSION = {
 def apply_panel_c_tuning(layout: dict) -> dict:
     """Apply the shared API values to a loaded unified-v2 layout in place."""
     panel_c = layout["panel_c"]
+    if panel_c.get("layout_controls_source") == "yaml":
+        # A versioned publication profile may freeze all visual controls in its
+        # own YAML.  This keeps the default tuning module—and therefore the
+        # baseline rebuild—untouched.
+        return layout
     panel_c["show_sensors_on_full_ground_truth"] = bool(
         SHOW_SENSORS_ON_FULL_GROUND_TRUTH
     )
@@ -237,10 +242,24 @@ def apply_panel_c_tuning(layout: dict) -> dict:
     return layout
 
 
-def resolve_panel_c_selection(default_snapshot: int, default_sensor_count: int, version: int) -> tuple[int, int]:
+def resolve_panel_c_selection(
+    default_snapshot: int,
+    default_sensor_count: int,
+    version: int,
+    *,
+    use_module_overrides: bool = True,
+) -> tuple[int, int]:
     """Resolve and validate the cache-only snapshot and sensor selection."""
-    snapshot = int(default_snapshot if SNAPSHOT_INDEX is None else SNAPSHOT_INDEX)
-    count = int(SENSOR_COUNT if SENSOR_COUNT is not None else default_sensor_count)
+    snapshot = int(
+        default_snapshot
+        if (not use_module_overrides or SNAPSHOT_INDEX is None)
+        else SNAPSHOT_INDEX
+    )
+    count = int(
+        default_sensor_count
+        if (not use_module_overrides or SENSOR_COUNT is None)
+        else SENSOR_COUNT
+    )
     if not VALID_SNAPSHOT_MIN <= snapshot <= VALID_SNAPSHOT_MAX:
         raise ValueError(
             f"Panel C SNAPSHOT_INDEX={snapshot} is invalid; choose an integer "
