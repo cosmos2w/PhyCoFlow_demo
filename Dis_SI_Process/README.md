@@ -1,5 +1,24 @@
 # Figure 5 V4 validation workflow
 
+## Figure 5 V7R2 corrective release
+
+V7R2 orders the inherited uncertainty panels across the top row, adds statewise
+ablation distributions and all-method population spectra, and preserves the
+validated accuracy/resource scorecard. New ablation and SI content uses only
+`last.pt`. U1 remains the default main-panel field; all five physical-field
+alternatives and a comparison table support author selection.
+
+```bash
+rtk proxy conda run -n fig python Dis_SI_Process/scripts/build_figure5_v7r2_bundle.py \
+  --timestamp 20260910_1707 --strict-formal
+```
+
+The source stage validates saved ablation and Senseiver reconstruction caches,
+then computes missing spectral summaries without inference. It stops on missing
+or ambiguous sources. Source, render, LaTeX and hash-bound visual checks are
+recorded in the additive release's `results/derived` directory; prior release
+outputs are protected by before/after hashes.
+
 ## Figure 5 V7 architectural controls
 
 V7 adds a dedicated right-hand stochastic architecture/prior column and six
