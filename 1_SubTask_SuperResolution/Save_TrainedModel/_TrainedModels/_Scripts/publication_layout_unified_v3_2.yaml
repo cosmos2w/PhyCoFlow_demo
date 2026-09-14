@@ -1,0 +1,78 @@
+extends: publication_layout_unified_v3.yaml
+
+workflow_label: mixed_resolution_unified_v3_2_hybrid
+
+figure:
+  output_name: MixedResolution_unified_v3_2_hybrid
+  aesthetic_profile: nature_hybrid_v3_2_20260913
+
+# Preserve the successful compact design and quantitative hierarchy, while
+# giving the restored three-row qualitative proof materially more area.
+physical_layout:
+  canvas_width_mm: 183.0
+  row_height_scale: 1.0
+  minimum_row_gap_mm: 0.8
+  row_gap_mm: 1.5
+  rows:
+    - panels: [a]
+      height_mm: 34.0
+    - panels: [b]
+      height_mm: 66.0
+    - panels: [c, d]
+      height_mm: 82.0
+      horizontal_gap_mm: 1.5
+      width_fractions: [0.60, 0.40]
+  content_bounds:
+    a: [0.012, 0.025, 0.976, 0.940]
+    b: [0.012, 0.025, 0.976, 0.950]
+    c: [0.010, 0.015, 0.985, 0.970]
+    d: [0.010, 0.015, 0.985, 0.970]
+
+panel_c_hybrid:
+  recipe: 5_ZeroH_MRich
+  sensor_count: 512
+  snapshot_block: questionA
+  models: [DMFGen, FFM_Perceiver, Senseiver]
+  roi_fraction: 0.25
+  contour_levels: 12
+  columns_left: 0.070
+  columns_right: 0.985
+  column_gap: 0.012
+  header_y: 0.970
+  full_row_bottom: 0.690
+  full_row_height: 0.205
+  zoom_row_bottom: 0.405
+  zoom_row_height: 0.205
+  error_row_bottom: 0.120
+  error_row_height: 0.205
+  sensor_inset_scale: 0.68
+  field_colorbar_bounds: [0.085, 0.025, 0.350, 0.018]
+  error_colorbar_bounds: [0.575, 0.025, 0.350, 0.018]
+
+# Panel d keeps the V3 scientific content but is reflowed for the 40% support
+# column.  The qualitative strips remain immediately adjacent to the stacked
+# fine-scale summaries.
+panel_d_streamlined:
+  qualitative_bounds: [0.050, 0.120, 0.500, 0.750]
+  quantitative_bounds:
+    correlation: [0.625, 0.555, 0.355, 0.335]
+    variance_bias: [0.625, 0.105, 0.355, 0.335]
+  qualitative_column_gap: 0.012
+  qualitative_row_gap: 0.030
+
+# The expanded SI gallery uses the complete 256-sensor cache coverage for all
+# four models while retaining only the three scientifically central recipes.
+panel_c:
+  version_1:
+    strips:
+      - models: [DMFGen, FFM_Perceiver]
+        recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+      - models: [Senseiver, MLP_RBF]
+        recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+
+si_hybrid:
+  sensor_sweep_size_mm: [183.0, 48.0]
+  qualitative_gallery_size_mm: [183.0, 112.0]
+  multiscale_qualitative_size_mm: [183.0, 72.0]
+  multiscale_quantitative_size_mm: [183.0, 58.0]
+  table_sensor_counts: [64, 128, 256, 384, 512]

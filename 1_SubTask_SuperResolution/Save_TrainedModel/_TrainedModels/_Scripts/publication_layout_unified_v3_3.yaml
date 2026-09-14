@@ -1,0 +1,119 @@
+extends: publication_layout_unified_v3_2.yaml
+
+workflow_label: mixed_resolution_unified_v3_3
+
+figure:
+  output_name: MixedResolution_unified_v3_3
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v3_3_20260913
+  uniform_frame_linewidth_pt: 0.75
+
+# V3-3 needs a true row-spanning support channel.  The assembler consumes
+# these millimetre rectangles directly instead of coercing the layout through
+# the non-spanning legacy row helper.
+v3_3_geometry:
+  canvas_width_mm: 183.0
+  canvas_height_mm: 236.0
+  horizontal_gap_mm: 2.0
+  vertical_gap_mm: 2.0
+  row_heights_mm: {a: 35.0, b: 68.0, c: 78.0, e: 49.0}
+  lower_widths_mm: {left: 118.0, right: 63.0}
+  content_bounds:
+    a: [0.010, 0.025, 0.980, 0.950]
+    b: [0.010, 0.020, 0.980, 0.960]
+    c: [0.010, 0.015, 0.980, 0.970]
+    d: [0.015, 0.010, 0.975, 0.980]
+    e: [0.010, 0.020, 0.980, 0.960]
+
+panel_a_v3_3:
+  glyph_bounds: [0.020, 0.220, 0.285, 0.650]
+  glyph_gap: 0.010
+  roi_fraction: 0.25
+  inset_bounds: [0.600, 0.035, 0.380, 0.380]
+  resolution_block_bounds: [0.318, 0.205, 0.170, 0.650]
+  bar_bounds: [0.530, 0.200, 0.455, 0.665]
+  zero_h_tint: "#F7EEF2"
+  contains_h_tint: "#F5F6F8"
+
+panel_b_v3_3:
+  sensor_count: 512
+  sensor_counts: [64, 128, 256, 384, 512]
+  recipes: [1_H_only, 2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  sweep_recipes: [4_ZeroH_Balanced, 5_ZeroH_MRich]
+  legend_bounds: [0.090, 0.905, 0.850, 0.080]
+  recipe_axis_bounds: [0.070, 0.520, 0.900, 0.325]
+  sweep_axis_bounds:
+    - [0.070, 0.085, 0.425, 0.275]
+    - [0.545, 0.085, 0.425, 0.275]
+  zero_h_tint: "#F7EEF2"
+  dmfg_linewidth_pt: 2.0
+  baseline_linewidth_pt: 1.6
+  bar_width: 0.185
+  legend_fontsize_pt: 7.2
+  legend_columnspacing: 1.70
+  legend_handletextpad: 0.55
+
+panel_c_v3_3:
+  recipe: 5_ZeroH_MRich
+  sensor_count: 512
+  snapshot_block: questionA
+  models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  roi_fraction: 0.25
+  contour_levels: 12
+  columns_left: 0.070
+  columns_right: 0.985
+  column_gap: 0.010
+  header_y: 0.972
+  full_row_bottom: 0.690
+  full_row_height: 0.205
+  zoom_row_bottom: 0.405
+  zoom_row_height: 0.205
+  error_row_bottom: 0.120
+  error_row_height: 0.205
+  field_colorbar_bounds: [0.100, 0.025, 0.305, 0.020]
+  error_colorbar_bounds: [0.585, 0.025, 0.305, 0.020]
+  colorbar_exponent_x: 1.080
+
+panel_d_v3_3:
+  recipe: 5_ZeroH_MRich
+  qualitative_models: [DMFGen, Senseiver]
+  scales: [large, intermediate, fine]
+  quantitative_recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  quantitative_models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  statistic: median
+  qualitative_bounds: [0.065, 0.535, 0.900, 0.405]
+  quantitative_bounds:
+    correlation: [0.150, 0.300, 0.820, 0.165]
+    variance_bias: [0.150, 0.065, 0.820, 0.165]
+  qualitative_column_gap: 0.014
+  qualitative_row_gap: 0.014
+  residual_percentile: 99.5
+  component_percentile: 99.5
+  residual_cmap: berlin
+  contour_levels_truth: 5
+  contour_levels_residual: 0
+  correlation_ylim: [-0.15, 1.05]
+  bias_padding_fraction: 0.12
+
+# The established V2 heatmap renderer already provides the required stacked
+# 4 x 9 matrices and validated annotations.  These bounds retune it for the
+# 65%-width bottom-left V3-3 panel.
+panel_f:
+  layout:
+    heat_left: 0.150
+    heat_right: 0.885
+    recipe_header_y: 0.985
+    top_bounds: [0.150, 0.565, 0.735, 0.305]
+    bottom_bounds: [0.150, 0.105, 0.735, 0.305]
+    colorbar_left: 0.910
+    colorbar_width: 0.014
+    colorbar_tick_pad_pt: 1.0
+    colorbar_label_pad_pt: 6.0
+    model_label_x_axis: -0.030
+
+si_v3_3:
+  sensor_sweep_size_mm: [183.0, 48.0]
+  qualitative_gallery_size_mm: [183.0, 112.0]
+  multiscale_qualitative_size_mm: [183.0, 72.0]
+  multiscale_quantitative_size_mm: [183.0, 58.0]
+  table_sensor_counts: [64, 128, 256, 384, 512]

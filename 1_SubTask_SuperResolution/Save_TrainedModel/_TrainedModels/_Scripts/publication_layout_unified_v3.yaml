@@ -1,0 +1,101 @@
+extends: publication_layout_unified_v2_phase2.yaml
+
+workflow_label: mixed_resolution_unified_v3_streamlined
+
+figure:
+  output_name: MixedResolution_unified_v3_streamlined
+  panel_letters: [a, b, c, d]
+  aesthetic_profile: nature_streamlined_20260913
+  uniform_frame_linewidth_pt: 0.75
+
+# The design strip is intentionally shallow, the integrated performance panel
+# is the full-width hero, and the qualitative/multiscale evidence share the
+# final row.  The 172 mm height is 20.7% lower than unified-v2 (216.8 mm).
+physical_layout:
+  canvas_width_mm: 183.0
+  row_height_scale: 1.0
+  minimum_row_gap_mm: 0.8
+  row_gap_mm: 1.5
+  rows:
+    - panels: [a]
+      height_mm: 34.0
+    - panels: [b]
+      height_mm: 65.0
+    - panels: [c, d]
+      height_mm: 70.0
+      horizontal_gap_mm: 1.5
+      width_fractions: [0.47, 0.53]
+  content_bounds:
+    a: [0.012, 0.025, 0.976, 0.940]
+    b: [0.012, 0.025, 0.976, 0.950]
+    c: [0.010, 0.020, 0.980, 0.955]
+    d: [0.010, 0.020, 0.980, 0.955]
+
+panel_a_streamlined:
+  glyph_bounds: [0.035, 0.285, 0.265, 0.540]
+  glyph_gap: 0.018
+  bar_bounds: [0.365, 0.235, 0.620, 0.605]
+  zero_h_tint: "#F7EEF2"
+  contains_h_tint: "#F5F6F8"
+
+panel_b_streamlined:
+  sensor_count: 512
+  sensor_counts: [64, 128, 256, 384, 512]
+  recipes: [1_H_only, 2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  sweep_recipes: [4_ZeroH_Balanced, 5_ZeroH_MRich]
+  recipe_axis_bounds: [0.070, 0.535, 0.900, 0.340]
+  sweep_axis_bounds:
+    - [0.070, 0.105, 0.425, 0.300]
+    - [0.545, 0.105, 0.425, 0.300]
+  legend_y: 0.985
+  zero_h_tint: "#F7EEF2"
+  dmfg_linewidth_pt: 2.0
+  baseline_linewidth_pt: 1.6
+  show_dmfg_endpoint_labels: false
+
+panel_c_streamlined:
+  recipe: 5_ZeroH_MRich
+  sensor_count: 512
+  snapshot_block: questionA
+  models: [DMFGen, FFM_Perceiver, Senseiver]
+  roi_fraction: 0.25
+  contour_levels: 12
+  columns_left: 0.055
+  columns_right: 0.970
+  column_gap: 0.016
+  full_row_bottom: 0.565
+  full_row_height: 0.295
+  error_row_bottom: 0.185
+  error_row_height: 0.295
+  header_y: 0.945
+  zoom_inset_bounds: [0.605, 0.050, 0.355, 0.355]
+  sensor_inset_scale: 0.63
+  field_colorbar_bounds: [0.075, 0.075, 0.365, 0.022]
+  error_colorbar_bounds: [0.570, 0.075, 0.365, 0.022]
+
+panel_d_streamlined:
+  recipe: 5_ZeroH_MRich
+  qualitative_models: [DMFGen, Senseiver]
+  scales: [intermediate, fine]
+  quantitative_recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  quantitative_models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  statistic: median
+  qualitative_bounds: [0.035, 0.105, 0.535, 0.770]
+  quantitative_bounds:
+    correlation: [0.660, 0.565, 0.320, 0.325]
+    variance_bias: [0.660, 0.105, 0.320, 0.325]
+  qualitative_column_gap: 0.014
+  qualitative_row_gap: 0.025
+  residual_percentile: 99.5
+  component_percentile: 99.5
+  residual_cmap: berlin
+  contour_levels_truth: 5
+  contour_levels_residual: 0
+  correlation_ylim: [-0.15, 1.05]
+  bias_padding_fraction: 0.12
+
+si_streamlined:
+  sensor_sweep_size_mm: [183.0, 48.0]
+  qualitative_gallery_size_mm: [183.0, 58.0]
+  wavelet_size_mm: [183.0, 74.0]
+  table_sensor_counts: [64, 128, 256, 384, 512]

@@ -1,0 +1,132 @@
+extends: publication_layout_unified_v3_3.yaml
+
+workflow_label: mixed_resolution_unified_v3_4
+
+figure:
+  output_name: MixedResolution_unified_v3_4
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v3_4_20260914
+  uniform_frame_linewidth_pt: 0.75
+
+# Preserve the established 183 x 236 mm journal canvas.  The lower-right
+# channel remains 129 mm high; six millimetres move from c into e so the
+# stacked matrices gain materially larger cells without shrinking type.
+v3_4_geometry:
+  canvas_width_mm: 183.0
+  canvas_height_mm: 236.0
+  horizontal_gap_mm: 2.0
+  vertical_gap_mm: 2.0
+  row_heights_mm: {a: 33.0, b: 70.0, c: 72.0, e: 55.0}
+  lower_widths_mm: {left: 118.0, right: 63.0}
+  content_bounds:
+    a: [0.010, 0.020, 0.980, 0.965]
+    b: [0.010, 0.015, 0.980, 0.975]
+    c: [0.010, 0.010, 0.980, 0.980]
+    d: [0.015, 0.010, 0.975, 0.980]
+    e: [0.010, 0.010, 0.980, 0.980]
+
+panel_a_v3_4:
+  glyph_bounds: [0.020, 0.105, 0.425, 0.690]
+  glyph_gap: 0.018
+  roi_fraction: 0.25
+  inset_bounds: [0.610, 0.025, 0.365, 0.365]
+  inset_border_width_pt: 0.65
+  roi_border_width_pt: 0.65
+  connector_width_pt: 0.50
+  bar_bounds: [0.490, 0.140, 0.495, 0.700]
+  zero_h_tint: "#F7EEF2"
+  contains_h_tint: "#F5F6F8"
+
+panel_b_v3_4:
+  sensor_count: 512
+  sensor_counts: [64, 128, 256, 384, 512]
+  recipes: [1_H_only, 2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  sweep_recipes: [4_ZeroH_Balanced, 5_ZeroH_MRich]
+  recipe_axis_bounds: [0.070, 0.565, 0.900, 0.365]
+  legend_bounds: [0.120, 0.430, 0.760, 0.080]
+  sweep_axis_bounds:
+    - [0.070, 0.110, 0.425, 0.260]
+    - [0.545, 0.110, 0.425, 0.260]
+  zero_h_tint: "#F7EEF2"
+  dmfg_linewidth_pt: 2.0
+  baseline_linewidth_pt: 1.6
+  bar_width: 0.185
+  legend_fontsize_pt: 6.2
+  legend_columnspacing: 1.55
+  legend_handletextpad: 0.72
+  top_title: High resolution reconstruction (512 sensors)
+  top_title_position_axes: [0.012, 0.970]
+  zero_h_label_position_axes: [0.770, 0.970]
+
+panel_c_v3_4:
+  recipe: 5_ZeroH_MRich
+  sensor_count: 512
+  snapshot_block: questionA
+  models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  roi_fraction: 0.25
+  contour_levels: 12
+  columns_left: 0.070
+  columns_right: 0.985
+  column_gap: 0.010
+  header_y: 0.965
+  full_row_bottom: 0.710
+  full_row_height: 0.180
+  zoom_row_bottom: 0.460
+  zoom_row_height: 0.180
+  error_row_bottom: 0.210
+  error_row_height: 0.180
+  field_colorbar_bounds: [0.095, 0.060, 0.300, 0.020]
+  error_colorbar_bounds: [0.575, 0.060, 0.300, 0.020]
+  colorbar_exponent_x: 1.115
+  frustum_color: "#111111"
+  frustum_linewidth_pt: 0.55
+  frustum_linestyle: [0, [3, 2]]
+  zoom_border_width_pt: 0.65
+
+panel_d_v3_4:
+  recipe: 5_ZeroH_MRich
+  qualitative_models: [DMFGen, Senseiver]
+  scales: [large, intermediate, fine]
+  quantitative_recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  quantitative_models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  statistic: median
+  qualitative_bounds: [0.065, 0.515, 0.900, 0.430]
+  quantitative_bounds:
+    correlation: [0.150, 0.315, 0.820, 0.150]
+    variance_bias: [0.150, 0.070, 0.820, 0.150]
+  qualitative_column_gap: 0.014
+  qualitative_row_gap: 0.020
+  residual_percentile: 99.5
+  component_percentile: 99.5
+  residual_cmap: berlin
+  truth_component_cmap: PuOr_r
+  contour_levels_truth: 6
+  contour_levels_residual: 0
+  correlation_ylim: [-0.15, 1.05]
+  bias_padding_fraction: 0.12
+  fine_row_box_color: "#555555"
+  fine_row_box_linewidth_pt: 0.60
+  fine_connector_color: "#777777"
+
+# Larger vertical cells and a slightly wider heatmap field.  V3-4 adds white
+# recipe-block separators in the panel wrapper while retaining the validated
+# 4 x 9 arrays and every numerical annotation.
+panel_f:
+  layout:
+    heat_left: 0.135
+    heat_right: 0.880
+    recipe_header_y: 0.985
+    top_bounds: [0.135, 0.555, 0.745, 0.325]
+    bottom_bounds: [0.135, 0.095, 0.745, 0.325]
+    colorbar_left: 0.910
+    colorbar_width: 0.014
+    colorbar_tick_pad_pt: 1.0
+    colorbar_label_pad_pt: 6.0
+    model_label_x_axis: -0.030
+
+si_v3_4:
+  sensor_sweep_size_mm: [183.0, 48.0]
+  qualitative_gallery_size_mm: [183.0, 112.0]
+  multiscale_qualitative_size_mm: [183.0, 72.0]
+  multiscale_quantitative_size_mm: [183.0, 58.0]
+  table_sensor_counts: [64, 128, 256, 384, 512]
