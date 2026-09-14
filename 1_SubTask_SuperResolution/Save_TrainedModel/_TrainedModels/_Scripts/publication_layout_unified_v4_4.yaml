@@ -1,0 +1,14 @@
+extends: publication_layout_unified_v4_3.yaml
+
+workflow_label: mixed_resolution_unified_v4_4
+
+figure:
+  output_name: MixedResolution_unified_v4_4
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v4_4_typography_spacing_alignment_20260914
+
+v4_geometry:
+  # Pull panel e upward into the unused lower padding of the shared c/d row.
+  # V4_4 validates the resulting visible-content clearance directly rather
+  # than claiming the overlapping invisible container boxes are the gap.
+  panel_e_upshift_mm: 5.0
