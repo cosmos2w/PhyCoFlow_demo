@@ -212,10 +212,13 @@ def _write_docs(release: Path, rid: str, manifest: dict, comparison: dict,
                            "e": {"minimum_axis_width_mm": min(e["matrix_cell_widths_mm"]) * scale,
                                     "axis_height_mm": min(e["matrix_cell_heights_mm"]) * scale,
                                     "central_gap_mm": e["central_metric_gap_mm"] * scale,
-                                    "tick_label_max_center_delta_mm": e["scale_tick_label_max_center_delta_mm"] * scale,
-                                    "tick_labels_centered": e["scale_tick_labels_centered_on_matrix_columns"]}}}
+                                    "tick_label_settings_source": e["scale_tick_label_settings_source"],
+                                    "tick_label_settings_match_v4_3": e["scale_tick_label_settings_match_v4_3"],
+                                    "v4_4_tick_centering_override_applied": e["v4_4_tick_centering_override_applied"]}}}
     lqa = {"schema_version": 1, "status": "PASS", "revision": "V4_4",
-           "tested_widths_mm": [180, 162], "declared_canvas_mm": [180, 228.2],
+           "tested_widths_mm": [180, 162],
+           "declared_canvas_mm": [manifest["layout"]["canvas_width_mm"],
+                                   manifest["layout"]["canvas_height_mm"]],
            "renderer_backend": "Python/Matplotlib", "role_sizes_pt": role_sizes,
            "text_examples_by_role": manifest["layout"]["typography_qa"].get("examples", {}),
            "minimum_clearance_targets_mm": {"major_panel_blocks": 3.0,
@@ -268,7 +271,7 @@ def _write_docs(release: Path, rid: str, manifest: dict, comparison: dict,
 
 - Revision: **V4_4**
 - Status: **art reviewed, scientific release pending**
-- Backend/canvas: Python/Matplotlib, 180 × 228.2 mm; reviewed at 162 mm
+- Backend/canvas: Python/Matplotlib, 180 × 224.2 mm; reviewed at 162 mm
 - Baseline: V4_3 (`20260914_2330`), preserved byte-for-byte
 
 ## V4_4 style and layout
@@ -276,8 +279,9 @@ def _write_docs(release: Path, rid: str, manifest: dict, comparison: dict,
 - Panel-a capitalization is standardized to `Contains H-resolution training fields` and `Zero-H training`.
 - Panel-b's top-right wording is standardized to the same unboxed `Zero-H training` style used in panel a.
 - Panel e is shifted upward by {manifest['layout']['panel_e_upshift_mm']:.1f} mm without moving panel c/d scientific axes. The rendered c/d-to-e content gap is {visible_gaps['cd_e']:.3f} mm at 180 mm and {visible_gaps['cd_e'] * .9:.3f} mm at 162 mm, within {manifest['layout']['major_content_spacing_qa']['cd_e_gap_distance_from_ab_mm']:.3f} mm of the a-to-b gap.
+- The redundant outer bottom margin is reduced by 4.0 mm by translating every panel downward equally and reducing the canvas height; inter-panel geometry is unchanged.
 - All three panel-d headers are horizontally centered over their image columns; the maximum rendered center delta is {max(panels['d']['header_to_column_center_deltas_mm']):.3f} mm.
-- Panel-e `Large` / `Interm.` / `Fine` labels are bbox-centered under the exact matrix-column centers; the maximum rendered center delta is {e['scale_tick_label_max_center_delta_mm']:.6f} mm.
+- Panel-e `Large` / `Interm.` / `Fine` labels restore V4_3's exact 45-degree, right-aligned, anchored settings; the V4_4 bbox-centering override is removed.
 - Panel d's V4_3 absolute-error transform, zero anchor, normalization, arrays, metrics, and colormaps are byte/record exact in the scientific comparison; V4_4 introduces no data-mapping delta.
 
 ## Preserved author-authorized V4_1 exceptions
@@ -300,7 +304,7 @@ The V4_4 asset is art reviewed but **scientific release pending**.
 - Core claim: unchanged saved results support the resolution-transfer comparison while panel d distinctly encodes scale components and reconstruction errors.
 - Archetype: asymmetric mixed-modality figure, panels a–e.
 - Backend: Python/Matplotlib only.
-- Canvas: 180 × 228.2 mm; mandatory 162-mm insertion review.
+- Canvas: 180 × 224.2 mm after reducing only the redundant outer bottom margin; mandatory 162-mm insertion review.
 - Data boundary: no saved source array, metric, interval, mask, sensor, contour, prediction, model result, display transform, or normalization changed from V4_3.
 - Carried authorized exceptions: panel-a viewport translation, hidden redundant bar labels, and restored saved Mixed-HML sweep.
 - Release status: **art reviewed, scientific release pending** (A03/A04).

@@ -23,12 +23,12 @@ from common.io_utils import write_json
 from common.physical_figure_layout import validate_panel_text_boundaries
 from common.publication_panels_unified_v4_4 import (
     center_panel_d_headers,
-    center_panel_e_tick_labels,
     draw_panel,
     measure_major_content_gaps,
     measure_panel_b_legend_clearance,
     measure_panel_d_header_alignment,
     panel_label,
+    record_panel_e_v4_3_tick_settings,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -72,10 +72,14 @@ def _v4_3_baseline_anchor() -> dict:
 
 
 def _geometry_v4_4(layout):
-    """Shift e into unused c/d padding without moving any c/d data axes."""
+    """Shift e upward, then remove only the redundant outer bottom margin."""
     width, height, rects = v4_3._geometry_v4_3(layout)
     rects = {label: list(values) for label, values in rects.items()}
     rects["e"][1] += float(layout["v4_geometry"]["panel_e_upshift_mm"])
+    bottom_trim = float(layout["v4_geometry"]["bottom_canvas_trim_mm"])
+    height -= bottom_trim
+    for values in rects.values():
+        values[1] -= bottom_trim
     return width, height, rects
 
 
@@ -110,7 +114,12 @@ def _author_delta_contract(panel_meta: dict) -> dict:
                 "after": panel_meta["b"]["zero_h_label_after"],
             }],
             "panel_e_upshift_mm": 5.0,
-            "scope": "capitalization, unboxed label styling, padding correction, and bbox centering only",
+            "bottom_canvas_trim_mm": 4.0,
+            "panel_e_tick_label_settings": "restored exactly to V4_3",
+            "scope": (
+                "capitalization, unboxed label styling, panel-d title centering, padding correction, "
+                "V4_3 panel-e tick settings, and outer-canvas trimming only"
+            ),
         },
     }
 
@@ -165,7 +174,7 @@ def main():
     center_panel_d_headers(axes["d"], shared_axes["d"])
     typography_qa = manuscript.enforce_figure_typography(fig, font_family=manuscript.FONT_FAMILY)
     center_panel_d_headers(axes["d"], shared_axes["d"])
-    panel_meta["e"].update(center_panel_e_tick_labels(axes["e"], strict=True))
+    panel_meta["e"].update(record_panel_e_v4_3_tick_settings(axes["e"], strict=True))
     panel_meta["b"].update(measure_panel_b_legend_clearance(axes["b"], strict=True))
     panel_meta["d"].update(
         measure_panel_d_header_alignment(axes["d"], shared_axes["d"], strict=True)
@@ -221,6 +230,9 @@ def main():
         key: float(value) for key, value in layout["v4_geometry"]["vertical_gaps_mm"].items()
     }
     manifest["layout"]["panel_e_upshift_mm"] = float(layout["v4_geometry"]["panel_e_upshift_mm"])
+    manifest["layout"]["bottom_canvas_trim_mm"] = float(
+        layout["v4_geometry"]["bottom_canvas_trim_mm"]
+    )
     manifest["layout"]["major_vertical_gaps_mm"] = spacing_qa["visible_content_gaps_mm"]
     manifest["layout"]["major_vertical_gap_mm"] = min(
         manifest["layout"]["major_vertical_gaps_mm"].values()
@@ -231,8 +243,8 @@ def main():
             "relative fidelity; V4_4 preserves that evidence while tightening its final presentation."
         ),
         "revision_scope": (
-            "V4_4 text capitalization, padding correction, and bbox centering using unchanged "
-            "V4_3 display mappings, saved fields, and metrics."
+            "V4_4 text capitalization, padding correction, panel-d title centering, V4_3 panel-e "
+            "tick settings, and bottom-margin trim using unchanged display mappings and data."
         ),
         "underlying_source_arrays_unchanged": True,
     })

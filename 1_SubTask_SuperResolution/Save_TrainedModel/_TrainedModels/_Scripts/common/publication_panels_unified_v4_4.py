@@ -1,13 +1,13 @@
 """Text- and geometry-only micro-refinement for mixed-resolution Figure V4_4.
 
 V4_4 inherits V4_3's exact scientific arrays, derived absolute-error mapping,
-normalizations, limits, artists, and inventory. This layer changes only three
-approved text strings and final-render alignment/spacing geometry.
+normalizations, limits, artists, inventory, and panel-e tick-label settings.
+This layer changes only three approved text strings and final-render panel-d/
+major-layout geometry.
 """
 from __future__ import annotations
 
 import matplotlib
-from matplotlib.transforms import ScaledTranslation
 
 from . import publication_panels_unified_v3_3 as v33
 from . import publication_panels_unified_v4_3 as v43
@@ -110,68 +110,43 @@ def _matrix_axes(parent):
     return sorted(axes, key=lambda axis: axis.get_position().x0)
 
 
-def center_panel_e_tick_labels(parent, *, strict: bool = True) -> dict:
-    """Center rotated scale-label bboxes on the exact matrix column centers."""
+def record_panel_e_v4_3_tick_settings(parent, *, strict: bool = True) -> dict:
+    """Verify panel e retains V4_3's tick-label settings without modification."""
     axes = _matrix_axes(parent)
     if len(axes) != 6:
         raise RuntimeError(f"V4_4 expected six panel-e matrix axes, found {len(axes)}")
+    records = []
     for axis in axes:
         labels = [item for item in axis.get_xticklabels() if item.get_visible() and item.get_text()]
         if [item.get_text() for item in labels] != ["Large", "Interm.", "Fine"]:
             raise RuntimeError("V4_4 panel-e scale-label order changed")
         for item in labels:
-            item.set_horizontalalignment("center")
-            item.set_rotation(45)
-            item.set_rotation_mode("anchor")
-            item.set_gid("font-role:tick_label")
-            if not hasattr(item, "_v4_4_base_transform"):
-                item._v4_4_base_transform = item.get_transform()
-            item.set_transform(item._v4_4_base_transform)
-
-    parent.figure.canvas.draw()
-    renderer = parent.figure.canvas.get_renderer()
-    for axis in axes:
-        labels = [item for item in axis.get_xticklabels() if item.get_visible() and item.get_text()]
-        for tick, item in zip(axis.get_xticks(), labels):
-            target_x = axis.transData.transform((float(tick), 0.0))[0]
-            box = item.get_window_extent(renderer=renderer)
-            dx = target_x - (box.x0 + box.width / 2.0)
-            item.set_transform(
-                item._v4_4_base_transform
-                + ScaledTranslation(dx / parent.figure.dpi, 0.0, parent.figure.dpi_scale_trans)
-            )
-
-    parent.figure.canvas.draw()
-    renderer = parent.figure.canvas.get_renderer()
-    mm_per_px = 25.4 / parent.figure.dpi
-    records, deltas = [], []
-    for axis_index, axis in enumerate(axes):
-        labels = [item for item in axis.get_xticklabels() if item.get_visible() and item.get_text()]
-        for column, (tick, item) in enumerate(zip(axis.get_xticks(), labels)):
-            target_x = axis.transData.transform((float(tick), 0.0))[0]
-            box = item.get_window_extent(renderer=renderer)
-            delta = float(abs(box.x0 + box.width / 2.0 - target_x) * mm_per_px)
-            deltas.append(delta)
             records.append({
-                "axis_index": axis_index,
-                "column_index": column,
                 "text": item.get_text(),
-                "bbox_center_delta_mm": delta,
+                "horizontalalignment": item.get_horizontalalignment(),
+                "rotation_deg": float(item.get_rotation()),
+                "rotation_mode": item.get_rotation_mode(),
             })
+    settings_match = all(
+        item["horizontalalignment"] == "right"
+        and item["rotation_deg"] == 45.0
+        and item["rotation_mode"] == "anchor"
+        for item in records
+    )
     result = {
-        "scale_tick_label_center_records": records,
-        "scale_tick_label_center_deltas_mm": deltas,
-        "scale_tick_label_max_center_delta_mm": max(deltas),
-        "scale_tick_labels_centered_on_matrix_columns": max(deltas) <= 0.02,
+        "scale_tick_label_settings_source": "V4_3",
+        "scale_tick_label_settings_records": records,
+        "scale_tick_label_settings_match_v4_3": settings_match,
+        "v4_4_tick_centering_override_applied": False,
     }
-    if strict and not result["scale_tick_labels_centered_on_matrix_columns"]:
-        raise ValueError(f"V4_4 panel-e tick centering failed: {result}")
+    if strict and not settings_match:
+        raise ValueError(f"V4_4 panel-e tick settings diverged from V4_3: {result}")
     return result
 
 
 def draw_panel_e(parent, ctx, **kwargs):
     metadata = v43.draw_panel_e(parent, ctx, **kwargs)
-    metadata.update(center_panel_e_tick_labels(parent, strict=False))
+    metadata.update(record_panel_e_v4_3_tick_settings(parent, strict=True))
     return _mark(metadata, "e")
 
 

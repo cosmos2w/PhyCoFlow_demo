@@ -16,9 +16,9 @@ from common.config import FIGURES_DIR, add_common_args, ensure_output_dirs, load
 from common.io_utils import write_json
 from common.publication_panels_unified_v4_4 import (
     PANEL_OUTPUT_NAMES,
-    center_panel_e_tick_labels,
     draw_panel,
     panel_label,
+    record_panel_e_v4_3_tick_settings,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -52,7 +52,7 @@ def export_standalone_panels(ctx, cfg, layout, root: Path, rid: str):
         metadata[label] = draw_panel(label, ax, ctx)
         base.finish_figure(fig)
         if label == "e":
-            metadata[label].update(center_panel_e_tick_labels(ax, strict=True))
+            metadata[label].update(record_panel_e_v4_3_tick_settings(ax, strict=True))
         panel_base = panel_root / f"{PANEL_OUTPUT_NAMES[label]}_{rid}"
         outputs.extend(base.save_triplet(fig, panel_base, cfg))
     return outputs, metadata

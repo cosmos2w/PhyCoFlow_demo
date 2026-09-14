@@ -12,3 +12,6 @@ v4_geometry:
   # V4_4 validates the resulting visible-content clearance directly rather
   # than claiming the overlapping invisible container boxes are the gap.
   panel_e_upshift_mm: 5.0
+  # Remove the empty outer margin only. The assembler translates every panel
+  # by the same amount, preserving all inter-panel geometry and data artists.
+  bottom_canvas_trim_mm: 4.0

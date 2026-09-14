@@ -193,14 +193,23 @@ def audit(release_dir: Path, output: Path | None = None) -> dict:
 
     e = panels.get("e", {})
     center_values = e.get("matrix_numeric_centers", [])
+    tick_records = e.get("scale_tick_label_settings_records", [])
     e_pass = (len(center_values) == 72 and e.get("title_gap_qa", {}).get("passed") is True
               and min(e.get("within_metric_recipe_gaps_mm", [0])) * .9 >= 1.0
-              and e.get("scale_tick_labels_centered_on_matrix_columns") is True
-              and e.get("scale_tick_label_max_center_delta_mm", 999) <= 0.02)
-    add("panel_e_preserved_geometry_and_exact_tick_centering", e_pass,
+              and e.get("scale_tick_label_settings_source") == "V4_3"
+              and e.get("scale_tick_label_settings_match_v4_3") is True
+              and e.get("v4_4_tick_centering_override_applied") is False
+              and len(tick_records) == 18
+              and all(item.get("horizontalalignment") == "right"
+                      and item.get("rotation_deg") == 45.0
+                      and item.get("rotation_mode") == "anchor"
+                      for item in tick_records))
+    add("panel_e_v4_3_tick_settings_restored_exactly", e_pass,
         {"centered_value_count": len(center_values), "title_gaps": e.get("title_gap_qa"),
          "within_gap_at_162mm": min(e.get("within_metric_recipe_gaps_mm", [0])) * .9,
-         "tick_center_delta_mm": e.get("scale_tick_label_max_center_delta_mm")})
+         "tick_label_settings_source": e.get("scale_tick_label_settings_source"),
+         "tick_label_settings_match_v4_3": e.get("scale_tick_label_settings_match_v4_3"),
+         "v4_4_tick_centering_override_applied": e.get("v4_4_tick_centering_override_applied")})
 
     spacing = manifest.get("layout", {}).get("major_content_spacing_qa", {})
     visible_gaps = spacing.get("visible_content_gaps_mm", {})
@@ -208,12 +217,14 @@ def audit(release_dir: Path, output: Path | None = None) -> dict:
                     and set(visible_gaps) == {"a_b", "b_cd", "cd_e"}
                     and min(visible_gaps.values(), default=0) * .9 >= 3.0
                     and spacing.get("cd_e_gap_distance_from_ab_mm", 999) <= 1.0
-                    and manifest.get("layout", {}).get("panel_e_upshift_mm") == 5.0)
-    add("panel_e_upshift_and_visible_major_spacing", spacing_pass,
+                    and manifest.get("layout", {}).get("panel_e_upshift_mm") == 5.0
+                    and manifest.get("layout", {}).get("bottom_canvas_trim_mm") == 4.0)
+    add("panel_e_upshift_bottom_trim_and_visible_major_spacing", spacing_pass,
         {"visible_content_gaps_mm": visible_gaps,
          "visible_content_gaps_at_162mm": {k: v * .9 for k, v in visible_gaps.items()},
          "cd_e_gap_distance_from_ab_mm": spacing.get("cd_e_gap_distance_from_ab_mm"),
-         "panel_e_upshift_mm": manifest.get("layout", {}).get("panel_e_upshift_mm")})
+         "panel_e_upshift_mm": manifest.get("layout", {}).get("panel_e_upshift_mm"),
+         "bottom_canvas_trim_mm": manifest.get("layout", {}).get("bottom_canvas_trim_mm")})
 
     typography_pass, typography_detail = base._typography_check(files["svg"], lqa, 180.0, 162.0)
     add("text_floors_at_180_and_162_mm", typography_pass, typography_detail)
@@ -237,7 +248,7 @@ def audit(release_dir: Path, output: Path | None = None) -> dict:
     svg_editable = bool(svg_text and "<text" in svg_text)
     add("embedded_arial_and_editable_vector_text", font_pass and editable_pass and svg_editable,
         {"font": font_detail, "pdf_text": editable_detail, "svg_text_nodes": svg_editable})
-    output_pass, output_detail = base._output_check(manifest, release, files, 180.0, 228.2, 600.0)
+    output_pass, output_detail = base._output_check(manifest, release, files, 180.0, 224.2, 600.0)
     add("compact_canvas_and_export_bundle", output_pass, output_detail)
 
     passed = all(item["passed"] for item in checks)
