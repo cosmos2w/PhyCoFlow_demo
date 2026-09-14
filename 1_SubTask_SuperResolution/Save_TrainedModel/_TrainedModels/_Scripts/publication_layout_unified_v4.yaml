@@ -1,0 +1,152 @@
+extends: publication_layout_unified_v3_7.yaml
+
+workflow_label: mixed_resolution_unified_v4
+
+figure:
+  output_name: MixedResolution_unified_v4
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v4_art_style_only_20260914
+  uniform_frame_linewidth_pt: 0.65
+
+# V4 is a new fixed-canvas layout.  It retains V3-7's five-panel topology and
+# shared c+d parent GridSpec while allocating enough physical room for the
+# manuscript typography contract at both 180 mm and 162 mm review widths.
+v4_geometry:
+  canvas_width_mm: 180.0
+  canvas_height_mm: 230.0
+  vertical_gap_mm: 4.0
+  row_heights_mm: {a: 37.0, b: 64.0, cd: 77.0, e: 40.0}
+  cd_widths_mm: {c: 114.0, spacer: 5.0, d: 61.0}
+  content_bounds:
+    a: [0.012, 0.012, 0.976, 0.976]
+    b: [0.012, 0.012, 0.976, 0.976]
+    c: [0.010, 0.000, 0.985, 1.000]
+    d: [0.015, 0.000, 0.970, 1.000]
+    e: [0.012, 0.012, 0.976, 0.976]
+  # Standalone d needs a wider physical left gutter for its 8.5-pt rotated
+  # scale labels. Composite d uses the shared c+d GridSpec and is unaffected.
+  standalone_content_bounds:
+    d: [0.055, 0.000, 0.925, 1.000]
+  shared_cd_grid:
+    left_mm: 5.5
+    right_mm: 174.5
+    top_margin_mm: 8.0
+    bottom_colorbar_strip_mm: 14.0
+    # The enlarged gutters carry the frozen c/d error annotations outside the
+    # raster evidence while the two panels retain one exact shared row grid.
+    row_gap_mm: 5.0
+    c_columns: 5
+    spacer_ratio: 0.30
+    d_column_ratio: 0.92
+    column_gap_fraction: 0.10
+
+# V4 panel-local aliases are copied into the V3-7 delegate context by the V4
+# renderer.  The scientific selections and source-data controls remain the
+# active V3-7 values; only visual geometry/style values are changed here.
+panel_a_v4:
+  glyph_bounds: [0.012, 0.105, 0.390, 0.700]
+  glyph_gap: 0.026
+  roi_fraction: 0.25
+  roi_shift_parent_fraction: [-0.150, 0.180]
+  inset_bounds: [0.600, -0.105, 0.500, 0.500]
+  inset_border_width_pt: 0.70
+  roi_border_width_pt: 0.70
+  connector_width_pt: 0.50
+  blank_spacer_bounds: [0.420, 0.000, 0.075, 1.000]
+  # Raise the recipe axis so the two-line zero-H labels remain inside the
+  # panel at the 8-pt V4 floor while preserving its top edge.
+  bar_bounds: [0.505, 0.180, 0.482, 0.660]
+  zero_h_tint: "#F7EEF2"
+  contains_h_tint: "#F5F6F8"
+  target_block_ratio: [0.45, 0.55]
+  heatmap_scale_vs_v3_6: 0.90
+  minimum_inset_to_training_label_margin_mm: 6.0
+
+panel_b_v4:
+  sensor_count: 512
+  sensor_counts: [64, 128, 256, 384, 512]
+  recipes: [1_H_only, 2_H_limited, 3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  sweep_recipes: [4_ZeroH_Balanced, 5_ZeroH_MRich]
+  recipe_axis_bounds: [0.105, 0.600, 0.875, 0.375]
+  legend_bounds: [0.100, 0.400, 0.820, 0.105]
+  sweep_axis_bounds:
+    - [0.105, 0.150, 0.400, 0.220]
+    - [0.575, 0.150, 0.400, 0.220]
+  internal_height_ratios: [1.00, 0.16, 0.88]
+  zero_h_tint: "#F7EEF2"
+  dmfg_linewidth_pt: 1.60
+  baseline_linewidth_pt: 1.10
+  sweep_dmfg_linewidth_pt: 1.45
+  sweep_baseline_linewidth_pt: 1.10
+  sweep_marker_size_pt: 3.4
+  dmfg_annotation_offset_pt: 4.2
+  bar_width: 0.185
+  legend_fontsize_pt: 8.0
+  legend_columnspacing: 1.25
+  legend_handletextpad: 0.55
+  top_title: High resolution reconstruction (512 sensors)
+  top_title_position_axes: [0.012, 0.975]
+  zero_h_label_position_axes: [0.790, 0.940]
+
+panel_c_v4:
+  recipe: 5_ZeroH_MRich
+  sensor_count: 512
+  snapshot_block: questionA
+  models: [DMFGen, FFM_Perceiver, Senseiver, MLP_RBF]
+  roi_fraction: 0.25
+  contour_levels: 12
+  tile_x_pad: 0.025
+  tile_y_pad: 0.015
+  header_y: 1.030
+  row_label_x: -0.025
+  field_colorbar_bounds: [0.080, 0.300, 0.340, 0.140]
+  error_colorbar_bounds: [0.570, 0.300, 0.340, 0.140]
+  colorbar_exponent_x: 1.055
+  frustum_color: "#111111"
+  frustum_linewidth_pt: 0.50
+  frustum_linestyle: [0, [3, 2]]
+  zoom_border_width_pt: 0.75
+
+panel_d_v4:
+  recipe: 5_ZeroH_MRich
+  qualitative_models: [DMFGen, Senseiver]
+  scales: [large, intermediate, fine]
+  residual_percentile: 99.5
+  component_percentile: 99.5
+  residual_cmap: RdBu_r
+  truth_component_cmap: RdBu_r
+  contour_levels_truth: 6
+  contour_levels_residual: 0
+  tile_x_pad: 0.055
+  tile_y_pad: 0.015
+  header_y: 1.030
+
+panel_e_v4:
+  metric_gap: 0.060
+  metric_bounds:
+    correlation: [0.130, 0.260, 0.370, 0.610]
+    bias: [0.560, 0.260, 0.370, 0.610]
+  recipe_gap: 0.014
+  metric_title_y: 0.945
+  recipe_title_y: 0.810
+  metric_title_fontsize_pt: 9.0
+  recipe_title_fontsize_pt: 8.0
+  # Reserve a real label gutter for the 8-pt repeated scale labels.
+  heatmap_bottom: 0.220
+  heatmap_height: 0.470
+  annotation_fontsize_pt: 7.8
+  bottom_band_bounds: [0.075, 0.010, 0.890, 0.050]
+  colorbar_bounds:
+    correlation: [0.000, 0.000, 0.455, 1.000]
+    bias: [0.545, 0.000, 0.455, 1.000]
+  colorbar_labels_visible: false
+  metric_titles:
+    correlation: Spatial pattern correlation
+    bias: Variance allocation bias [pp]
+
+si_v4:
+  sensor_sweep_size_mm: [180.0, 48.0]
+  qualitative_gallery_size_mm: [180.0, 112.0]
+  multiscale_qualitative_size_mm: [180.0, 72.0]
+  multiscale_quantitative_size_mm: [180.0, 58.0]
+  table_sensor_counts: [64, 128, 256, 384, 512]

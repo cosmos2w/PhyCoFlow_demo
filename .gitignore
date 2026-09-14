@@ -6,6 +6,16 @@
 !/0_demo_TurbulentCombustion/
 !/1_SubTask_SuperResolution/
 !/Dis_SI_Process/
+!/figures/
+
+# Track the paper art-style contract and its mandatory author-check ledger.
+# Keep all rendered/generated figure products local.
+/figures/**
+!/figures/art_style/
+!/figures/art_style/**
+!/figures/editorial/
+/figures/editorial/**
+!/figures/editorial/02_AUTHOR_CHECKS.md
 
 /0_demo_TurbulentCombustion/**
 /1_SubTask_SuperResolution/**

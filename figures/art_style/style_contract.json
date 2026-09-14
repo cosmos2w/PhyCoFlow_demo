@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "scope": "ART_STYLE_ONLY",
+  "active_figure_numbers": [
+    3,
+    4,
+    5
+  ],
+  "status": "DESIGN_PROPOSAL_NOT_EXECUTED",
+  "read_first": [
+    "00_GENERAL_ART_STYLE.md",
+    "../editorial/02_AUTHOR_CHECKS.md"
+  ],
+  "source_policy": {
+    "require_existing_plot_or_vector_source": true,
+    "require_source_data_for_numerical_redraw": true,
+    "pdf_pixel_reconstruction_allowed": false,
+    "image_generation_for_scientific_figures_allowed": false,
+    "scientific_corrections_separate_author_approved_changeset": true
+  },
+  "canvas": {
+    "design_width_mm": 180,
+    "current_tex_insertion_width_mm": 162,
+    "insertion_scale": 0.9,
+    "journal_requirement_claim": false,
+    "preserve_pdf_physical_dimensions": true,
+    "automatic_tight_bbox_without_dimension_check": false
+  },
+  "font": {
+    "preferred_family": "Arial",
+    "fallback_families": [
+      "Liberation Sans",
+      "DejaVu Sans"
+    ],
+    "record_resolved_family": true,
+    "ship_font_files": false,
+    "size_pt_at_design_width": {
+      "panel_letter": 10,
+      "group_heading": 9,
+      "axis_label": 8.5,
+      "legend_tick_method_label": 8,
+      "dense_numeric_base_minimum": 7.8
+    },
+    "ordinary_base_text_minimum_pt_at_insertion": 7
+  },
+  "model_styles": {
+    "DMF-Gen": {
+      "color": "#C94053",
+      "marker": "o"
+    },
+    "FFM-Perceiver": {
+      "color": "#4C86A6",
+      "marker": "D"
+    },
+    "FFM-FNO": {
+      "color": "#425B76",
+      "marker": "s"
+    },
+    "SiT": {
+      "color": "#9B83C1",
+      "marker": "v"
+    },
+    "Latent FM": {
+      "color": "#725591",
+      "marker": "^"
+    },
+    "Geo-FNO": {
+      "color": "#DA9A66",
+      "marker": "x",
+      "identity_status": "AUTHOR_CHECK_A02"
+    },
+    "Senseiver": {
+      "color": "#8D9BAD",
+      "marker": ">"
+    },
+    "MLP-RBF": {
+      "color": "#4C9E91",
+      "marker": "+"
+    },
+    "Truth": {
+      "color": "#252525",
+      "marker": null
+    }
+  },
+  "palette_rules": {
+    "fig1_palette_encodes": "computational_role",
+    "fig3_a_palette_encodes": "training_resolution_component",
+    "fig3_b_palette_encodes": "model_identity",
+    "quantitative_baseline_palette_encodes": "model_identity",
+    "physical_maps_palette_encodes": "physical_quantity_not_model_identity",
+    "markers_only_for_existing_marked_series": true,
+    "no_new_spectral_markers": true
+  },
+  "colormaps": {
+    "nonnegative_field": "viridis",
+    "signed_field_or_residual": "RdBu_r",
+    "absolute_error": "YlOrRd",
+    "nonnegative_error_heatmap": "YlOrRd",
+    "ordered_correlation": "cividis",
+    "joint_density": "cividis",
+    "normalization_policy": "RETAIN_SOURCE_CLASS_PARAMETERS_LIMITS_AND_MASKS",
+    "zero_centering_policy": "DO_NOT_CHANGE_NORMALIZATION; select neutral lookup position at existing normalized zero or flag"
+  },
+  "line_sizes_pt": {
+    "axes": 0.65,
+    "grid": 0.4,
+    "map_frame": 0.45,
+    "domain_outline_min": 0.7,
+    "domain_outline_max": 0.9,
+    "truth": 1.6,
+    "DMF-Gen": 1.6,
+    "alternative": 1.1,
+    "errorbar": 0.75,
+    "marker_edge": 0.6
+  },
+  "alpha": {
+    "interval_band_default": 0.15,
+    "raw_point_default": 0.14,
+    "same_treatment_for_comparable_models": true
+  },
+  "layout_integrity_qa": {
+    "test_widths_mm": [
+      180,
+      162
+    ],
+    "maximum_unexplained_collision_count": 0,
+    "maximum_clipped_artist_count": 0,
+    "minimum_clearance_mm": {
+      "major_panel_blocks": 3,
+      "adjacent_plot_or_map_windows": 1,
+      "ordinary_text_to_non_owned_axes_or_data": 1,
+      "panel_letter_to_non_owned_text_or_data": 1.5
+    },
+    "target_clearance_mm": {
+      "major_panel_blocks_min": 4,
+      "major_panel_blocks_max": 6,
+      "adjacent_maps_min": 1,
+      "adjacent_maps_max": 1.5,
+      "map_group_to_colorbar_min": 1.5,
+      "map_group_to_colorbar_max": 2
+    },
+    "require_renderer_bbox_checks_after_final_draw": true,
+    "require_horizontal_and_vertical_gap_measurements": true,
+    "require_full_page_and_high_zoom_visual_inspection": true,
+    "require_intentional_in_data_annotation_registry": true,
+    "require_exact_semantic_style_table": true,
+    "require_grayscale_check": true,
+    "require_color_vision_deficiency_check": true,
+    "output": "LAYOUT_QA.json"
+  },
+  "freeze": [
+    "panel_ids_and_inventory",
+    "model_case_recipe_channel_membership",
+    "scientific_row_column_order",
+    "coordinates_and_arrays",
+    "numeric_labels_and_precision",
+    "masks_and_sensor_positions",
+    "zoom_bounds",
+    "contour_levels_and_paths",
+    "display_interpolation_and_triangulation",
+    "kde_bandwidth_support_and_paths",
+    "box_violin_summary_positions",
+    "interval_endpoints_and_statistical_meaning",
+    "spectral_wavelet_bins_and_bands",
+    "axis_scales_limits_ticks",
+    "color_normalization_limits_and_masks",
+    "random_seeds_and_jitter",
+    "sampling_cohort_and_aggregation"
+  ],
+  "blocked_without_author_approval": [
+    "A01_architecture_notation",
+    "A02_Fourier_baseline_identity",
+    "A03_Fig3_example_metric_scope",
+    "A04_Fig3_variable_and_bias_units",
+    "A05_Fig4_Fig5_score_reconciliation",
+    "A06_uncertainty_cost_semantics"
+  ],
+  "allowed_equivalent_brand_labels": {
+    "DMFGen": "DMF-Gen",
+    "FFM-Perc.": "FFM-Perceiver"
+  },
+  "export": {
+    "required": [
+      "editable_source_or_source_diff",
+      "PDF",
+      "PNG_preview",
+      "STYLE_CHANGELOG.md",
+      "SOURCE_LOCK.json",
+      "SCIENTIFIC_STATE_COMPARISON.json",
+      "LAYOUT_QA.json"
+    ],
+    "optional": [
+      "SVG"
+    ],
+    "preview_dpi": 600,
+    "preserve_vector_text_axes_paths": true,
+    "rasterize_full_figure": false
+  },
+  "figures": [
+    {
+      "number": 1,
+      "asset": "Figure_1_Model.pdf",
+      "panels": [
+        "a",
+        "b",
+        "c"
+      ],
+      "instruction": "FIGURE_01_MODEL.md"
+    },
+    {
+      "number": 2,
+      "asset": "Figure_IrregularGeometry.pdf",
+      "panels": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h"
+      ],
+      "instruction": "FIGURE_02_IRREGULAR_GEOMETRY.md"
+    },
+    {
+      "number": 3,
+      "asset": "Figure_MixedResolution.pdf",
+      "producer_pdf": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v3_7_20260914_1158.pdf",
+      "panels": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e"
+      ],
+      "instruction": "FIGURE_03_MIXED_RESOLUTION.md"
+    },
+    {
+      "number": 4,
+      "asset": "Figure_MultiFieldReconstruction.pdf",
+      "producer_pdf": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf",
+      "panels": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "instruction": "FIGURE_04_MULTIFIELD.md"
+    },
+    {
+      "number": 5,
+      "asset": "Figure_Evaluations.pdf",
+      "producer_pdf": "Dis_SI_Process/figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf",
+      "panels": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f"
+      ],
+      "instruction": "FIGURE_05_ENSEMBLE_COST.md"
+    }
+  ]
+}

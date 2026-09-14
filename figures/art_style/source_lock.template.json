@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "status": "NOT_RECORDED",
+  "note": "Template only. Populate from existing scientific source before editing; null is not a passed check.",
+  "repository_commit": null,
+  "figure_asset": null,
+  "source_paths_and_hashes": [],
+  "export_command": null,
+  "panels": [
+    {
+      "panel_id": null,
+      "arrays": [
+        {
+          "role": null,
+          "file_or_runtime_source": null,
+          "shape": null,
+          "dtype": null,
+          "sha256": null,
+          "nan_mask_sha256": null
+        }
+      ],
+      "scientific_labels_in_order": null,
+      "numerical_annotations": null,
+      "axis_scales_limits_ticks": null,
+      "color_norm_class_and_parameters": null,
+      "sensor_and_mask_hashes": null,
+      "zoom_bounds": null,
+      "density_or_summary_path_hashes": null,
+      "interval_or_band_endpoints": null
+    }
+  ],
+  "author_approved_label_mappings": {},
+  "unresolved_author_checks": []
+}
