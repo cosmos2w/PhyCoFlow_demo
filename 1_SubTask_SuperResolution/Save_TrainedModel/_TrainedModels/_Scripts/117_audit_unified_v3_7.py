@@ -842,25 +842,31 @@ def main():
         {"fontsize_pt": _first(e, "cell_annotation_fontsize_pt", "matrix_annotation_fontsize_pt"),
          "annotation_count": _first(e, "cell_annotation_count")},
     ))
-    check(22, "panel_e_uses_distinct_metric_colorbars", lambda: (
-        int(_first(e, "colorbar_count", default=0)) == 2
-        and _first(e, "colorbar_orientation", default="") in {"horizontal", "horizontal_band"}
-        and _first(e, "shared_numeric_colorbar", "one_shared_numeric_colorbar", default=True) is False
-        and _first(e, "correlation_bias_share_numeric_scale", default=True) is False
-        and set(_first(e, "colorbar_metrics", default=[])) == set(METRICS)
-        and _flag(e, "dual_metric_colorbars", "distinct_metric_colorbars"),
+    check(22, "panel_e_numeric_colorbars_removed", lambda: (
+        int(_first(e, "colorbar_count", default=-1)) == 0
+        and int(_first(e, "horizontal_colorbar_count", default=-1)) == 0
+        and _first(e, "colorbar_orientation", default="") == "none"
+        and _first(e, "colorbar_metrics", default=["unexpected"]) == []
+        and _flag(e, "colorbars_removed")
+        and int(_first(e, "colorbar_axes_removed", default=0)) == 2
+        and _marker_count(svg["e"], "panel-e-bottom-colorbar", "panel-e-vertical-colorbar") == 0,
         {"colorbar_count": _first(e, "colorbar_count"),
          "metrics": _first(e, "colorbar_metrics"),
-         "shared_numeric_colorbar": _first(e, "shared_numeric_colorbar", "one_shared_numeric_colorbar")},
+         "axes_removed": _first(e, "colorbar_axes_removed")},
     ))
-    check(23, "panel_e_colorbars_horizontal_bottom_band_only", lambda: (
-        _flag(e, "unified_bottom_colorbar_band", "colorbar_band_present")
-        and _first(e, "vertical_colorbars_present", default=True) is False
-        and int(_first(e, "bottom_colorbar_band_count", default=0)) == 1
-        and _marker_count(svg["e"], "panel-e-vertical-colorbar") == 0
-        and _marker_count(svg["e"], "panel-e-bottom-colorbar") >= 2,
-        {"band_count": _first(e, "bottom_colorbar_band_count"),
-         "vertical": _first(e, "vertical_colorbars_present")},
+    check(23, "panel_e_metric_titles_restored_above_blocks", lambda: (
+        _flag(e, "matrix_top_titles_restored", "metric_titles_above_matrices")
+        and int(_first(e, "matrix_top_metric_title_count", default=-1)) == 2
+        and _first(e, "metric_titles", default=[]) == [
+            "Spatial pattern correlation", "Variance allocation bias [pp]"
+        ]
+        and _first(e, "bottom_colorbar_band_count", default=-1) == 0
+        and _flag(e, "colorbar_band_removed")
+        and _marker_count(svg["e"], "panel-e-unified-colorbar-band") == 0
+        and _contains_text(svg["e"], "Spatial pattern correlation")
+        and _contains_text(svg["e"], "Variance allocation bias [pp]"),
+        {"metric_titles": _first(e, "metric_titles"),
+         "band_count": _first(e, "bottom_colorbar_band_count")},
     ))
 
     # ------------------------------------------------------------------
@@ -1118,7 +1124,7 @@ def main():
                 standalone_ok &= all(abs(left - right) <= .02 for left, right in zip(observed, target))
         passed = (
             files_ok and len(final_size) == 2 and abs(final_size[0] - 183.0) <= .02
-            and abs(final_size[1] - 221.0) <= .02
+            and abs(final_size[1] - 213.0) <= .02
             and all(abs(left - right) <= .02 for left, right in zip(pdf_size, final_size))
             and all(abs(left - right) <= 2 for left, right in zip(png_size, expected_px))
             and geometry.get("passed") is True and typography.get("passed") is True
@@ -1259,11 +1265,21 @@ def main():
             panel_values[label] = {"equal": current_values == baseline_values}
             equal &= panel_values[label]["equal"]
         for key in ("base_data_run_id", "source_data_run_id", "multiscale_run_id",
-                    "selection_contract", "representative_index"):
+                    "representative_index"):
             equal &= _canonical_json(manifest.get(key)) == _canonical_json(baseline.get(key))
+        current_selection = _canonical_json(manifest.get("selection_contract", {}))
+        baseline_selection = _canonical_json(baseline.get("selection_contract", {}))
+        for selection in (current_selection, baseline_selection):
+            panel_e = selection.get("panel_e", {}) if isinstance(selection, dict) else {}
+            if isinstance(panel_e, dict):
+                panel_e.pop("colorbar_arrangement", None)
+                panel_e.pop("metric_title_arrangement", None)
+        selection_equal = current_selection == baseline_selection
+        equal &= selection_equal
         return equal, {
             "baseline_manifest": str(baseline_path),
             "source_records_equal": source_signature(manifest) == source_signature(baseline),
+            "scientific_selection_equal": selection_equal,
             "panel_values": panel_values,
         }
 
@@ -1293,6 +1309,23 @@ def main():
                 (d_bounds, base_d_bounds),
             )
         )
+        canvas_shift_mm = (
+            float(manifest.get("layout", {}).get("canvas_height_mm", 0))
+            - float(baseline.get("layout", {}).get("canvas_height_mm", 0))
+        )
+        rows_equal_up_to_canvas_shift = all(
+            values is not None and len(values) == len(base_values)
+            and np.allclose(
+                np.asarray(values, dtype=float) - np.asarray(base_values, dtype=float),
+                canvas_shift_mm,
+                rtol=0.0,
+                atol=1e-9,
+            )
+            for values, base_values in (
+                (c_bounds, base_c_bounds),
+                (d_bounds, base_d_bounds),
+            )
+        )
         topology_fields = {
             "c": ("column_order", "column_count", "row_order", "row_cell_counts"),
             "d": (
@@ -1317,7 +1350,7 @@ def main():
         return (
             current_alignment.get("exact") is True
             and baseline_alignment.get("exact") is True
-            and rows_equal
+            and (rows_equal or rows_equal_up_to_canvas_shift)
             and row_order_equal
             and topology_equal
             and _flag(manifest, "shared_cd_parent_gridspec", "shared_cd_grid")
@@ -1327,6 +1360,9 @@ def main():
             "baseline_manifest": str(baseline_path),
             "current_alignment": current_alignment,
             "baseline_alignment": baseline_alignment,
+            "canvas_shift_mm": canvas_shift_mm,
+            "rows_equal": rows_equal,
+            "rows_equal_up_to_canvas_shift": rows_equal_up_to_canvas_shift,
             "topology": topology,
         }
 
@@ -1593,45 +1629,33 @@ def main():
     check(41, "panel_e_reduced_within_metric_gaps_larger_central_gap",
           panel_e_recipe_gap_contract)
 
-    check(42, "panel_e_metric_titles_relocated_to_colorbars", lambda: (
-        _flag(e, "metric_titles_relocated_to_colorbars")
-        and _first(e, "matrix_top_metric_title_count", default=-1) == 0
-        and _first(e, "colorbar_labels", default=[]) == [
+    check(42, "panel_e_metric_title_typography_and_units", lambda: (
+        _flag(e, "matrix_top_titles_restored", "metric_titles_above_matrices")
+        and _first(e, "matrix_top_metric_title_count", default=-1) == 2
+        and _first(e, "metric_titles", default=[]) == [
             "Spatial pattern correlation", "Variance allocation bias [pp]"
         ]
+        and abs(float(_first(e, "metric_title_fontsize_pt", default=0)) - 6.5) <= 1e-12
+        and abs(float(_first(e, "recipe_title_fontsize_pt", default=0)) - 6.5) <= 1e-12
+        and _flag(e, "bias_units_in_metric_title")
         and _contains_text(svg["e"], "Spatial pattern correlation")
         and _contains_text(svg["e"], "Variance allocation bias [pp]"),
-        {"colorbar_labels": _first(e, "colorbar_labels", default=[]),
-         "matrix_top_title_count": _first(e, "matrix_top_metric_title_count")},
+        {"metric_titles": _first(e, "metric_titles", default=[]),
+         "metric_fontsize_pt": _first(e, "metric_title_fontsize_pt"),
+         "recipe_fontsize_pt": _first(e, "recipe_title_fontsize_pt")},
     ))
 
-    def panel_e_matrix_colorbar_gap():
-        baseline, baseline_path = _baseline_v3_5_manifest()
-        current = _metric_gap_values(e)
-        old = _metric_gap_values(baseline.get("panels", {}).get("e", {}) if baseline else {})
-        reduced = (
-            current["matrix_colorbar_mm"] is not None
-            and old["matrix_colorbar_mm"] is not None
-            and current["matrix_colorbar_mm"] < old["matrix_colorbar_mm"]
-        )
-        if not reduced:
-            reduced = (
-                current["matrix_colorbar_mm"] is not None
-                and current["matrix_colorbar_mm"] > 0
-                and _flag(e, "matrix_to_colorbar_gap_reduced_vs_v3_5",
-                          "matrix_colorbar_gap_reduced")
-            )
-        return reduced and (
-            _qa_passed(_first(e, "matrix_to_colorbar_gap_qa", default={}), "passed")
-            or _flag(e, "matrix_to_colorbar_gap_qa_passed",
-                     "matrix_to_colorbar_gap_reduced_vs_v3_5")
-        ), {
-            "current_gap_mm": current["matrix_colorbar_mm"],
-            "baseline_gap_mm": old["matrix_colorbar_mm"],
-            "baseline_manifest": str(baseline_path),
-        }
+    def panel_e_title_and_outer_gaps():
+        qa = _first(e, "title_gap_qa", default={})
+        return (
+            _qa_passed(qa, "passed")
+            and float(_first(qa, "upper_gap_mm", default=-1)) >= 0.0
+            and float(_first(qa, "metric_to_recipe_gap_mm", default=-1)) >= 1.0
+            and float(_first(qa, "recipe_to_matrix_gap_mm", default=-1)) >= 0.8
+            and float(_first(qa, "lower_gap_mm", default=-1)) >= 1.5
+        ), qa
 
-    check(43, "panel_e_matrix_to_colorbar_gap_reduced", panel_e_matrix_colorbar_gap)
+    check(43, "panel_e_title_and_outer_gaps_are_positive", panel_e_title_and_outer_gaps)
 
     def v3_6_hash_anchor():
         missing, mismatches = [], []
@@ -1714,22 +1738,30 @@ def main():
         if isinstance(baseline_bounds, dict):
             for blocks in baseline_bounds.values():
                 baseline_widths.extend(float(block[2]) * 179.34 for block in blocks)
-        heights = list(map(float, _first(e, "colorbar_heights_mm", default=[])))
+        heights = list(map(float, _first(e, "matrix_cell_heights_mm", default=[])))
+        title_qa = _first(e, "title_gap_qa", default={})
+        final_size = list(map(float, _first(manifest.get("figure_contract", {}),
+                                           "final_size_mm", default=[])))
+        panel_rect = manifest.get("layout", {}).get("panel_rectangles_mm", {}).get("e", {})
         return (
-            len(heights) == 2 and np.allclose(heights, [1.84, 1.84], rtol=0.0, atol=.02)
-            and _qa_passed(_first(e, "colorbar_height_match_panel_c_qa", default={}), "passed")
-            and e.get("metric_titles_relocated_to_colorbars") is True
-            and e.get("matrix_shifted_upward_vs_v3_6") is True
+            e.get("colorbars_removed") is True
+            and int(_first(e, "colorbar_count", default=-1)) == 0
+            and e.get("matrix_top_titles_restored") is True
+            and _qa_passed(title_qa, "passed")
+            and len(final_size) == 2 and abs(final_size[1] - 213.0) <= .02
+            and abs(float(panel_rect.get("height_mm", 0)) - 38.0) <= .02
+            and len(heights) == 6 and min(heights) >= 24.5
             and len(current_widths) == 6 and len(baseline_widths) == 6
             and min(current_widths) > max(baseline_widths) - 1e-9
             and len(current_gaps["within_mm"]) == len(old_gaps["within_mm"]) == 4
             and all(new < old for new, old in zip(current_gaps["within_mm"], old_gaps["within_mm"]))
             and current_gaps["central_mm"] > max(current_gaps["within_mm"])
-        ), {"baseline_manifest": str(baseline_path), "colorbar_heights_mm": heights,
+        ), {"baseline_manifest": str(baseline_path), "matrix_cell_heights_mm": heights,
+            "title_gap_qa": title_qa, "final_size_mm": final_size, "panel_e": panel_rect,
             "current_cell_widths_mm": current_widths, "baseline_cell_widths_mm": baseline_widths,
             "current_gaps": current_gaps, "baseline_gaps": old_gaps}
 
-    check(47, "panel_e_slender_titled_colorbars_upshift_and_condensation", panel_e_v3_7_style)
+    check(47, "panel_e_no_colorbars_top_titles_shorter_canvas", panel_e_v3_7_style)
 
     def panel_c_d_v3_7_style():
         widths = list(map(float, _first(c, "zoom_border_widths_pt", default=[])))

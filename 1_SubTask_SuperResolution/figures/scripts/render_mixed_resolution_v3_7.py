@@ -56,15 +56,15 @@ def build_docs(release: Path, manifest: dict, *, qa_status="pending"):
 
 - Core conclusion: V3-7 preserves the validated conclusion that L/M/H are distinct spatial discretizations and that DMF-Gen retains the strongest H-resolution fidelity as H-resolution training fields are removed.
 - Figure archetype: asymmetric mixed-modality figure with panel **c** as the image-led physical proof and panel **e** as the primary quantitative multiscale summary.
-- Revision scope: style-only collision protection, legend synchronization, colorbar/title relocation, matrix condensation, and uniform zoom borders; no scientific redesign, source substitution, metric recomputation, retraining, or inference.
+- Revision scope: style-only collision protection, legend synchronization, matrix condensation, uniform zoom borders, and in-place removal of panel-e colorbars with metric titles restored above the matrices; no scientific redesign, source substitution, metric recomputation, retraining, or inference.
 - Target: Nature-family double-column figure.
 - Backend: Python/Matplotlib in the `fig` environment only.
-- Final size: {width:.1f} × {height:.1f} mm; the extra 9 mm gives all three panel-b plotting axes a 1.155× physical height.
-- Panel map: (a) separated L/M/H discretizations and recipe budgets; (b) grouped 512-sensor transfer plus two zero-H sensor sweeps; (c) fixed Zero-H-M-rich full/zoom/local-error proof across four models; (d) Large/Intermediate/Fine qualitative components only; (e) full-width side-by-side correlation/bias matrices with a dual horizontal colorbar band.
+- Final size: {width:.1f} × {height:.1f} mm; panel b retains the 1.155× plotting-axis height introduced in V3-6, while the panel-e colorbar space is removed from the canvas.
+- Panel map: (a) separated L/M/H discretizations and recipe budgets; (b) grouped 512-sensor transfer plus two zero-H sensor sweeps; (c) fixed Zero-H-M-rich full/zoom/local-error proof across four models; (d) Large/Intermediate/Fine qualitative components only; (e) full-width side-by-side correlation/bias matrices with one metric title above each block and no colorbars.
 - Statistics: validated physical relative-L2 means with bootstrap 95% intervals; multiscale medians with interquartile intervals; `valid_n=300` per quantitative cell.
 - Source data: existing validated cached reconstructions and summary tables only.
 - Image integrity: shared state, crop, sensor plan, and color normalization; no smoothing, sharpening, retraining, inference, or metric recomputation.
-- V3-7 preserves the V3-6 canvas and shared c+d structural grid exactly while refining only internal styling and spacing.
+- V3-7 preserves the shared c+d structural grid exactly; the canvas is shortened only by reclaiming the removed panel-e colorbar band.
 """)
     write(release / "figure_reference_update_v3_7.md", """
 # Figure-reference update — V3-6 to V3-7
@@ -76,7 +76,7 @@ def build_docs(release: Path, manifest: dict, *, qa_status="pending"):
 | Fig. 3b, lower | Fig. 3b, lower | The zero-H sweeps are unchanged and their legend handles now exactly match the thinner traces and larger markers. |
 | Fig. 3c | Fig. 3c | The five zoomed-field tiles use one uniform snapped black border; the c/d bottom-row export pixels remain exactly aligned. |
 | Fig. 3d | Fig. 3d | Unchanged from V3-6; Large/Intermediate/Fine qualitative decomposition remains qualitative-only. |
-| Fig. 3e | Fig. 3e | Matrices move upward and widen through narrower inner gaps; the wide central split remains, and slender colorbars inherit the former metric titles. |
+| Fig. 3e | Fig. 3e | Matrices retain their validated values and condensed horizontal layout; both numeric colorbars are removed, the metric titles return above their respective blocks, and the reclaimed vertical space shortens the figure. |
 | SI outputs | SI outputs | Validated standalone qualitative, quantitative, distribution, and table outputs remain available without source-value changes. |
 
 Suggested manuscript sequence is unchanged in scientific meaning: design `Fig.~3a`; aggregate transfer and budget robustness `Fig.~3b`; decisive physical proof `Fig.~3c`; qualitative scale progression `Fig.~3d`; complete numerical multiscale summary `Fig.~3e`.
@@ -125,7 +125,7 @@ V3-7 is a bounded, style-only release with no new evidence. It preserves the V3-
 - Two full-width side-by-side metric blocks, each split into Mixed-HML, Zero-H-balanced, and Zero-H-M-rich 4×3 sub-axes.
 - Cell annotations: correlation to two decimals; bias as signed two-decimal percentage points.
 - All {len(e.get('heatmap_values', []))} cells come directly from the validated summary and have `valid_n=300`.
-- Distinct correlation and bias ranges remain; recipe gaps narrow further, the central metric gap remains larger, and both colorbars match panel c thickness with the metric titles relocated above them.
+- Distinct correlation and bias annotations remain unchanged; recipe gaps and the larger central metric split are retained, the two colorbars are removed, and `Spatial pattern correlation` and `Variance allocation bias [pp]` appear above their respective blocks.
 
 ## Provenance and SI
 
@@ -146,6 +146,8 @@ V3-7 is a bounded, style-only release with no new evidence. It preserves the V3-
 - V3-6 and earlier baseline artifacts unchanged: {manifest.get('baseline_immutability', {}).get('unchanged', 'pending')}.
 - Training, model inference, and metric recomputation: not performed.
 - Main-figure fine-scale line charts: removed as redundant; validated fine-scale values remain in panel e and SI.
+- Panel-e numeric colorbars: removed; the two metric titles are restored above their matrix blocks, with bias units retained in the title.
+- Canvas height: reduced by reclaiming the removed panel-e colorbar band; panels a--d and their shared c+d alignment are unchanged.
 - QA: the V3-7 audit contract, SI completeness, source hashes, baseline hashes, and direct cache checks are enforced by `117_audit_unified_v3_7.py`.
 """)
 

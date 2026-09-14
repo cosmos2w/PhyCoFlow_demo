@@ -278,7 +278,7 @@ def build_manifest(ctx, cfg, layout, layout_path, outputs, panel_meta, rects, wi
             "backend": "Python/Matplotlib", "final_size_mm": [width, height],
             "panel_sequence": ["a", "b", "c", "d", "e"],
             "hero_evidence": ["b", "c", "e"],
-            "revision_scope": "style-only collision protection, legend synchronization, matrix condensation, and uniform borders; validated scientific content and selection are unchanged",
+            "revision_scope": "style-only collision protection, legend synchronization, matrix condensation, uniform borders, and in-place removal of panel-e colorbars with metric titles restored above the matrices; validated scientific content and selection are unchanged",
             "removed_redundant_main_figure_evidence": [
                 "fine-scale pattern-correlation line chart",
                 "fine-scale variance-allocation-bias line chart",
@@ -300,7 +300,8 @@ def build_manifest(ctx, cfg, layout, layout_path, outputs, panel_meta, rects, wi
             "panel_e": {"metrics": ["pattern_correlation", "variance_fraction_bias_pp"],
                         "matrix_shape": [4, 9],
                         "matrix_arrangement": "side_by_side_metric_blocks",
-                        "colorbar_arrangement": "dual_horizontal_bottom_band"},
+                        "colorbar_arrangement": "none",
+                        "metric_title_arrangement": "one title above each metric block"},
         },
         "cross_panel_alignment_qa": alignment_qa,
         "panel_cd_rows_aligned": alignment_qa["passed"],

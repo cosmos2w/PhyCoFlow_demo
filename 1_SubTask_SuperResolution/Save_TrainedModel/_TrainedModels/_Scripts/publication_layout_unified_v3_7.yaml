@@ -8,12 +8,14 @@ figure:
   aesthetic_profile: nature_v3_7_collision_safe_condensation_20260914
   uniform_frame_linewidth_pt: 0.75
 
-# Preserve the V3-6 four-band topology, canvas, and exact c+d shared grid.
+# Preserve the V3-6 four-band topology and exact c+d shared grid. The panel-e
+# colorbar band is removed in place, allowing the final canvas to become 8 mm
+# shorter without compressing panels a--d.
 v3_7_geometry:
   canvas_width_mm: 183.0
-  canvas_height_mm: 221.0
+  canvas_height_mm: 213.0
   vertical_gap_mm: 2.0
-  row_heights_mm: {a: 34.0, b: 67.0, cd: 68.0, e: 46.0}
+  row_heights_mm: {a: 34.0, b: 67.0, cd: 68.0, e: 38.0}
   cd_widths_mm: {c: 116.0, spacer: 5.0, d: 62.0}
   content_bounds:
     a: [0.010, 0.015, 0.980, 0.970]
@@ -116,17 +118,21 @@ panel_e_v3_7:
     correlation: [0.075, 0.260, 0.415, 0.610]
     bias: [0.550, 0.260, 0.415, 0.610]
   recipe_gap: 0.014
-  metric_title_y: 0.965
-  recipe_title_y: 0.965
-  heatmap_bottom: 0.350
-  heatmap_height: 0.560
+  metric_title_y: 0.985
+  recipe_title_y: 0.885
+  metric_title_fontsize_pt: 6.5
+  recipe_title_fontsize_pt: 6.5
+  heatmap_bottom: 0.100
+  heatmap_height: 0.700
   annotation_fontsize_pt: 6.4
-  bottom_band_bounds: [0.075, 0.180, 0.890, 0.170]
+  # These temporary bounds are consumed by the inherited V3-6 drawer before
+  # its colorbar axes are removed by the V3-7 wrapper.
+  bottom_band_bounds: [0.075, 0.010, 0.890, 0.050]
   colorbar_bounds:
-    correlation: [0.000, 0.170, 0.455, 0.240]
-    bias: [0.545, 0.170, 0.455, 0.240]
-  colorbar_labels_visible: true
-  colorbar_titles:
+    correlation: [0.000, 0.000, 0.455, 1.000]
+    bias: [0.545, 0.000, 0.455, 1.000]
+  colorbar_labels_visible: false
+  metric_titles:
     correlation: Spatial pattern correlation
     bias: Variance allocation bias [pp]
 

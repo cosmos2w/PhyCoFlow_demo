@@ -428,8 +428,10 @@ median variance-allocation bias in percentage points. Within each metric, separa
 sub-axes correspond to Mixed-HML, Zero-H-balanced, and Zero-H-M-rich. Rows are models and
 columns are Large, Intermediate, and Fine scales.
 
-The two metrics intentionally use separate numerical color scales. Every displayed cell is a
-validated median over 300 case–time pairs.
+The two metrics use separate heatmap normalizations, but panel e intentionally omits numeric
+colorbars because every cell is annotated directly. `Spatial pattern correlation` and
+`Variance allocation bias [pp]` appear above their respective matrix blocks. Every displayed
+cell is a validated median over 300 case–time pairs.
 
 ### How it is generated
 
@@ -504,15 +506,17 @@ V3-7 is a native, one-canvas Matplotlib composition rather than a screenshot ass
 2. [`common/publication_panels_unified_v3_7.py`](../../_Scripts/common/publication_panels_unified_v3_7.py)
    renders the five main panels without smoothing or model-specific normalization.
 3. [`115_assemble_mixed_resolution_unified_v3_7.py`](../../_Scripts/115_assemble_mixed_resolution_unified_v3_7.py)
-   composes the 183 × 221 mm main SVG/PDF/PNG and records source hashes.
+   composes the 183 × 213 mm main SVG/PDF/PNG and records source hashes.
 4. [`116_export_unified_v3_7_panels.py`](../../_Scripts/116_export_unified_v3_7_panels.py)
    exports standalone panels and SI assets.
 5. [`117_audit_unified_v3_7.py`](../../_Scripts/117_audit_unified_v3_7.py)
    checks geometry, typography, sources, cache identity, SI completeness, and immutability.
 
-The V3-7 audit passed **48/48 checks**. The main PDF is 183 × 221 mm, the PNG is 600 dpi
-(4,322 × 5,220 px), and text is embedded as Arial. The c/d rows share exact physical
-boundaries; the Local-error and Fine rows both end on export pixel 1,323.
+The V3-7 audit passed **48/48 checks**. The main PDF is 183 × 213 mm, the PNG is 600 dpi
+(4,322 × 5,031 px), and text is embedded as Arial. The c/d rows share exact physical
+boundaries; the Local-error and Fine rows both end on export pixel 1,134. Panel e has no
+colorbar axes; its metric and recipe title tiers use 6.5-pt type, with measured positive
+upper, inter-title, title-to-matrix, and lower gaps.
 
 ## Numerical validation and provenance checks
 
@@ -537,10 +541,10 @@ Main-output SHA-256 hashes:
 
 | Artifact | SHA-256 |
 |---|---|
-| PDF | `2c99f2abb4f764f5b0c974b00e13faee88de1b82f1f2481e07ab3f834a3d38f5` |
-| SVG | `95f6165a14f182782397194ba5c216f237a4d46ad76125b7bfee5a824f602d9c` |
-| PNG | `d3f725ca4be367a2fad2e057e2cf46b39174d306f42de8a294fe4278bf831fee` |
-| Source manifest | `7f3ac314ca2dbbe1127caf8383142ec8a81f470c91a1f60c8d7a1fff6de78c24` |
+| PDF | `fe7826b59ebb12a07ab41f92812e0c783a1702720926bed297e69a14a8198042` |
+| SVG | `d778b6d73602c646fe1d5a3af4e2913bdf01c1eac0c84f9c0780e6b0402f6df6` |
+| PNG | `cf3d3b7a225eec95dc24244d501916ebb0e52b5578fdc934a1a5e11a74bfe5da` |
+| Source manifest | `0c1c00c4f1dc1c29eb1dfe18c0a9980a0bbb3a081773cdbdd92677d0cfd4e59b` |
 
 ## Limitations and interpretation boundaries
 

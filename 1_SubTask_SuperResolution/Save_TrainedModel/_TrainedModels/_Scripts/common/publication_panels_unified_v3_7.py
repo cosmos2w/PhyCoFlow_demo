@@ -276,20 +276,32 @@ def draw_panel_d(parent, ctx: v33.PublicationContext, **kwargs):
 
 
 def draw_panel_e(parent, ctx: v33.PublicationContext, **kwargs):
-    """Move metric titles to slender colorbars and widen matrix cells."""
+    """Remove numeric colorbars and restore metric titles above the matrices."""
     ctx.v2["panel_e_v3_6"] = ctx.v2["panel_e_v3_7"]
     metadata = v36.draw_panel_e(parent, ctx, **kwargs)
     cfg = ctx.v2["panel_e_v3_7"]
     title_map = {
-        "Spatial pattern correlation": str(cfg["colorbar_titles"]["correlation"]),
-        "Variance allocation bias": str(cfg["colorbar_titles"]["bias"]),
+        "Spatial pattern correlation": str(cfg["metric_titles"]["correlation"]),
+        "Variance allocation bias": str(cfg["metric_titles"]["bias"]),
     }
-    removed_titles = 0
-    for text in list(parent.texts):
-        if text.get_text() in title_map:
-            text.remove(); removed_titles += 1
-    if removed_titles != 2:
-        raise RuntimeError(f"Expected to remove two panel-e matrix titles, removed {removed_titles}")
+    metric_titles = []
+    recipe_titles = []
+    recipe_labels = set(metadata["recipe_labels"])
+    for item in list(parent.texts):
+        if item.get_text() in title_map:
+            item.set_text(title_map[item.get_text()])
+            item.set_y(float(cfg["metric_title_y"]))
+            item.set_fontsize(float(cfg["metric_title_fontsize_pt"]))
+            item.set_fontweight("semibold")
+            metric_titles.append(item)
+        elif item.get_text() in recipe_labels:
+            item.set_y(float(cfg["recipe_title_y"]))
+            item.set_fontsize(float(cfg["recipe_title_fontsize_pt"]))
+            recipe_titles.append(item)
+    if len(metric_titles) != 2 or len(recipe_titles) != 6:
+        raise RuntimeError(
+            f"Unexpected panel-e title count: metrics={len(metric_titles)}, recipes={len(recipe_titles)}"
+        )
     all_axes = parent.figure.findobj(
         match=lambda item: isinstance(item, matplotlib.axes.Axes)
     )
@@ -299,10 +311,15 @@ def draw_panel_e(parent, ctx: v33.PublicationContext, **kwargs):
     )
     if len(colorbar_axes) != 2:
         raise RuntimeError(f"Expected two panel-e colorbars, found {len(colorbar_axes)}")
-    colorbar_titles = list(title_map.values())
-    for axis, title in zip(colorbar_axes, colorbar_titles):
-        axis.set_xlabel("")
-        v33._tag(axis.set_title(title, pad=1.0, fontweight="semibold"), "axis_label")
+    colorbar_band_axes = [
+        axis for axis in all_axes
+        if str(axis.get_gid() or "") == "panel-e-unified-colorbar-band"
+    ]
+    if len(colorbar_band_axes) != 1:
+        raise RuntimeError(f"Expected one panel-e colorbar band, found {len(colorbar_band_axes)}")
+    for axis in colorbar_axes:
+        axis.remove()
+    colorbar_band_axes[0].remove()
     corr = list(map(float, cfg["metric_bounds"]["correlation"]))
     bias = list(map(float, cfg["metric_bounds"]["bias"]))
     central_gap = bias[0] - (corr[0] + corr[2])
@@ -313,23 +330,40 @@ def draw_panel_e(parent, ctx: v33.PublicationContext, **kwargs):
          if str(axis.get_gid() or "") == "panel-e-metric-matrix"],
         key=lambda axis: axis.get_position().x0,
     )
-    if len(heat_axes) != 6 or len(colorbar_axes) != 2:
-        raise RuntimeError(f"Unexpected panel-e axes: heat={len(heat_axes)}, colorbars={len(colorbar_axes)}")
+    if len(heat_axes) != 6:
+        raise RuntimeError(f"Unexpected panel-e heatmap axes: {len(heat_axes)}")
     heat_boxes = [axis.get_position() for axis in heat_axes]
     within_gaps_mm = [
         float((heat_boxes[right].x0 - heat_boxes[left].x1) * figure_width_mm)
         for left, right in ((0, 1), (1, 2), (3, 4), (4, 5))
     ]
     central_gap_mm = float((heat_boxes[3].x0 - heat_boxes[2].x1) * figure_width_mm)
-    colorbar_top = max(axis.get_position().y1 for axis in colorbar_axes)
-    matrix_bottom = min(box.y0 for box in heat_boxes)
-    matrix_colorbar_gap_mm = float((matrix_bottom - colorbar_top) * figure_height_mm)
-    colorbar_heights_mm = [float(axis.get_position().height * figure_height_mm)
-                           for axis in colorbar_axes]
-    target_c_height_mm = 8.0 * .230
-    colorbar_height_match = all(abs(height - target_c_height_mm) <= .02
-                                for height in colorbar_heights_mm)
     cell_widths_mm = [float(box.width * figure_width_mm) for box in heat_boxes]
+    cell_heights_mm = [float(box.height * figure_height_mm) for box in heat_boxes]
+    renderer = parent.figure.canvas.get_renderer()
+    parent_box = parent.get_window_extent(renderer=renderer)
+    matrix_top_px = max(axis.get_window_extent(renderer=renderer).y1 for axis in heat_axes)
+    matrix_bottom_px = min(axis.get_window_extent(renderer=renderer).y0 for axis in heat_axes)
+    metric_boxes = [item.get_window_extent(renderer=renderer) for item in metric_titles]
+    recipe_boxes = [item.get_window_extent(renderer=renderer) for item in recipe_titles]
+    px_to_mm = 25.4 / float(parent.figure.dpi)
+    upper_gap_mm = float((parent_box.y1 - max(box.y1 for box in metric_boxes)) * px_to_mm)
+    metric_recipe_gap_mm = float((min(box.y0 for box in metric_boxes)
+                                  - max(box.y1 for box in recipe_boxes)) * px_to_mm)
+    recipe_matrix_gap_mm = float((min(box.y0 for box in recipe_boxes) - matrix_top_px) * px_to_mm)
+    lower_gap_mm = float((matrix_bottom_px - parent_box.y0) * px_to_mm)
+    title_gap_qa = {
+        "passed": (
+            upper_gap_mm >= 0.0
+            and metric_recipe_gap_mm >= 1.0
+            and recipe_matrix_gap_mm >= 0.8
+            and lower_gap_mm >= 1.5
+        ),
+        "upper_gap_mm": upper_gap_mm,
+        "metric_to_recipe_gap_mm": metric_recipe_gap_mm,
+        "recipe_to_matrix_gap_mm": recipe_matrix_gap_mm,
+        "lower_gap_mm": lower_gap_mm,
+    }
     metadata.update({
         "recipe_gap_parent_fraction": float(cfg["recipe_gap"]),
         "recipe_gap_reduced_vs_v3_6": float(cfg["recipe_gap"]) < .028,
@@ -343,34 +377,38 @@ def draw_panel_e(parent, ctx: v33.PublicationContext, **kwargs):
         "central_metric_gap_mm": central_gap_mm,
         "central_gap_larger_than_recipe_gap": central_gap > float(cfg["recipe_gap"]),
         "matrix_cell_widths_mm": cell_widths_mm,
+        "matrix_cell_heights_mm": cell_heights_mm,
         "matrix_cells_widened_vs_v3_6": min(cell_widths_mm) > 21.45,
-        "matrix_top_titles_removed": True,
-        "matrix_top_metric_title_count": 0,
-        "colorbar_labels": colorbar_titles, "colorbar_text_label_count": 2,
-        "colorbar_labels_hidden": False, "colorbar_metric_labels_removed": False,
-        "colorbar_titles": colorbar_titles,
-        "metric_titles_relocated_to_colorbars": True,
-        "correlation_colorbar_label_present": True, "bias_colorbar_label_present": True,
-        "bias_colorbar_units": "pp",
+        "matrix_top_titles_removed": False,
+        "matrix_top_titles_restored": True,
+        "matrix_top_metric_title_count": 2,
+        "metric_titles": list(title_map.values()),
+        "metric_titles_above_matrices": True,
+        "metric_title_fontsize_pt": float(cfg["metric_title_fontsize_pt"]),
+        "recipe_title_fontsize_pt": float(cfg["recipe_title_fontsize_pt"]),
+        "bias_units_in_metric_title": True,
+        "title_gap_qa": title_gap_qa,
+        "colorbar_count": 0, "horizontal_colorbar_count": 0,
+        "bottom_colorbar_band_count": 0, "colorbar_band_count": 0,
+        "colorbar_orientation": "none", "colorbar_metrics": [],
+        "dual_metric_colorbars": False, "distinct_metric_colorbars": False,
+        "shared_numeric_colorbar": False, "correlation_bias_share_numeric_scale": False,
+        "vertical_colorbars_present": False, "unified_bottom_colorbar_band": False,
+        "literal_shared_numeric_colorbar": False,
+        "colorbar_labels": [], "colorbar_text_label_count": 0,
+        "colorbar_labels_hidden": True, "colorbar_metric_labels_removed": True,
+        "correlation_colorbar_label_present": False, "bias_colorbar_label_present": False,
+        "colorbars_removed": True, "colorbar_axes_removed": 2,
+        "colorbar_band_removed": True, "colorbar_heights_mm": [],
         "matrix_vertical_shift_parent_fraction_vs_v3_6": float(cfg["heatmap_bottom"]) - .310,
-        "matrix_shifted_upward_vs_v3_6": float(cfg["heatmap_bottom"]) > .310,
-        "matrix_to_colorbar_gap_qa": {"passed": matrix_colorbar_gap_mm > 0.0},
-        "matrix_to_colorbar_gap_mm": matrix_colorbar_gap_mm,
-        "colorbar_heights_mm": colorbar_heights_mm,
-        "panel_c_colorbar_target_height_mm": target_c_height_mm,
-        "colorbar_height_match_panel_c_qa": {
-            "passed": colorbar_height_match,
-            "target_mm": target_c_height_mm,
-            "observed_mm": colorbar_heights_mm,
-        },
-        "colorbars_slender_like_panel_c": colorbar_height_match,
-        "colorbar_band_bottom_parent_fraction": float(cfg["bottom_band_bounds"][1]),
-        "colorbar_band_height_parent_fraction": float(cfg["bottom_band_bounds"][3]),
+        "matrix_shifted_upward_vs_v3_6": False,
+        "matrix_to_colorbar_gap_qa": {"passed": True, "not_applicable": True},
+        "matrix_to_colorbar_gap_mm": None,
+        "colorbar_band_bottom_parent_fraction": None,
+        "colorbar_band_height_parent_fraction": 0.0,
     })
-    if not colorbar_height_match:
-        raise RuntimeError(
-            f"Panel-e colorbar heights {colorbar_heights_mm} do not match panel-c {target_c_height_mm} mm"
-        )
+    if not title_gap_qa["passed"]:
+        raise RuntimeError(f"Panel-e title/matrix gaps failed: {title_gap_qa}")
     return metadata
 
 
