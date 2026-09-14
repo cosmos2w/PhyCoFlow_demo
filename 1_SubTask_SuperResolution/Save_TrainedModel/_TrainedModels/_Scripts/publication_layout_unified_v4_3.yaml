@@ -1,0 +1,87 @@
+extends: publication_layout_unified_v4_2.yaml
+
+workflow_label: mixed_resolution_unified_v4_3
+
+figure:
+  output_name: MixedResolution_unified_v4_3
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v4_3_multiscale_refinement_20260914
+
+# Use the smallest uniform major-row gap that remains above the mandatory 3-mm
+# clearance after 0.9x manuscript insertion scaling. The c/d container begins
+# 1.6 mm farther left so all three d headers can be truly centered without
+# clipping; the remaining 3.4-mm c/d spacer still scales to 3.06 mm.
+v4_geometry:
+  canvas_width_mm: 180.0
+  canvas_height_mm: 228.2
+  vertical_gap_mm: 3.4
+  vertical_gaps_mm: {a_b: 3.4, b_cd: 3.4, cd_e: 3.4}
+  row_heights_mm: {a: 37.0, b: 64.0, cd: 77.0, e: 40.0}
+  cd_widths_mm: {c: 114.0, spacer: 3.4, d: 62.6}
+
+panel_a_v4:
+  # The same native field and ROI size are retained. The author-authorized
+  # horizontal translation moves the viewport into a red/white/blue region.
+  roi_shift_parent_fraction: [-0.050, 0.180]
+  # Raise the maps and their child insets to reserve a title band below.
+  glyph_bounds: [0.012, 0.270, 0.390, 0.650]
+  title_position_parent_y: 0.155
+  title_to_inset_minimum_mm: 1.0
+  resolution_caption_fontsize_pt: 8.0
+  resolution_caption_role: tick_label
+  identity_label_x: 0.965
+  identity_label_y: 0.955
+  identity_label_fontsize_pt: 8.0
+
+panel_b_v4:
+  sweep_recipes: [3_Mixed_HML, 4_ZeroH_Balanced, 5_ZeroH_MRich]
+  recipe_axis_bounds: [0.075, 0.680, 0.905, 0.300]
+  legend_bounds: [0.100, 0.465, 0.820, 0.090]
+  sweep_axis_bounds:
+    - [0.0650, 0.150, 0.300, 0.250]
+    - [0.3725, 0.150, 0.300, 0.250]
+    - [0.6800, 0.150, 0.300, 0.250]
+  legend_bbox_minimum_clearance_mm: 1.15
+  hide_dmfg_bar_value_annotations: true
+  hide_grouped_bar_left_spine: true
+  expected_sweep_count: 3
+
+panel_c_v4:
+  # Labels now occupy the 5-mm inter-row gutter above the error tiles, so the
+  # two colourbars can move toward the maps while retaining a 1.5-mm minimum.
+  bottom_label_position: top
+  bottom_label_offset_mm: 0.80
+  field_colorbar_bounds: [0.080, 0.555, 0.340, 0.140]
+  error_colorbar_bounds: [0.570, 0.555, 0.340, 0.140]
+
+panel_d_v4:
+  # V4_3 changes only the residual display derivation: the saved signed
+  # prediction-minus-truth arrays are mapped through abs() and Normalize(0,L),
+  # retaining the exact V4_2 positive clipping limit L and magma lookup.
+  truth_component_cmap: Greys_r
+  residual_cmap: magma
+  truth_contour_color: "#F5F5F5"
+  truth_contour_halo_color: "#202020"
+  truth_contour_linewidth_pt: 0.32
+  truth_contour_halo_linewidth_pt: 0.65
+  map_group_left_shift_mm: 2.2
+  row_label_left_clearance_mm: 0.20
+  row_label_to_truth_map_minimum_mm: 1.0
+  panel_tag_x: -0.015
+  panel_tag_y_align_to: c
+  panel_tag_bbox_x_align_to: row_label_left_boundary
+
+panel_e_v4:
+  # Larger axes, smaller within-block and central gaps, and a trimmed right
+  # margin increase cell area while retaining the left row-label gutter.
+  metric_gap: 0.025
+  metric_bounds:
+    correlation: [0.110, 0.210, 0.420, 0.535]
+    bias: [0.545, 0.210, 0.440, 0.535]
+  recipe_gap: 0.0065
+  metric_title_y: 0.970
+  recipe_title_y: 0.855
+  heatmap_bottom: 0.210
+  heatmap_height: 0.535
+  minimum_cell_area_growth_vs_v4: 1.35
+  maximum_numeric_center_error_fraction: 0.01
