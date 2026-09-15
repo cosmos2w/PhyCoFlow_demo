@@ -66,7 +66,11 @@ The role ordering is strict: `panel label > major title > axis/subplot title >
 tick/legend > in-plot annotation`.  A renderer must resolve every visible text
 artist to one of these roles and record its role, resolved size, weight and
 semantic panel owner in `LAYOUT_QA.json`. **Only panel letters may be bold; all
-other visible text must use regular weight.** Do not
+other visible text must use regular weight.** The sole current author-approved
+exception is the exact model name **DMF-Gen** in the visible model-label rails
+of Figure 5 panels a and f; that repeated identity must be bold while every
+other model name remains regular. Record this exception per artist in the
+layout QA so it cannot spread to titles, values, legends or other figures. Do not
 promote dense values to tick size, or allow a legend to compete with a major
 title.  A constrained annotation may be reduced below 7.0 pt only when the
 complete 7.0-pt string cannot fit after wrapping, equivalent number formatting

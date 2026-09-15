@@ -4,7 +4,7 @@
 
 **Active producer:** `Dis_SI_Process/figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf`.
 
-**Active art export:** `Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v1_20260915_0019/figure5_log.pdf`.
+**Active art export:** `Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v2_20260915_0804/figure5_log.pdf`.
 
 Read the general contract and author checks A05/A06. The editorial revision moves this figure's evidence into Results without changing its figure number or panel contents.
 
@@ -56,6 +56,11 @@ Keep five aligned columns: unobserved-field relative-L2, training-update time, t
 
 Use a single row-coordinate system across all axes, equal bar height, consistent padding and common model-label alignment. The accuracy column's numerical labels should remain associated with the same points and retain their exact values/precision. Use the same palette as a–c and Figs. 2–4. Model names may be dark neutral with a colour key rather than tiny coloured text, but identity must remain unambiguous.
 
+The exact model name **DMF-Gen** is deliberately bold in the visible model-name
+rails of a and f; retain this emphasis and keep all other model names regular.
+The point symbols in the left-most f axis must be large hollow symbols with the
+same 5.8-pt size, 0.9-pt edge and method-specific shapes used in a/b.
+
 Keep the horizontal bars and point comparison types as currently drawn. Do not add a connected accuracy–cost trade-off curve or a new “best” badge. Preserve zero baselines and original scales for all cost axes. Use clear units: milliseconds per update, GiB, milliseconds, MiB, preserving the source's binary memory units rather than silently converting to GB/MB.
 
 The final memory column has filled and hollow encodings for model state and peak memory. Keep both exact lengths and their association. They are not additive stacked components: do not stack or sum them. Make the hollow outline visible at about 0.8 pt and ensure the small filled model-state entry does not vanish. Align the “Model” and “Peak” labels/key outside the bars without changing their meaning.
@@ -68,20 +73,21 @@ A05 must reconcile 0.1063 here with 0.117 in the preceding multi-field evaluatio
 
 Check that all five generative methods are present in a–c, both six-category violin axes align, e contains truth plus six variant traces, and every scorecard row matches across its five columns. Ensure no coloured baseline is nearly invisible, no legend covers the high-band tail and no bar/interval geometry changes. Review the complete figure at 162 mm and record the latency/ensemble-scope question as a scientific release gate, not an art defect.
 
-For the active art V1 export, use a fixed `180 x 200 mm` MediaBox rather than
+For the active art V2 export, use a fixed `180 x 220 mm` MediaBox rather than
 the baseline's approximately `258 x 249 mm` tight crop. Apply the established
 hierarchy at the final physical size: panel labels `11.0 pt` bold, axis titles
 approximately `8.5 pt`, ticks and legends `7.8 pt`, and ordinary in-plot
 annotations `7.0 pt`. At 162-mm insertion width, ordinary ticks and legends
 therefore remain at least `7 pt`. Keep every scientific artist coordinate,
-scale and limit unchanged. Wrap the four long Panel-d categories onto two lines
-and retain one common `45 degree` rotation. Use a `7.3:2.7` Panel-d/e width
-split with `0.30` internal wspace, raise only the lower violin row by `2.5 mm`,
-shorten the upper violin axes from below by `8 mm`, inset the middle-row top by
-`1 mm`, drop the d/e tags by `1 mm`, and translate the aligned scorecard row
-downward by `2.5 mm` to preserve at least `3 mm` rendered clearance from both
-adjacent major rows. Place the Panel-f tag in the left gutter, top-aligned with
-its scorecard axes. The release
+scale and limit unchanged. Use one measured visible left rail for the longest
+model names, both Panel-d y-axis titles and tags a/d/f, and one common right
+axes boundary for all three major rows. Use an exact `2:1` Panel-d/e plotting
+width ratio with a `14 mm` inter-panel gutter. Both Panel-d violin axes must be
+at least `33 mm` high; wrap the two y-axis titles consistently and verify at
+least `3 mm` title-to-title clearance. Wrap the four long Panel-d categories
+onto two lines and retain one common `45 degree` rotation. Give Panel f four
+equal `4 mm` physical gaps and align its method-label spine with Panel a. The release
 must include fixed-size PDF/SVG/PNG outputs, a true vector-derived 162-mm render,
 grayscale and deuteranopia reviews, an exact before/after scientific-state hash,
-and zero clipped text, tick-label overlaps or panel-tag/data-window overlaps.
+and zero clipped text, text-to-text overlaps, text-to-nonowned-axes overlaps,
+tick-label overlaps or panel-tag/data-window overlaps.
