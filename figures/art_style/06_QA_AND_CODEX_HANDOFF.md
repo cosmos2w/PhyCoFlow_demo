@@ -85,7 +85,7 @@ Check manuscript fit with the existing caption. A standalone figure can be well 
 | 1 | a–c; four channel surfaces; both cross-attention stages; local and global routes; three generation states; grid/mesh/point-cloud icons |
 | 2 | a–h; both elasticity and airfoil example pairs; eight methods in applicable quantitative panels; both geometry outlines, boxplot groups and ridgeline groups |
 | 3 | a–e; three resolutions; five recipes; four methods in b; three V4_4-carried sweeps (Mixed-HML, Zero-H-balanced, Zero-H-M-rich); five columns in c; three scale rows × three columns in d; two 4×9 heatmaps in e |
-| 4 | a–d; eight montage columns × three variables; three 8×6 heatmaps; three LSD/spectrum pairs; three PDF/JSD pairs |
+| 4 | a–d; seven displayed montage columns × three reconstruction/error field pairs (truth source retained); three displayed 8×5 heatmaps backed by complete 8×6 source matrices; three LSD/spectrum pairs; three PDF/JSD pairs |
 | 5 | a–f; five methods in a–c; two six-category violin axes; truth plus six spectra; eight scorecard rows × five columns |
 
 ## Deliverable structure in the figure repository

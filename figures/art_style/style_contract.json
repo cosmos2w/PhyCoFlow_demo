@@ -137,13 +137,44 @@
         "saved_height_in": 0.1645614035,
         "transfer_target": "panel_a_master_lower_gap"
       },
-      "panel_d_geometry": {
-        "shared_violin_width": 0.46,
-        "violin_data_right_fraction": 0.5,
-        "mean_x_axes_fraction": 0.66,
-        "panel_d_column_wspace": 0.06,
-        "minimum_rendered_violin_to_mean_clearance_mm_at_162mm": 1.5,
-        "maximum_tick_label_overlap_count": 0
+      "art_v3_authorized_display_inventory_override": {
+        "panel_a_displayed_columns": [
+          "T only",
+          "T + U1",
+          "CO + T + U1 + p",
+          "FFM-FNO",
+          "Latent FM",
+          "SiT",
+          "Senseiver"
+        ],
+        "panel_a_ground_truth_display_column": "OMITTED_SOURCE_RETAINED",
+        "panel_a_displayed_map_count": 42,
+        "panel_a_field_spacer_ratio_before_after": [
+          0.25,
+          0.125
+        ],
+        "panel_a_horizontal_display_expansion": "AUTHORIZED_COORDINATES_AND_ARRAYS_UNCHANGED",
+        "panel_a_repeated_row_type_labels": [
+          "Recon.",
+          "Error"
+        ],
+        "panel_b_displayed_shape_per_matrix": [
+          8,
+          5
+        ],
+        "panel_b_displayed_numeric_values": 120,
+        "panel_b_unobs_display_column": "OMITTED_COMPLETE_8x6_SOURCE_RETAINED",
+        "panel_d_mean_prefix": "",
+        "panel_d_mean_values_retained": 24,
+        "panel_d_geometry": {
+          "shared_violin_width": 0.66,
+          "violin_data_right_fraction": 0.66,
+          "mean_x_axes_fraction": 0.71,
+          "rendered_intercolumn_gap_mm": 6.0,
+          "maximum_clipped_mean_count": 0,
+          "maximum_tick_label_overlap_count": 0,
+          "tick_label_collision_fallback": "hide all three label sets; retain ticks transforms and limits"
+        }
       }
     },
     "figure_3_v4_4_continuity_override": {
@@ -351,6 +382,7 @@
       "number": 4,
       "asset": "Figure_MultiFieldReconstruction.pdf",
       "producer_pdf": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf",
+      "latest_art_export": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v3_20260914_2343.pdf",
       "panels": [
         "a",
         "b",

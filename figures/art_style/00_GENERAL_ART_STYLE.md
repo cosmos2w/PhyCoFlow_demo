@@ -131,9 +131,19 @@ Latest author-authorized Figure 4 exception: the far-right Panel-a colourbars ma
 be removed in the compact art revision because the field/error limits remain
 frozen and recorded in the source manifest.  This exception does not authorize
 rescaling, shared-limit substitution or colourbar removal in another figure.
+Figure 4 V3 may also omit the displayed Ground truth montage column, omit the
+displayed Panel-b `Unobs.` column, remove the `mu=` prefix from Panel-d mean
+annotations, and horizontally expand the seven retained Panel-a axes. These
+are display-inventory/geometry exceptions only: the complete source matrices,
+truth arrays, numeric mean values, coordinates, transforms, masks, limits,
+normalizations, distributions and scientific ordering remain frozen and must
+be retained in the source-state comparison.
 Panel-c spectral y ticks may be thinned to at most four labelled levels without
 changing the log scale or axis limits, and Panel-d tick labels may be staggered
-or repositioned without changing their numerical values.
+or repositioned without changing their numerical values. For Figure 4 V3 only,
+all Panel-d tick labels may instead be hidden consistently when a final-render
+single-line collision test fails; hiding labels does not authorize changing the
+tick locations, log transforms or axis limits.
 
 ### Mandatory layout-integrity and cross-figure consistency gates
 

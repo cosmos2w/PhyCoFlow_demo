@@ -2,15 +2,17 @@
 
 **Manuscript asset:** `Figure_MultiFieldReconstruction.pdf`; D p. 12; LaTeX label `fig:MultiFieldReconstruction`.
 
-**Active producer:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf`.
+**Scientific baseline:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf`.
+
+**Active art export:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v3_20260914_2343.pdf`.
 
 Read the general contract. Preserve panels a–d and their existing scientific contents.
 
 ## Inventory
 
-Panel a contains three displayed fields (methane mass fraction, pressure, streamwise velocity), one reference column, three DMF-Gen observation regimes and four temperature-only baseline columns. Predictions have associated absolute-error maps and numerical labels. Panel b has three 8×6 mean-error heatmaps, including the Unobs. aggregate. Panel c has three eight-method LSD bar charts with their original intervals/state points and three example spectra. Panel d has three reference joint-PDF maps and three eight-method JSD violin groups.
+Panel a contains three displayed fields (methane mass fraction, pressure, streamwise velocity), three DMF-Gen observation regimes and four temperature-only baseline columns. Predictions have associated absolute-error maps and numerical labels. Panel b displays three 8×5 mean-error heatmaps; the frozen source still contains the sixth Unobs. aggregate column. Panel c has three eight-method LSD bar charts with their original intervals/state points and three example spectra. Panel d has three reference joint-PDF maps and three eight-method JSD violin groups.
 
-Keep all eight columns of a, all three heatmaps and all spectra/violins. Do not add temperature or carbon-monoxide rows to the montage or remove the four baseline comparisons. The physical field subset in a is deliberate: it shows variables unobserved in the temperature-only regime.
+The current author-approved display inventory is seven Panel-a columns in this exact order: T only, T+U1, CO+T+U1+p, FFM-FNO, Latent FM, SiT and Senseiver. The former Ground truth column is omitted from display only. Keep all three heatmaps and all spectra/violins. Do not add temperature or carbon-monoxide rows to the montage or remove the four baseline comparisons. The physical field subset in a is deliberate: it shows variables unobserved in the temperature-only regime.
 
 ## Main art issues
 
@@ -22,7 +24,7 @@ A useful first layout pass is to reserve approximately 40–43% of the lower fig
 
 Keep the two existing column groups distinct: DMF-Gen conditioning progression and temperature-only baseline comparison. Align the group headings and maintain a slightly wider inter-group gutter. Wrap long observed-channel headings over two lines at the same font size. Do not abbreviate the four-channel condition in a way that hides one of the variables or changes CO into CH4.
 
-Align the truth maps with the prediction-map row for each physical quantity. Preserve the original truth-map placement if its centre is deliberately used for a two-row group; in either case, avoid an ambiguous row assignment. Do not create new empty error maps for the reference merely to fill a visual grid. Every existing prediction/error pairing should be clear through a small common gap and a consistent border treatment.
+The Ground truth display column is intentionally absent in V3; do not delete or rewrite its source arrays. Every displayed prediction/error pairing must remain clear through a small common gap and consistent border treatment. Keep the physical-field labels at far left and the repeated vertical `Recon.`/`Error` row-type labels in the adjacent inner label column.
 
 Methane and pressure should use the same nonnegative-magnitude colormap family where their original data and norms permit, while signed streamwise velocity should retain a signed diverging colour role. Use identical mappings within each variable across truth, DMF-Gen regimes and baselines. The current source's range, offsets and normalization are frozen; do not autoscale a method to reveal more detail. Keep absolute errors on a common light-to-dark nonnegative palette per variable, matching the error semantics adopted in Fig. 3.
 
@@ -34,22 +36,23 @@ For the current compact art revision, remove the six far-right field/error
 colourbars as an explicit author-authorized exception to the general retention
 rule.  Preserve every underlying limit and normalization in the source
 manifest and scientific-state comparison.  Reallocate the freed width to equal
-inter-column gaps; do not enlarge or horizontally distort individual physical
-domains.  Use the active baseline's exact scalar lookups: `crest` for methane,
+inter-column gaps. V3 additionally removes the Ground truth display column and
+horizontally expands the seven retained display axes without changing their
+coordinates, crop bounds, interpolation, masks, contour paths or source arrays.
+Use the active baseline's exact scalar lookups: `crest` for methane,
 `viridis` for pressure, `RdBu_r` for signed streamwise velocity and `OrRd` for
 absolute errors.  These Figure 4 assignments override the general scalar
 defaults for continuity with the approved round-3 figure.
 
-Halve only the explicit contour-GridSpec `prediction_error_hspace`, from
-`0.16` to `0.08`; retain the separate inter-field spacer ratio at `0.25`.
-This distinction is mandatory because both controls exist in the producer.
-Keeping the map-row height fixed reclaims `0.1645614035 in`; add exactly that
-amount to the major gap below Panel a so neither the canvas nor the scientific
-map boxes silently absorb it.
+Retain the earlier explicit contour-GridSpec `prediction_error_hspace` reduction
+from `0.16` to `0.08`. V3 separately halves the inter-field spacer ratio from
+`0.25` to `0.125`; this distinction is mandatory because both controls exist in
+the producer. Reduce the physical Panel-a content height accordingly so the
+saved field-gap space compresses the canvas rather than stretching the map rows.
 
 ## b — three error heatmaps
 
-Preserve all 144 entries (three 8×6 tables), including their existing precision. The six columns are five individual fields plus the aggregate over the currently unobserved fields. The aggregate's member set changes by regime; the plot must not visually imply a fixed identical target across all three conditions. Keep the original Unobs. label and column placement; any new explanatory wording belongs to the approved caption, not the art agent's interpretation.
+Preserve all 144 source entries (three 8×6 tables), including their existing precision. V3 displays only the five individual-field columns, for 120 visible values; the author-approved `Unobs.` omission is a display operation after source loading. Do not delete the aggregate values from the manifest or source comparison. Retain the physical cell width of the five visible columns and shrink/translate the matrix block rather than stretching the cells.
 
 Use the active round-3 Panel-b `Reds` palette and preserve its existing
 normalization exactly. If the source already uses shared normalization, keep it.
@@ -86,20 +89,18 @@ retaining the exact scale and axis limits. The 256 T sensors and coverage annota
 
 Keep the T–U1, CH4–U1 and p–U1 pairs in their current order. Preserve the exact binned ground-truth density arrays, original colour normalization and empty/masked-bin treatment. Use a restrained sequential colormap. Do not add new contour estimates, smooth the histogram or replace it with a scatter cloud. Preserve x/y variable assignments and domains.
 
-Keep the three JSD groups aligned with the corresponding PDFs. Retain all eight method violins, their row order, density paths and mean annotations. Use the same method colours as c and the other figures. Narrow every violin body by one shared display-only width factor without changing its KDE path/support. Reserve a fixed blank horizontal corridor between the rightmost violin support and an aligned `mu=value` annotation column; preserve every value, including the better SiT result for CH4–U1.
+Keep the three JSD groups aligned with the corresponding PDFs. Retain all eight method violins, their row order, density paths and mean values. Use the same method colours as c and the other figures. V3 removes only the `mu=` prefix, widens every violin body by one shared display-only width factor without changing its KDE path/support, and preserves every numeric value, including the better SiT result for CH4–U1.
 
-Use a neutral base-2 JSD axis label with clearly separated ticks.  Keep the
-retained numerical tick values, but permit a consistent two-row stagger when
-needed to prevent horizontal bounding-box collisions. Do not turn JSD into a percentage or force identical x limits if the existing comparisons use different ranges. The PDF maps are pooled over 25 states while the JSD distributions use 1,000 states according to the caption; no pooling or sampling change is allowed.
+Use a neutral base-2 JSD axis label. Attempt one common baseline for the retained
+numerical tick values; if the final renderer still detects any collision, hide
+all three tick-label sets consistently while preserving the ticks, transforms
+and axis limits. Do not turn JSD into a percentage or force identical x limits if the existing comparisons use different ranges. The PDF maps are pooled over 25 states while the JSD distributions use 1,000 states according to the caption; no pooling or sampling change is allowed.
 
-For the current V2 renderer, use one shared violin width of `0.46`, reserve
-the violin data to the left `0.50` axes fraction, and align the mean column at
-`0.66` axes fraction. Use a dedicated `0.06` GridSpec column spacing and, only
-where necessary, a two-row tick-label stagger without changing tick values.
-At 162-mm insertion width, the rendered clearance from
-the rightmost violin body to its mean text must be at least 1.5 mm, all 24 mean
-labels must remain within their owned axes, and tick-label overlaps must be
-zero.
+For the current V3 renderer, use one shared violin width of `0.66`, reserve the
+violin data to the left `0.66` axes fraction, and align the numeric mean column
+at `0.71` axes fraction. Use a 6-mm rendered inter-column gap for Panel d. All
+24 mean labels must remain within their owned axes and the final tick-label
+overlap count must be zero.
 
 ## Acceptance and gates
 
@@ -111,4 +112,4 @@ for this art-style-only pass. In particular, do not replace Panel-c bars, alter
 spectral membership, add/remove scientific annotations, change normalization,
 or restore Panel-a colourbars from that older brief.
 
-Verify eight montage columns, three physical-field rows, three complete heatmaps, three LSD bars/spectrum pairs and three PDF/JSD pairs. All observed-channel marks, scalar observations, histogram bins, state dots and distributions must retain their memberships. Review ordinary heatmap and error-label text at 162 mm; if it cannot be read, adjust panel allocation and label wrapping rather than scientific content.
+Verify seven displayed montage columns × three physical-field reconstruction/error pairs, three displayed 8×5 heatmaps backed by complete 8×6 source matrices, three LSD/spectrum pairs and three PDF/JSD pairs. The final-aspect gate must report zero text/text, text/non-owned-data-window and clipped-mean collisions. All observed-channel marks, scalar observations, histogram bins, state dots and distributions must retain their memberships. Review ordinary heatmap and error-label text at 162 mm; if it cannot be read, adjust panel allocation and label wrapping rather than scientific content.
