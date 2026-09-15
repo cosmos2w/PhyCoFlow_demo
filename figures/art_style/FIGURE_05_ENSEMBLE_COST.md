@@ -4,7 +4,7 @@
 
 **Active producer:** `Dis_SI_Process/figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf`.
 
-**Active art export:** `Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v3_20260915_0900/figure5_log.pdf`.
+**Active art export:** `Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v3_1_20260915_0945/figure5_log.pdf`.
 
 Read the general contract and author checks A05/A06. The editorial revision moves this figure's evidence into Results without changing its figure number or panel contents.
 
@@ -38,11 +38,13 @@ Use a coordinated ablation palette: full model uses DMF-Gen red; three condition
 
 Increase the label size and either wrap long category names consistently or retain one common modest rotation with sufficient bottom gutter. Keep the six tick centres fixed. Do not rotate each name by a different angle or change to horizontal violins as an easier layout. The upper metric label and lower high-band label should share an x offset and sit outside the data region.
 
-For V3, both violin axes are `41 mm` high and touch at one shared boundary
-(`0 mm` hspace). Display each existing mean above its violin tip using two
+For V3.1, both violin axes are `32.8 mm` high and touch at one shared boundary
+(`0 mm` hspace), exactly 80% of the V3 height. Display each existing mean above its violin tip using two
 significant digits and at least `1 mm` rendered tip clearance. The sole lower
 y-limit extension is an author-approved display-headroom exception; preserve
-the log transform and every violin/mean coordinate, and record the change.
+the log transform and every violin/mean coordinate, and record the change. Use
+`0.78` face alpha for every violin body while retaining full-strength outlines
+and internal dashed summaries.
 
 Use thin violin outlines and gentle fills. Internal dashed mean/summary marks should remain at their exact positions; they must not be re-centred visually. The IID source's lower whole-field error and worse high-band error are a central trade-off, so do not make its first violin visually subdued or its second violin excessively saturated.
 
@@ -71,13 +73,18 @@ Keep the horizontal bars and point comparison types as currently drawn. Do not a
 
 The final memory column has filled and hollow encodings for model state and peak memory. Keep both exact lengths and their association. They are not additive stacked components: do not stack or sum them. Make the hollow outline visible at about 0.8 pt and ensure the small filled model-state entry does not vanish. Align the “Model” and “Peak” labels/key outside the bars without changing their meaning.
 
-Preserve any timing/memory error bars and their definitions; the style pass cannot infer their confidence level. The equal-looking row design must not imply identical native training workloads or one-draw/64-draw equivalence. These are reporting questions under A06.
+Preserve every timing/memory error interval and its definition in the figure
+object; the style pass cannot infer its confidence level. The equal-looking row
+design must not imply identical native training workloads or one-draw/64-draw
+equivalence. These are reporting questions under A06.
 
-V3 author override: in the right-most inference-memory axis only, retain the
-error-bar artists and source intervals in memory but hide them from export.
-Keep the paired filled model-state and hollow peak bars; use a `0.9 pt` outline
-on all eight hollow peak bars. This does not authorize hiding uncertainty in
-the other four scorecard axes.
+V3.1 author override: retain all resource-scorecard error-bar artists and
+source intervals in memory but hide their caps/lines from export in Training
+update time, Training memory, Inference time and Inference memory. Accuracy
+intervals remain visible. Keep the paired filled model-state and hollow peak
+memory bars; use a `0.9 pt` outline on all eight hollow peak bars. Apply `0.78`
+face alpha to every filled resource bar without reducing hollow outlines. This
+does not authorize hiding uncertainty in another panel or figure.
 
 ## Acceptance and release gates
 
@@ -85,7 +92,7 @@ A05 must reconcile 0.1063 here with 0.117 in the preceding multi-field evaluatio
 
 Check that all five generative methods are present in a–c, both six-category violin axes align, e contains truth plus six variant traces, and every scorecard row matches across its five columns. Ensure no coloured baseline is nearly invisible, no legend covers the high-band tail and no bar/interval geometry changes. Review the complete figure at 162 mm and record the latency/ensemble-scope question as a scientific release gate, not an art defect.
 
-For the active art V3 export, use a fixed `179.8 x 244 mm` MediaBox rather than
+For the active art V3.1 export, use a fixed `179.8 x 216 mm` MediaBox rather than
 the baseline's approximately `258 x 249 mm` tight crop. Apply the established
 hierarchy at the final physical size: panel labels `11.0 pt` bold, axis titles
 approximately `8.5 pt`, ticks and legends `7.8 pt`, and ordinary in-plot
@@ -95,16 +102,19 @@ scale type unchanged. Use one measured visible left rail for the longest
 model names, both Panel-d y-axis titles and tags a/d/f, and one common right
 axes boundary for all three major rows. Use an exact `2:1` Panel-d/e plotting
 width ratio with a `14 mm` inter-panel gutter. Both Panel-d violin axes must be
-`41 mm` high with zero hspace; wrap the two y-axis titles consistently and verify at
-least `3 mm` title-to-title clearance. Wrap the four long Panel-d categories
-onto two lines and retain one common `45 degree` rotation. Give Panel f four
+`32.8 mm` high with zero hspace; center each y-axis title in the whitespace
+between the page edge and the y spine, and verify at least `3 mm`
+title-to-title clearance. Wrap the four long Panel-d categories onto two lines
+and use a common horizontal baseline. The nominal middle-to-scorecard gap is
+`11 mm`, a `51.3%` reduction from V3; its rendered row-union clearance must
+remain at least `3 mm`. Give Panel f four
 equal `4 mm` physical gaps, match its categorical row pitch to Panel a within
 5%, and align its method-label spine with Panel a. Align the baselines of a/b/c
 to the top-row axes, place d/e and f on their respective axes-top baselines,
 and crop the outer top/bottom/right rendered margins to at most `1.5 mm`.
 Use the shared model palette and `5.8 pt` hollow markers in a/b/f; enlarge only
 Panel-a raw-point clouds to `0.95 pt2`. Rename the spectrum annotation
-`High-band`, place it at the upper edge, and keep the wrapped legend down/right
+`High-band`, keep it near the upper edge, and keep the wrapped legend up/right
 with zero sampled curve intersections. The release
 must include fixed-size PDF/SVG/PNG outputs, a true vector-derived 162-mm render,
 grayscale and deuteranopia reviews, an exact before/after scientific data-artist hash,

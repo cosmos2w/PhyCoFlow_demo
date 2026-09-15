@@ -77,15 +77,18 @@ complete 7.0-pt string cannot fit after wrapping, equivalent number formatting
 and geometry reallocation have all been attempted.  Such a reduction requires
 a per-artist record and may not go below 6.6 pt at 180 mm (5.94 pt at 162 mm).
 
-Latest author-authorized Figure 5 exceptions are narrowly scoped to its V3 art
-export: retain the inference-memory uncertainty artists and values in the
-figure object but hide their caps/lines from the rendered right-most scorecard
-axis; add the twelve existing violin means as 2-significant-digit annotations;
-and extend only the lower violin y-limit enough to keep those labels above the
-violin tips without entering the upper axes. The release must prove an exact
-before/after data-artist hash, enumerate the hidden artists, record the sole
-view-limit change, and retain all source values. These exceptions do not permit
-removing error bars or changing limits in any other panel or figure.
+Latest author-authorized Figure 5 exceptions are narrowly scoped to its V3.1
+art export: retain every resource-scorecard uncertainty artist and value in the
+figure object but hide its caps/lines from the four rendered resource axes;
+retain the accuracy-axis uncertainty artists visibly; add the twelve existing
+violin means as 2-significant-digit annotations; and extend only the lower
+violin y-limit enough to keep those labels above the violin tips without
+entering the upper axes. Use `0.78` face alpha for all twelve violin bodies and
+all filled resource bars, without weakening hollow-bar outlines. The release
+must prove an exact before/after data-artist hash, enumerate the hidden artists,
+record the sole view-limit change, and retain all source values. These
+exceptions do not permit hiding error bars or changing limits in another panel
+or figure.
 
 These floors apply to ordinary base text, not the naturally smaller glyphs in superscripts/subscripts. Several current DMF-Gen ordinary labels measure about 4–5 pt in the PDF. Do not reproduce that size merely because the standalone figure looks readable when enlarged. Use one sans-serif family throughout, preferably Arial; use Liberation Sans or DejaVu Sans only as available substitutes, and use the same substitution in every figure. Record the resolved family. Never ship font files.
 

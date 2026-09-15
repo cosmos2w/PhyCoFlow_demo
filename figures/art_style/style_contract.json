@@ -419,11 +419,11 @@
       "number": 5,
       "asset": "Figure_Evaluations.pdf",
       "producer_pdf": "Dis_SI_Process/figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf",
-      "latest_art_export": "Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v3_20260915_0900/figure5_log.pdf",
-      "art_v3_geometry": {
+      "latest_art_export": "Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v3_1_20260915_0945/figure5_log.pdf",
+      "art_v3_1_geometry": {
         "canvas_mm": [
           179.8,
-          244.0
+          216.0
         ],
         "panel_label_pt": 11.0,
         "axis_title_pt": 8.5,
@@ -434,10 +434,13 @@
           1.0
         ],
         "panel_d_e_physical_gap_mm": 14.0,
-        "panel_d_violin_axis_height_mm": 41.0,
+        "panel_d_violin_axis_height_mm": 32.8,
+        "panel_d_e_height_ratio_vs_art_v3": 0.8,
         "panel_d_internal_hspace_mm": 0.0,
-        "panel_d_category_rotation_deg": 45.0,
+        "panel_d_category_rotation_deg": 0.0,
         "panel_d_long_categories": "WRAPPED_WITH_TEXT_UNCHANGED",
+        "middle_to_scorecard_nominal_gap_mm": 11.0,
+        "middle_to_scorecard_gap_ratio_vs_art_v3": 0.48672566371681414,
         "panel_f_equal_physical_gap_mm": 4.0,
         "comparison_marker_size_pt": 5.8,
         "comparison_marker_fill": "NONE",
@@ -445,7 +448,10 @@
         "panel_f_to_panel_a_row_pitch_ratio_tolerance": 0.05,
         "outer_top_bottom_right_margin_max_mm": 1.5,
         "violin_mean_significant_digits": 2,
-        "inference_memory_errorbars": "HIDDEN_ARTISTS_RETAINED_AUTHOR_EXCEPTION",
+        "resource_scorecard_errorbars": "HIDDEN_ARTISTS_RETAINED_AUTHOR_EXCEPTION",
+        "accuracy_errorbars": "VISIBLE",
+        "violin_fill_alpha": 0.78,
+        "resource_bar_fill_alpha": 0.78,
         "lower_violin_ylim": "EXPANDED_FOR_MEAN_LABEL_HEADROOM_AUTHOR_EXCEPTION",
         "dmf_gen_model_label_weight": "BOLD_AUTHOR_EXCEPTION",
         "minimum_rendered_row_union_clearance_mm": 3.0,

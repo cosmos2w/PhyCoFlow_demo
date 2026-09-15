@@ -1,0 +1,94 @@
+schema_version: figure5-art-v3-1
+baseline:
+  pdf: figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf
+  art_v3_pdf: figures/generated/art_style_review/Figure_Evaluations_art_v3_20260915_0900/figure5_log.pdf
+  renderer: figures/scripts/build_figure5_polished.py
+canvas:
+  width_mm: 179.8
+  height_mm: 216.0
+  manuscript_width_mm: 162.0
+typography_pt:
+  panel_label: 11.0
+  axis_title: 8.5
+  tick_label: 7.8
+  standard_legend: 7.8
+  in_plot_annotation: 7.0
+  scorecard_method: 7.8
+  scorecard_value: 7.0
+  high_band_label: 7.2
+geometry:
+  minimum_row_union_clearance_mm: 3.0
+  minimum_panel_tag_clearance_mm: 1.5
+  minimum_text_to_nonowned_axes_mm: 1.0
+  minimum_mean_to_violin_clearance_mm: 1.0
+  outer_artist_margin_target_mm: 1.0
+  left_axis_mm: 21.6
+  right_axis_mm: 177.4
+  top_axis_bottom_mm: 171.1
+  top_axis_top_mm: 212.1
+  top_gap_ab_mm: 9.0
+  top_gap_bc_mm: 16.0
+  middle_axis_bottom_mm: 90.5
+  middle_axis_top_mm: 156.1
+  violin_upper_bottom_mm: 123.3
+  violin_upper_top_mm: 156.1
+  violin_lower_bottom_mm: 90.5
+  violin_lower_top_mm: 123.3
+  middle_panel_gap_mm: 14.0
+  score_axis_bottom_mm: 13.5
+  score_axis_top_mm: 79.5
+  score_gap_mm: 4.0
+  score_width_ratios: [1.65, 1.0, 1.0, 1.0, 1.15]
+  panel_d_tick_rotation_deg: 45.0
+  middle_width_ratios: [2.0, 1.0]
+  middle_wspace: 0.18
+  lower_violin_raise_mm: 0.0
+  upper_violin_bottom_inset_mm: 0.0
+  middle_panel_tag_drop_mm: 0.0
+  scorecard_drop_mm: 0.0
+  left_panel_tag_x_mm: 3.0
+  high_band_text_shift_shells: -8.0
+  panel_tag_offset_mm: 2.5
+  panel_tag_inner_gap_mm: 1.6
+  panel_e_tag_inner_gap_mm: 7.0
+  upper_ylabel_y: 0.50
+  lower_ylabel_y: 0.50
+  high_band_text_y_axes: 0.94
+  high_band_text_x_data: 124.0
+  high_band_arrow_y_axes: 0.947
+  spectrum_legend_anchor: [0.99, 1.02]
+  lower_violin_ylim_headroom_factor: 1.50
+  panel_f_top_tag_vertical_alignment: top
+style:
+  axis_linewidth_pt: 0.6
+  grid_linewidth_pt: 0.35
+  truth_linewidth_pt: 1.55
+  full_model_linewidth_pt: 1.45
+  alternative_linewidth_pt: 0.9
+  violin_edge_linewidth_pt: 0.55
+  cloud_alpha: 0.075
+  cloud_size_pt2: 0.95
+  comparison_marker_size_pt: 5.8
+  comparison_marker_edge_width_pt: 0.9
+  mean_annotation_offset_pt: 5.0
+  inference_hollow_edge_width_pt: 0.9
+  violin_fill_alpha: 0.78
+  bar_fill_alpha: 0.78
+  method_colors:
+    DMF-Gen: "#E63946"
+    FFM-FNO: "#1D3557"
+    FFM-Perceiver: "#457B9D"
+    Latent FM: "#6A4C93"
+    SiT: "#A28BC4"
+    MLP-RBF: "#2A9D8F"
+    Geo-FNO: "#F4A261"
+    Senseiver: "#8D99AE"
+  method_markers:
+    DMF-Gen: o
+    FFM-FNO: s
+    FFM-Perceiver: D
+    Latent FM: ^
+    SiT: v
+    MLP-RBF: P
+    Geo-FNO: X
+    Senseiver: h
