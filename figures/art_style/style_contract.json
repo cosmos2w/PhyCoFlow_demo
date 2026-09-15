@@ -9,6 +9,7 @@
   "status": "ACTIVE_ART_STYLE_CONTRACT",
   "read_first": [
     "00_GENERAL_ART_STYLE.md",
+    "FIGURE_03_MIXED_RESOLUTION.md",
     "FIGURE_04_MULTIFIELD.md",
     "../editorial/02_AUTHOR_CHECKS.md"
   ],
@@ -59,6 +60,9 @@
       "in_plot_annotation_regular"
     ],
     "default_weight": "regular",
+    "only_panel_letters_bold": true,
+    "all_other_text_weight": "regular",
+    "matrix_annotation_design_pt": 7.0,
     "dynamic_annotation_reduction_requires_per_artist_qa_record": true
   },
   "model_styles": {
@@ -140,6 +144,29 @@
         "panel_d_column_wspace": 0.06,
         "minimum_rendered_violin_to_mean_clearance_mm_at_162mm": 1.5,
         "maximum_tick_label_overlap_count": 0
+      }
+    },
+    "figure_3_v4_4_continuity_override": {
+      "scientific_anchor": "V3-7",
+      "visual_baseline": "V4_4",
+      "panel_a_same_size_roi_translation": true,
+      "panel_a_resolution_titles_below_maps": true,
+      "panel_b_hidden_redundant_dmf_gen_bar_labels": 5,
+      "panel_b_sweeps": [
+        "Mixed-HML",
+        "Zero-H-balanced",
+        "Zero-H-M-rich"
+      ],
+      "panel_c_physical_field_cmap": "RdBu_r",
+      "panel_c_absolute_error_cmap": "magma",
+      "panel_d_truth_component_cmap": "Greys_r",
+      "panel_d_absolute_residual_cmap": "magma",
+      "panel_d_residual_vmin": 0,
+      "panel_e_tick_settings": {
+        "horizontal_alignment": "right",
+        "rotation_deg": 45,
+        "rotation_mode": "anchor",
+        "source": "V4_3"
       }
     }
   },
@@ -270,6 +297,9 @@
       "number": 3,
       "asset": "Figure_MixedResolution.pdf",
       "producer_pdf": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v3_7_20260914_1158.pdf",
+      "visual_baseline_pdf": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_4_20260915_0001.pdf",
+      "visual_baseline_manifest": "1_SubTask_SuperResolution/figures/generated/art_style_review/MixedResolution_unified_v4_4_20260915_0001/source_manifest_v4_4.json",
+      "latest_art_export": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_5_20260914_2136.pdf",
       "panels": [
         "a",
         "b",

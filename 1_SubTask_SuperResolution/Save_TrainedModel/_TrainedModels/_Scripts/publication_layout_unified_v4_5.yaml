@@ -1,0 +1,34 @@
+extends: publication_layout_unified_v4_4.yaml
+
+workflow_label: mixed_resolution_unified_v4_5
+
+figure:
+  output_name: MixedResolution_unified_v4_5
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v4_5_hierarchical_typography_compact_geometry_20260915
+
+v4_5_geometry:
+  # Remove only excess whitespace between b and the shared c/d row. Panels a
+  # and b translate downward together; every panel rectangle, aspect ratio,
+  # data artist, and the a-b/cd-e relationships remain unchanged.
+  b_to_cd_compaction_mm: 6.0
+  canvas_height_trim_mm: 6.0
+
+v4_5_typography:
+  font_family: Arial
+  role_sizes_pt:
+    panel_label: 11.0
+    major_title: 9.5
+    subplot_title: 8.5
+    axis_label: 8.5
+    tick_label: 7.8
+    legend: 7.8
+    annotation: 7.0
+  panel_label_weight: bold
+  all_other_text_weight: regular
+  major_title_text:
+    - Contains H-resolution training fields
+    - Zero-H training
+    - High resolution reconstruction (512 sensors)
+    - Spatial pattern correlation
+    - Variance allocation bias [pp]

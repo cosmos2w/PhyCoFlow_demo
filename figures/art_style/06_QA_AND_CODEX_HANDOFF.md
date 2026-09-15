@@ -6,7 +6,7 @@
 
 For one figure, append its exact asset and instruction file, for example:
 
-> Apply the above to `Figure_MixedResolution.pdf` using `FIGURE_03_MIXED_RESOLUTION.md` and the approved V3-7 producer binding. Preserve a–e, all five panel-c columns, both zero-H sensor sweeps, all three multiscale rows and both 4×9 heatmaps. Do not resolve the selected physical variable, full-field versus zoom/local error or variance-bias units without the author's approved mapping.
+> Apply the above to `Figure_MixedResolution.pdf` using `FIGURE_03_MIXED_RESOLUTION.md`. Use V3-7 as the scientific anchor and V4_4 as the visual baseline. Preserve a–e, all five panel-c columns, all three V4_4-carried sensor sweeps, all three multiscale rows and both 4×9 heatmaps. Do not resolve the selected physical variable, full-field versus zoom/local error or variance-bias units without the author's approved mapping.
 
 ## Work order
 
@@ -38,9 +38,11 @@ must be clear and consistent. Figure-specific contracts may authorize a
 smaller numeric-annotation tier only when design and insertion sizes are
 recorded, the text stays above the global absolute minimum, every affected
 artist passes renderer containment and contrast checks, and any further
-dynamic reduction is logged per artist. Figure 4 currently authorizes 7.0 pt
-at 180 mm (6.3 pt at 162 mm) for matrix values and mean annotations, with a
-6.6-pt design-width floor only for individually logged constrained exceptions.
+dynamic reduction is logged per artist. Figures 3 V4_5 and 4 currently
+authorize 7.0 pt at 180 mm (6.3 pt at 162 mm) for matrix values and other
+in-plot annotations, with a 6.6-pt design-width floor only for individually
+logged constrained exceptions. Only panel letters may be bold; all other
+visible text must be regular.
 Superscripts can be smaller naturally, but scientific-notation exponents must
 still be visible. Font embedding and math-glyph rendering must be checked in
 the exported PDF, not just the plotting window.
@@ -59,7 +61,7 @@ Check manuscript fit with the existing caption. A standalone figure can be well 
 |---|---|
 | 1 | a–c; four channel surfaces; both cross-attention stages; local and global routes; three generation states; grid/mesh/point-cloud icons |
 | 2 | a–h; both elasticity and airfoil example pairs; eight methods in applicable quantitative panels; both geometry outlines, boxplot groups and ridgeline groups |
-| 3 | a–e; three resolutions; five recipes; four methods in b; two zero-H sweeps; five columns in c; three scale rows × three columns in d; two 4×9 heatmaps in e |
+| 3 | a–e; three resolutions; five recipes; four methods in b; three V4_4-carried sweeps (Mixed-HML, Zero-H-balanced, Zero-H-M-rich); five columns in c; three scale rows × three columns in d; two 4×9 heatmaps in e |
 | 4 | a–d; eight montage columns × three variables; three 8×6 heatmaps; three LSD/spectrum pairs; three PDF/JSD pairs |
 | 5 | a–f; five methods in a–c; two six-category violin axes; truth plus six spectra; eight scorecard rows × five columns |
 

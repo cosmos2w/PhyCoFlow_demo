@@ -64,7 +64,9 @@ space.
 
 The role ordering is strict: `panel label > major title > axis/subplot title >
 tick/legend > in-plot annotation`.  A renderer must resolve every visible text
-artist to one of these roles and record the result in `LAYOUT_QA.json`.  Do not
+artist to one of these roles and record its role, resolved size, weight and
+semantic panel owner in `LAYOUT_QA.json`. **Only panel letters may be bold; all
+other visible text must use regular weight.** Do not
 promote dense values to tick size, or allow a legend to compete with a major
 title.  A constrained annotation may be reduced below 7.0 pt only when the
 complete 7.0-pt string cannot fit after wrapping, equivalent number formatting
