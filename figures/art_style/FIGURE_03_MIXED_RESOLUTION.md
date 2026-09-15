@@ -4,9 +4,9 @@
 
 **Scientific producer:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v3_7_20260914_1158.pdf`.
 
-**V4_5 visual baseline:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_4_20260915_0001.pdf`.
+**V4_6 visual baseline:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_5_20260914_2136.pdf`.
 
-**Latest art export:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_5_20260914_2136.pdf`.
+**Latest art export:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_6_20260914_2227.pdf`.
 
 Read the general contract and author checks A03/A04 first. The active V3-7 figure has **five panels, a–e**. The older six-panel a–f inventory, ten-column multi-recipe gallery and five-sweep main-figure layout are superseded and must not be restored during this art-only pass.
 
@@ -31,6 +31,21 @@ panel b and the shared c/d row. Translate a and b together so their mutual gap
 and every panel rectangle, aspect ratio and internal layout remain unchanged.
 Retain c/d row alignment, the V4_4 c/d-to-e gap and the V4_3 panel-e tick
 geometry. Final renderer measurements at both 180 and 162 mm are authoritative.
+
+The V4_5 b-to-c/d compaction is superseded because its previous content-extent
+check did not include the complete rendered union of Panel b's multilevel
+x-axis labels and the c/d titles/tags. Every later revision must apply the
+general adjacent-major-row union-bbox gate to `a→b`, `b→c/d` and `c/d→e` and
+must fail before export if any union intersects or scales below 3 mm clearance
+at 162-mm insertion width.
+
+V4_6 is the active corrected art export. It uses a 180 × 229.5-mm canvas,
+retains the global typography hierarchy, assigns the requested Panel-a and
+Panel-b headings to the 8.5-pt subplot-title role, enlarges the Panel-b grouped
+bar axis to exactly 1.25 times its V4_5 physical height, and restores a clear
+semantic boundary between Panel b and c/d. Its shared c/d row gap is 3 mm and
+its 18-mm Panel-c colourbar strip retains both colourbars. These are visual
+geometry and wording changes only; V4_5 arrays and mappings remain frozen.
 
 ## Main art issues
 

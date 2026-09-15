@@ -49,6 +49,20 @@ the exported PDF, not just the plotting window.
 
 Apply the mandatory layout-integrity gates in `00_GENERAL_ART_STYLE.md` after the final draw. Renderer-based checks must report zero unexplained text/text, text/panel and text/evidence intersections, zero clipped artists and the required horizontal and vertical clearances at both widths. Inspect full-page and high-zoom previews as a separate check. Save the measured results, intentional in-data annotation exceptions and resolved cross-figure semantic style table in `LAYOUT_QA.json`; neither visual inspection nor geometry checks may substitute for the other.
 
+Additionally, compute a semantic union bounding box for every adjacent major
+row using all owned axes tight-bboxes, ticks, two-level tick labels, titles,
+panel tags, legends, colourbars/exponents, annotations and figure-level text.
+Require zero union intersection and at least 3 mm vertical clearance at the
+actual insertion width. The audit must fail if any visible figure-level text
+lacks an owner or if a container/GridSpec gap passes while the rendered unions
+overlap.
+
+Store per-class renderer boxes, component unions, final row unions and every
+adjacent-pair clearance in PDF-MediaBox millimetres. Treat an unknown visible
+artist, missing required box, clipped artist or unexplained intersection as a
+hard failure. Generate the 162-mm review by rendering the vector export at the
+target physical scale; a resized 180-mm PNG is not sufficient evidence.
+
 Check that all panel letters are outside data regions and every label belongs unmistakably to its panel. Check colourbar endpoints, signs and exponents for cropping. Check long model/recipe names, rotated labels and multiline legends. Inspect thin airfoil boundaries, sensor circles, residual hotspots, fine-scale wavelet components and high-frequency spectra. Check that baseline curves remain visible when printed in grayscale and under a colour-vision-deficiency simulation.
 
 Inspect masks and empty PDF bins: no-data areas must not be confused with zero residual or low probability. Inspect colour mapping across truth/prediction groups: a common physical value should have the same colour where the original group shared a normalization. Verify that no new interpolation made low-resolution input images look smoother.

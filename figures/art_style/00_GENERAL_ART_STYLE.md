@@ -144,8 +144,24 @@ The spacing guidance above is a release contract, not a visual suggestion. Every
 3. **Canvas containment and clipping.** Every visible artist, including superscripts, minus signs, rotated labels, error-bar caps, marker edges, legends and colourbar exponents, must lie inside the intended PDF MediaBox with a positive clearance. No text may be clipped by an axes patch, rasterization boundary or tight bounding box. The exported MediaBox must retain the declared physical dimensions.
 4. **Semantic colour consistency.** Build and retain a figure-to-figure style table keyed by semantic identity. The same model, recipe, observation status, physical quantity, residual sign and ablation variant must use the same approved colour/line/marker treatment everywhere that role recurs. Do not reuse one colour for two conflicting roles within a figure. Validate exact resolved RGBA/hex values from the artists, then inspect grayscale and a colour-vision-deficiency simulation; every comparison must remain distinguishable without relying on colour alone.
 5. **Balanced local rhythm.** Comparable rows, columns, repeated maps, heatmaps and scorecard axes must have equal plot-window dimensions and consistent internal padding unless the evidence hierarchy explicitly requires a different size. Shared titles, legends and colourbars must be centred on the complete group they explain. Long labels must be wrapped consistently, with equal line spacing and baseline offsets across peer panels.
+6. **Adjacent-major-row union clearance.** For every vertically adjacent major
+   panel row, form a rendered union bounding box from every visible owned
+   element—not only the nominal panel/container rectangle. The union must
+   include data axes, axis `tightbbox` extents, both levels of tick labels,
+   axis titles, panel letters, legends, colourbars and their titles/exponents,
+   annotations, and any figure-level text assigned to that panel. The upper
+   row's union bottom must remain at least 3 mm above the lower row's union top
+   at final insertion width, and the two unions must have zero intersection.
+   Missing or unowned figure-level text is itself a failed audit. A positive
+   nominal GridSpec/container gap cannot override a failed rendered-union gate.
+   The QA record must retain the renderer-derived box for every required artist
+   class, the component union boxes, each adjacent-row pair, and the final row
+   union boxes in PDF-MediaBox millimetres. Unknown visible artists, missing
+   boxes, clipped artists, or unexplained intersections are failures. The
+   162-mm preview must be rasterized anew from the vector export at the target
+   physical scale; resizing the 180-mm PNG is not an insertion-width check.
 
-Self-check these gates after the final draw, not from configuration values alone. Use the selected plotting backend's renderer to collect the final display bounding boxes and semantic owners for all text, axes, legends, colourbars and data-bearing artists. Run pairwise forbidden-intersection and minimum-clearance checks on the 180-mm render and again on a true 162-mm render. Then inspect full-page and high-zoom raster previews because bounding boxes alone cannot detect a label covering a contour, dense point cloud or hotspot. Record the tested dimensions, collision count, clipped-artist count, minimum horizontal and vertical clearances, intentional in-data annotations, resolved semantic style table and grayscale/CVD results in `LAYOUT_QA.json`. Passing requires zero unexplained collisions and zero clipped artists; visual inspection cannot waive a failed geometric check, and a geometric pass cannot replace visual inspection.
+Self-check these gates after the final draw, not from configuration values alone. Use the selected plotting backend's renderer to collect the final display bounding boxes and semantic owners for all text, axes, legends, colourbars and data-bearing artists. Run pairwise forbidden-intersection, adjacent-major-row union and minimum-clearance checks on the 180-mm render and again on a true 162-mm render. Then inspect full-page and high-zoom raster previews because bounding boxes alone cannot detect a label covering a contour, dense point cloud or hotspot. Record the tested dimensions, collision count, clipped-artist count, row-union owners and extents, minimum horizontal and vertical clearances, intentional in-data annotations, resolved semantic style table and grayscale/CVD results in `LAYOUT_QA.json`. Passing requires zero unexplained collisions and zero clipped artists; visual inspection cannot waive a failed geometric check, and a geometric pass cannot replace visual inspection.
 
 ## 7. Physical maps and image fidelity
 

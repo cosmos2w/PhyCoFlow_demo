@@ -217,6 +217,33 @@
     "require_color_vision_deficiency_check": true,
     "require_text_role_inventory": true,
     "require_annotation_reduction_records": true,
+    "require_adjacent_major_row_union_bbox_check": true,
+    "adjacent_major_row_union_bbox": {
+      "include": [
+        "data_axes_tightbbox",
+        "major_and_minor_tick_labels",
+        "multilevel_tick_labels",
+        "axis_and_subplot_titles",
+        "panel_letters",
+        "legends",
+        "colorbars_titles_and_exponents",
+        "annotations",
+        "owned_figure_level_text"
+      ],
+      "maximum_intersection_count": 0,
+      "minimum_vertical_clearance_mm_at_162mm": 3.0,
+      "unowned_visible_figure_text_allowed": false,
+      "nominal_container_gap_can_override": false,
+      "require_per_artist_or_class_bboxes": true,
+      "require_component_union_bboxes": true,
+      "require_adjacent_pair_records": true,
+      "coordinate_system": "pdf_media_box_mm_bottom_left",
+      "maximum_unknown_visible_artist_count": 0,
+      "maximum_missing_required_bbox_count": 0,
+      "maximum_clipped_artist_count": 0,
+      "require_vector_source_render_at_insertion_width": true,
+      "resized_design_width_png_is_valid_insertion_check": false
+    },
     "output": "LAYOUT_QA.json"
   },
   "freeze": [
@@ -297,9 +324,9 @@
       "number": 3,
       "asset": "Figure_MixedResolution.pdf",
       "producer_pdf": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v3_7_20260914_1158.pdf",
-      "visual_baseline_pdf": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_4_20260915_0001.pdf",
-      "visual_baseline_manifest": "1_SubTask_SuperResolution/figures/generated/art_style_review/MixedResolution_unified_v4_4_20260915_0001/source_manifest_v4_4.json",
-      "latest_art_export": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_5_20260914_2136.pdf",
+      "visual_baseline_pdf": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_5_20260914_2136.pdf",
+      "visual_baseline_manifest": "1_SubTask_SuperResolution/figures/generated/art_style_review/MixedResolution_unified_v4_5_20260914_2136/source_manifest_v4_5.json",
+      "latest_art_export": "1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_6_20260914_2227.pdf",
       "panels": [
         "a",
         "b",

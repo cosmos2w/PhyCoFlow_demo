@@ -1,0 +1,53 @@
+extends: publication_layout_unified_v4_5.yaml
+
+workflow_label: mixed_resolution_unified_v4_6
+
+figure:
+  output_name: MixedResolution_unified_v4_6
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v4_6_cross_row_clearance_bar_colorbar_refinement_20260915
+
+v4_6_geometry:
+  # Reverse V4_5's over-compaction, add 0.5 mm to satisfy the final rendered
+  # b-to-c/d union gate, then give panel b 4.8 mm of new physical height. The
+  # total canvas increase is 11.3 mm.
+  canvas_height_increase_mm: 11.3
+  panel_b_height_increase_mm: 4.8
+  panel_b_bottom_upshift_mm: 6.5
+  panel_a_bottom_upshift_mm: 11.3
+  minimum_adjacent_row_union_gap_mm_at_162mm: 3.0
+
+v4_geometry:
+  shared_cd_grid:
+    # Reduce the two c/d inter-row gaps from 5 to 3 mm. The saved 4 mm is
+    # transferred exactly to the panel-c colorbar strip; map heights remain
+    # unchanged and c/d continue to share exact row boundaries.
+    row_gap_mm: 3.0
+    bottom_colorbar_strip_mm: 18.0
+
+panel_b_v4:
+  # Panel b grows from 64.0 to 68.8 mm. This 0.3488372093 allocation produces
+  # an absolute bar-axis height exactly 1.25 times V4_5's 0.300 x 64-mm axis,
+  # while retaining its 0.980 top edge and a real legend gutter.
+  recipe_axis_bounds: [0.075, 0.6311627907, 0.905, 0.3488372093]
+  # Rebalance the enlarged panel into three non-colliding physical bands.
+  legend_bounds: [0.100, 0.433, 0.820, 0.080]
+  sweep_axis_bounds:
+    - [0.0650, 0.141, 0.300, 0.240]
+    - [0.3725, 0.141, 0.300, 0.240]
+    - [0.6800, 0.141, 0.300, 0.240]
+
+panel_c_v4:
+  bottom_label_offset_mm: 0.60
+  # Larger, left-panel-owned horizontal colorbars in the expanded 18-mm strip.
+  field_colorbar_bounds: [0.070, 0.595, 0.370, 0.170]
+  error_colorbar_bounds: [0.540, 0.595, 0.370, 0.170]
+
+v4_6_typography:
+  locally_reduced_to_subplot_title:
+    - Contains H-resolution training fields
+    - Zero-H training
+    - High resolution reconstruction (512 sensors)
+  removed_text:
+    - panel: b
+      text: Zero-H training
