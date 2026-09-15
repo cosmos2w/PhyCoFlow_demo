@@ -4,7 +4,7 @@
 
 **Scientific baseline:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf`.
 
-**Active art export:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v4_20260915_0007.pdf`.
+**Active art export:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v5_20260915_1035.pdf`.
 
 Read the general contract. Preserve panels a–d and their existing scientific contents.
 
@@ -77,6 +77,10 @@ V3 while keeping the displayed 8x5 matrices and all cell values unchanged. Its
 validated axes-block width is `46.656 mm`. Keep at least `1.2 mm` rendered
 clearance from Panel-b text to the right-side panels.
 
+V5 retains the V4 matrix geometry and normalization, and sets the three matrix
+image artists to alpha `0.75`. Numeric annotations and observed-channel marks
+remain fully opaque and retain their dynamic black/white contrast.
+
 ## c — LSD and spectra
 
 The upper three panels are **bar charts**, not a redesign opportunity. Retain all eight bars, original heights, widths in data/category space, ordering, intervals and raw point overlays. Use the shared method palette, moderate fill saturation and a thin readable edge. Draw error bars above both bars and state points. Raw dots may become smaller and more transparent uniformly, but no subsampling, fresh jitter or clipping is allowed.
@@ -94,6 +98,11 @@ Align each spectrum with its corresponding LSD axis above. Keep log axes,
 spectral units and the existing wavenumber caption.  Thin the displayed
 spectral-energy y ticks to at most four labelled log levels per subplot while
 retaining the exact scale and axis limits. The 256 T sensors and coverage annotation are source facts, not an invitation to recompute or round the percentage differently.
+
+V5 removes only the redundant `(unobs.)` suffix from the three upper titles,
+leaving `$Y_{CH_4}$`, `$p$` and `$U_1$`, and shortens the shared spectrum title
+to `Wavenumber`. Set all 24 bar faces to alpha `0.75` while retaining fully
+opaque edges, intervals and state points.
 
 ## d — joint distributions and JSD violins
 
@@ -123,6 +132,10 @@ outer tick labels if needed, without changing values or locations. The global
 JSD title uses `7 pt` label padding, has at least `1 mm` clearance below the tick
 labels, and its rendered bottom must align with Panel b's rendered bottom to
 within `0.01 mm`.
+
+V5 shortens the global title to `JSD of joint PDF` and sets all 24 violin-body
+faces to alpha `0.75`. Keep every violin edge, internal summary, mean label and
+distribution coordinate fully opaque and unchanged.
 
 ## Acceptance and gates
 

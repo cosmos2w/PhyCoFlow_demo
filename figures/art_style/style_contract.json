@@ -406,7 +406,23 @@
       "number": 4,
       "asset": "Figure_MultiFieldReconstruction.pdf",
       "producer_pdf": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf",
-      "latest_art_export": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v4_20260915_0007.pdf",
+      "latest_art_export": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v5_20260915_1035.pdf",
+      "art_v5_style": {
+        "geometry_baseline": "art_v4",
+        "panel_c_titles": [
+          "Y_CH4",
+          "p",
+          "U1"
+        ],
+        "panel_c_xlabel": "Wavenumber",
+        "panel_d_xlabel": "JSD of joint PDF",
+        "panel_b_heatmap_alpha": 0.75,
+        "panel_c_bar_face_alpha": 0.75,
+        "panel_d_violin_face_alpha": 0.75,
+        "bar_and_violin_edge_alpha": 1.0,
+        "require_exact_scientific_state": true,
+        "maximum_text_overlap_count": 0
+      },
       "panels": [
         "a",
         "b",

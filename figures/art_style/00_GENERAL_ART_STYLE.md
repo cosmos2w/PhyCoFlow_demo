@@ -165,6 +165,12 @@ Figure 4 V4 supersedes that fallback for its active export: retain the three JSD
 tick-label sets, place them on one baseline, and resolve crowding through wider
 subplot columns and outward anchoring only. Its c/d left spines and panel-letter
 offsets must be measured in page coordinates and match within `0.01 mm`.
+Figure 4 V5 retains that complete V4 geometry and applies only a data-ink style
+override: simplify the three Panel-c variable titles and the shared c/d x-axis
+titles, set all three Panel-b matrix images, all 24 Panel-c bar faces and all 24
+Panel-d violin faces to alpha `0.75`, and keep existing bar/violin borders fully
+opaque. This transparency exception does not authorize changing colour
+normalization, artist coordinates, numerical annotations or model identity.
 
 ### Mandatory layout-integrity and cross-figure consistency gates
 
