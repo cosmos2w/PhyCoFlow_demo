@@ -4,9 +4,9 @@
 
 **Scientific producer:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v3_7_20260914_1158.pdf`.
 
-**V4_6 visual baseline:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_5_20260914_2136.pdf`.
+**V4_7 visual baseline:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_6_20260914_2227.pdf`.
 
-**Latest art export:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_6_20260914_2227.pdf`.
+**Latest art export:** `1_SubTask_SuperResolution/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/MixedResolution_unified_v4_7_20260914_2318.pdf`.
 
 Read the general contract and author checks A03/A04 first. The active V3-7 figure has **five panels, a–e**. The older six-panel a–f inventory, ten-column multi-recipe gallery and five-sweep main-figure layout are superseded and must not be restored during this art-only pass.
 
@@ -39,13 +39,24 @@ general adjacent-major-row union-bbox gate to `a→b`, `b→c/d` and `c/d→e` a
 must fail before export if any union intersects or scales below 3 mm clearance
 at 162-mm insertion width.
 
-V4_6 is the active corrected art export. It uses a 180 × 229.5-mm canvas,
+V4_6 is the current corrected art baseline. It uses a 180 × 229.5-mm canvas,
 retains the global typography hierarchy, assigns the requested Panel-a and
 Panel-b headings to the 8.5-pt subplot-title role, enlarges the Panel-b grouped
 bar axis to exactly 1.25 times its V4_5 physical height, and restores a clear
 semantic boundary between Panel b and c/d. Its shared c/d row gap is 3 mm and
 its 18-mm Panel-c colourbar strip retains both colourbars. These are visual
 geometry and wording changes only; V4_5 arrays and mappings remain frozen.
+
+V4_7 is the active art export. It removes Panel c's two numerical colourbars,
+preserves all map arrays and normalization values in the source manifest, and uses the freed
+band for an external annotation gutter. The five Panel-c bottom labels
+(`Sensor layout` and the four frozen `Rel. L2` values) must share the exact
+bottom-row baseline used by Panel d. Panel-d residual metrics must clear both
+their owning image and the next image row. Apply the general final-aspect
+pairwise text/evidence gate; a label merely moved before equal-aspect axes
+settle is not compliant. Panel e may move upward, and the reclaimed vertical
+space may enlarge Panel b's lower sweep windows without changing axes limits,
+ticks, values or mappings.
 
 ## Main art issues
 
@@ -75,9 +86,9 @@ Keep the fixed Zero-H-M-rich representative state, 512-sensor plan and five colu
 
 Use one signed physical-field mapping across truth and predictions, retaining its exact source normalization. Use the V4_4 `magma` nonnegative absolute-error mapping across the four local-error tiles, again retaining the source normalization and mask. Fine lattice, checkerboard and striping structures in baseline predictions/errors are evidence, not rendering defects.
 
-Keep the current local relative-L2 annotations and precision attached to their exact tiles. Prefer a common gutter below the local-error row. If an annotation must remain in-data, register it in `LAYOUT_QA.json` and prove that it does not obscure a hotspot, sensor, contour or boundary. A03 governs the full-field versus zoom/local metric wording; do not reinterpret it during styling.
+Keep the current local relative-L2 annotations and precision attached to their exact tiles. V4_7 requires a common gutter below the local-error row, including the `Sensor layout` label in the ground-truth column. If an annotation must remain in-data, register it in `LAYOUT_QA.json` and prove that it does not obscure a hotspot, sensor, contour or boundary. A03 governs the full-field versus zoom/local metric wording; do not reinterpret it during styling.
 
-Align the five full-field, zoom and local-error rows precisely. Preserve the sensor-layout tile and its observed locations. Make the field and error colourbar labels/exponents readable and keep them clear of neighbouring titles and tiles.
+Align the five full-field, zoom and local-error rows precisely. Preserve the sensor-layout tile and its observed locations. V4_7 removes both Panel-c colourbars by explicit author authorization; retain their field/error normalization values in the manifest and do not rescale any map.
 
 ## d — multiscale qualitative components
 

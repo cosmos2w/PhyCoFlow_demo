@@ -49,6 +49,15 @@ the exported PDF, not just the plotting window.
 
 Apply the mandatory layout-integrity gates in `00_GENERAL_ART_STYLE.md` after the final draw. Renderer-based checks must report zero unexplained text/text, text/panel and text/evidence intersections, zero clipped artists and the required horizontal and vertical clearances at both widths. Inspect full-page and high-zoom previews as a separate check. Save the measured results, intentional in-data annotation exceptions and resolved cross-figure semantic style table in `LAYOUT_QA.json`; neither visual inspection nor geometry checks may substitute for the other.
 
+The final-draw check must be rerun after equal-aspect or other geometry setters
+have settled every axes window. For each ordinary annotation/callout, store its
+renderer box, compare it with every data-window box (including the owning
+window), and store the nearest clearance. Also run a pairwise annotation-text
+box check. The gate passes only with zero unregistered text/evidence
+intersections, zero annotation/annotation intersections and at least 1 mm
+annotation-to-data-window clearance at the 180-mm design width. A check run
+before the last geometry/aspect adjustment is not release evidence.
+
 Additionally, compute a semantic union bounding box for every adjacent major
 row using all owned axes tight-bboxes, ticks, two-level tick labels, titles,
 panel tags, legends, colourbars/exponents, annotations and figure-level text.

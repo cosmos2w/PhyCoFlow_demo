@@ -160,8 +160,23 @@ The spacing guidance above is a release contract, not a visual suggestion. Every
    boxes, clipped artists, or unexplained intersections are failures. The
    162-mm preview must be rasterized anew from the vector export at the target
    physical scale; resizing the 180-mm PNG is not an insertion-width check.
+7. **Pairwise text/evidence collision gate.** After the final aspect-ratio and
+   axes-position adjustments, recompute every visible text bounding box with
+   the renderer. Compare each ordinary annotation, callout and free-standing
+   label against every data-window/evidence bounding box, including its owning
+   axes, and compare all such text boxes pairwise. External annotations must
+   have zero data-window intersections and at least 1 mm clearance from every
+   data window at the 180-mm design width; peer text boxes must have zero
+   intersection. An annotation may intersect its owning data window only when
+   its semantic ID is present in the intentional in-data registry and the
+   high-zoom evidence review confirms that it covers no contour, sensor,
+   boundary, hotspot, curve, interval, bar, violin or matrix value. The audit
+   must store each tested text box, every nearest evidence box, the measured
+   clearance, all pairwise text intersections and the exception registry.
+   Running this gate before equal-aspect axes settle is invalid because the
+   final renderer can move the plot window after the annotation was placed.
 
-Self-check these gates after the final draw, not from configuration values alone. Use the selected plotting backend's renderer to collect the final display bounding boxes and semantic owners for all text, axes, legends, colourbars and data-bearing artists. Run pairwise forbidden-intersection, adjacent-major-row union and minimum-clearance checks on the 180-mm render and again on a true 162-mm render. Then inspect full-page and high-zoom raster previews because bounding boxes alone cannot detect a label covering a contour, dense point cloud or hotspot. Record the tested dimensions, collision count, clipped-artist count, row-union owners and extents, minimum horizontal and vertical clearances, intentional in-data annotations, resolved semantic style table and grayscale/CVD results in `LAYOUT_QA.json`. Passing requires zero unexplained collisions and zero clipped artists; visual inspection cannot waive a failed geometric check, and a geometric pass cannot replace visual inspection.
+Self-check these gates after the final draw and after the final aspect-ratio pass, not from configuration values alone. Use the selected plotting backend's renderer to collect the final display bounding boxes and semantic owners for all text, axes, legends, colourbars and data-bearing artists. Run pairwise forbidden-intersection, annotation-to-all-data-window, adjacent-major-row union and minimum-clearance checks on the 180-mm render and again on a true 162-mm render. Then inspect full-page and high-zoom raster previews because bounding boxes alone cannot detect a label covering a contour, dense point cloud or hotspot. Record the tested dimensions, collision count, clipped-artist count, per-annotation nearest-evidence clearance, row-union owners and extents, minimum horizontal and vertical clearances, intentional in-data annotations, resolved semantic style table and grayscale/CVD results in `LAYOUT_QA.json`. Passing requires zero unexplained collisions and zero clipped artists; visual inspection cannot waive a failed geometric check, and a geometric pass cannot replace visual inspection.
 
 ## 7. Physical maps and image fidelity
 

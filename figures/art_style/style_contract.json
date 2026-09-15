@@ -218,6 +218,17 @@
     "require_text_role_inventory": true,
     "require_annotation_reduction_records": true,
     "require_adjacent_major_row_union_bbox_check": true,
+    "require_pairwise_annotation_text_bbox_check": true,
+    "require_annotation_to_all_data_window_bbox_check": true,
+    "annotation_collision_gate": {
+      "run_after_final_aspect_and_axes_positioning": true,
+      "maximum_unregistered_text_evidence_intersections": 0,
+      "maximum_annotation_annotation_intersections": 0,
+      "minimum_annotation_to_data_window_clearance_mm_at_180mm": 1.0,
+      "include_owning_data_window": true,
+      "require_per_annotation_bbox_and_nearest_evidence_record": true,
+      "require_intentional_in_data_semantic_id_registry": true
+    },
     "adjacent_major_row_union_bbox": {
       "include": [
         "data_axes_tightbbox",

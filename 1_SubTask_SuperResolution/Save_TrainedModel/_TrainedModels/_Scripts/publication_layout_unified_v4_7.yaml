@@ -1,0 +1,51 @@
+extends: publication_layout_unified_v4_6.yaml
+
+workflow_label: mixed_resolution_unified_v4_7
+
+figure:
+  output_name: MixedResolution_unified_v4_7
+  panel_letters: [a, b, c, d, e]
+  aesthetic_profile: nature_v4_7_external_metric_gutters_and_taller_sweeps_20260915
+
+v4_7_geometry:
+  # The removed Panel-c colourbars release the bottom band. Panel c/d are
+  # shortened and shifted upward; 3 mm is transferred to Panel b while its top
+  # edge remains fixed. Panel e moves upward into the remaining released band.
+  panel_b_bottom_downshift_mm: 3.0
+  panel_b_height_increase_mm: 3.0
+  panel_cd_bottom_upshift_mm: 6.0
+  panel_cd_height_decrease_mm: 9.0
+  panel_e_bottom_upshift_mm: 2.5
+  minimum_adjacent_row_union_gap_mm_at_162mm: 3.0
+
+v4_geometry:
+  shared_cd_grid:
+    # 5.75 mm is required so 7-pt residual metrics fit between image rows with
+    # at least 1 mm clearance on both sides after the final aspect pass.
+    row_gap_mm: 5.75
+    # Dedicated label gutter; it contains no colourbar artists in V4_7.
+    bottom_colorbar_strip_mm: 6.0
+
+panel_b_v4:
+  # Preserve the V4_6 grouped-bar physical height while increasing the lower
+  # three sweep windows by roughly 12 percent.
+  recipe_axis_bounds: [0.075, 0.6459860724, 0.905, 0.3340139276]
+  legend_bounds: [0.100, 0.457, 0.820, 0.080]
+  sweep_axis_bounds:
+    - [0.0650, 0.150, 0.300, 0.258]
+    - [0.3725, 0.150, 0.300, 0.258]
+    - [0.6800, 0.150, 0.300, 0.258]
+
+panel_c_v4:
+  # Applied after the final equal-aspect axes pass.
+  bottom_label_offset_mm: 1.05
+
+v4_7_annotation_gate:
+  target_gids:
+    - qualitative-local-relative-l2
+    - qualitative-relative-l2
+  target_text:
+    - Sensor layout
+  minimum_data_window_clearance_mm: 1.0
+  maximum_text_text_intersection_count: 0
+  maximum_text_data_intersection_count: 0
