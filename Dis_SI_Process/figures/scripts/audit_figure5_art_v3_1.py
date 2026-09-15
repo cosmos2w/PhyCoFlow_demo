@@ -97,6 +97,8 @@ def main() -> None:
         "accuracy_errorbars_visible": qa.get("accuracy_errorbars_visible") is True,
         "twelve_two_sig_digit_means": len(qa.get("mean_annotations", [])) == 12 and all(record.get("display") == format(record.get("mean"), ".2g") for record in qa.get("mean_annotations", [])),
         "legend_clear_of_curve_points": not qa.get("spectrum_legend_curve_point_intersections"),
+        "high_band_arrow_removed": qa.get("high_band_placement", {}).get("arrow_artist_count") == 1 and qa.get("high_band_placement", {}).get("visible_arrow_artist_count") == 0,
+        "high_band_label_centered_below_legend_above_curves": abs(float(qa.get("high_band_placement", {}).get("label_x", -1)) - float(qa.get("high_band_placement", {}).get("band_center", 1))) <= 1e-10 and float(qa.get("high_band_placement", {}).get("label_below_legend_clearance_mm", -1)) >= 1.0 and float(qa.get("high_band_placement", {}).get("label_above_curves_clearance_mm", -1)) >= 1.0,
         "panel_f_spacing_matches_a": 0.95 <= float(qa.get("panel_f_to_a_row_spacing_ratio", 0)) <= 1.05,
         "dmf_gen_only_bold_model_label": qa.get("bold_nonpanel_records") == [{"axis_index": 0, "text": "DMF-Gen", "weight": "bold"}, {"axis_index": 3, "text": "DMF-Gen", "weight": "bold"}],
         "font_floor_at_162mm": qa.get("tick_label_font_pt", 0) * qa.get("insertion_scale", 0) >= 7.0 and qa.get("legend_font_pt", 0) * qa.get("insertion_scale", 0) >= 7.0,

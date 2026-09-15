@@ -208,14 +208,50 @@ def _style_and_reflow(fig: Figure, config: dict) -> dict:
     resource_errorbars = _hide_resource_errorbars(score)
 
     high_band_text = next(text for text in spectrum.texts if text.get_text() == "High-band")
-    high_band_text.set_position((float(geometry["high_band_text_x_data"]), high_band_text.get_position()[1]))
-    high_band_text.set_ha("right")
+    band_arrows = [text for text in spectrum.texts if getattr(text, "arrow_patch", None) is not None]
+    if len(band_arrows) != 1:
+        raise RuntimeError(f"Expected one Panel-e high-band arrow; found {len(band_arrows)}")
+    band_arrow = band_arrows[0]
+    band_left, band_right = sorted((float(band_arrow.get_position()[0]), float(band_arrow.xy[0])))
+    band_center = (band_left + band_right) / 2.0
+    band_arrow.arrow_patch.set_visible(False)
+    band_arrow.set_visible(False)
+    high_band_text.set_position((band_center, float(geometry["high_band_text_y_axes"])))
+    high_band_text.set_ha("center")
+    high_band_text.set_va("bottom")
     high_band_text.set_fontsize(float(config["typography_pt"]["in_plot_annotation"]))
 
     panel_labels = {text.get_text(): text for text in fig.texts if text.get_visible() and text.get_text() in set("abcdef")}
     panel_labels["f"].set_y(score[0].get_position().y1)
     panel_labels["f"].set_va(str(geometry["panel_f_top_tag_vertical_alignment"]))
     ylabel_records = _center_distribution_ylabels(fig, (distribution_top, distribution_bottom), width_mm)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    px_to_mm_y = height_mm / fig.bbox.height
+    high_band_box = high_band_text.get_window_extent(renderer)
+    legend_box = spectrum.get_legend().get_window_extent(renderer)
+    curve_y_pixels = []
+    for line in spectrum.lines:
+        if not line.get_visible() or line.get_label().startswith("_"):
+            continue
+        xdata = np.asarray(line.get_xdata(), dtype=float)
+        ydata = np.asarray(line.get_ydata(), dtype=float)
+        mask = np.isfinite(xdata) & np.isfinite(ydata) & (xdata >= band_left) & (xdata <= band_right)
+        if mask.any():
+            curve_y_pixels.extend(line.get_transform().transform(np.column_stack([xdata[mask], ydata[mask]]))[:, 1].tolist())
+    if not curve_y_pixels:
+        raise RuntimeError("No spectrum curve samples found inside the high-band region")
+    high_band_placement = {
+        "band_left": band_left,
+        "band_right": band_right,
+        "band_center": band_center,
+        "label_x": float(high_band_text.get_position()[0]),
+        "label_y_axes": float(high_band_text.get_position()[1]),
+        "arrow_artist_count": len(band_arrows),
+        "visible_arrow_artist_count": int(band_arrow.get_visible()) + int(band_arrow.arrow_patch.get_visible()),
+        "label_below_legend_clearance_mm": float((legend_box.y0 - high_band_box.y1) * px_to_mm_y),
+        "label_above_curves_clearance_mm": float((high_band_box.y0 - max(curve_y_pixels)) * px_to_mm_y),
+    }
 
     middle_height = float(geometry["middle_axis_top_mm"]) - float(geometry["middle_axis_bottom_mm"])
     nominal_gap = float(geometry["middle_axis_bottom_mm"]) - float(geometry["score_axis_top_mm"])
@@ -242,6 +278,7 @@ def _style_and_reflow(fig: Figure, config: dict) -> dict:
             if isinstance(container, ErrorbarContainer)
             for artist in _errorbar_artists(container)
         ),
+        "high_band_placement": high_band_placement,
         "panel_d_category_tick_rotations_deg": [float(label.get_rotation()) for ax in (distribution_top, distribution_bottom) for label in ax.get_xticklabels()],
     }
     return _final_measure(fig, config, prior, modifications)
@@ -352,6 +389,10 @@ def main() -> None:
         "twelve_two_sig_digit_means": len(qa["mean_annotations"]) == 12 and all(record["display"] == format(record["mean"], ".2g") for record in qa["mean_annotations"]),
         "mean_tip_clearance_ge_1mm": qa["minimum_mean_to_violin_clearance_mm"] >= float(config["geometry"]["minimum_mean_to_violin_clearance_mm"]),
         "legend_clear_of_curve_points": not qa["spectrum_legend_curve_point_intersections"],
+        "high_band_arrow_removed": qa["high_band_placement"]["arrow_artist_count"] == 1 and qa["high_band_placement"]["visible_arrow_artist_count"] == 0,
+        "high_band_label_centered_in_shaded_region": abs(qa["high_band_placement"]["label_x"] - qa["high_band_placement"]["band_center"]) <= 1e-10,
+        "high_band_label_below_legend": qa["high_band_placement"]["label_below_legend_clearance_mm"] >= 1.0,
+        "high_band_label_above_curves": qa["high_band_placement"]["label_above_curves_clearance_mm"] >= 1.0,
         "panel_a_palette_and_open_markers_exact": set(qa["panel_a_marker_records"]) == expected_methods,
         "panel_b_palette_and_open_markers_exact": set(qa["panel_b_marker_records"]) == expected_methods,
         "panel_c_marker_geometry_matches_a": len(qa["panel_c_marker_records"]) == 5,
@@ -375,6 +416,7 @@ def main() -> None:
 - Final size: {config['canvas']['width_mm']} x {config['canvas']['height_mm']} mm; manuscript review at {config['canvas']['manuscript_width_mm']} mm width.
 - Data integrity: exact before/after artist-data hash `{qa['scientific_data_hash_after']}`; no values, coordinates, category orders, or scale types changed.
 - Visual overrides: both Panel-d axes and Panel e occupy an 80-percent-height middle row; Panel-d violin fills and Panel-f resource-bar fills use alpha {config['style']['violin_fill_alpha']}. Resource errorbar artists are retained but hidden; accuracy intervals remain visible.
+- Panel e: the high-band arrow is hidden; `High-band` is centered in the shaded region, beneath the legend and above every sampled curve in that region.
 - Collision contract: all visible text, axis ownership, panel tags, and rendered row unions pass the mandatory no-overlap and 3 mm minimum-clearance gates.
 """)
     (output / "STYLE_CHANGELOG.md").write_text(f"""# Figure 5 art V3.1 style changelog
@@ -385,6 +427,7 @@ def main() -> None:
 - Canvas: reduced from 244.0 to {config['canvas']['height_mm']} mm by exactly the sum of middle-row and nominal-gap savings.
 - Panel d: y-axis title boxes are centered in the left-page whitespace; violin fills use alpha {config['style']['violin_fill_alpha']}.
 - Panel f: filled resource bars use alpha {config['style']['bar_fill_alpha']}; all uncertainty artists in the four resource axes are hidden but retained in the figure object, while accuracy intervals remain visible.
+- Panel e: removed the high-band arrow and centered its label within the shaded region, with {qa['high_band_placement']['label_below_legend_clearance_mm']:.3f} mm legend clearance and {qa['high_band_placement']['label_above_curves_clearance_mm']:.3f} mm curve clearance.
 - Typography/palette: unchanged from V3; “DMF-Gen” remains the sole bold model-name exception in panels a and f.
 """)
     manifest = {

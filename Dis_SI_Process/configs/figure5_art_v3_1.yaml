@@ -53,8 +53,7 @@ geometry:
   panel_e_tag_inner_gap_mm: 7.0
   upper_ylabel_y: 0.50
   lower_ylabel_y: 0.50
-  high_band_text_y_axes: 0.94
-  high_band_text_x_data: 124.0
+  high_band_text_y_axes: 0.315
   high_band_arrow_y_axes: 0.947
   spectrum_legend_anchor: [0.99, 1.02]
   lower_violin_ylim_headroom_factor: 1.50

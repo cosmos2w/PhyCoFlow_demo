@@ -54,7 +54,13 @@ Keep truth and all six variants, preserving every frequency-shell coordinate, po
 
 Use dark truth, red full model, the conditioning-variant blue-grays, ochre IID and shared Senseiver gray-blue. Maintain line-style distinctions so overlapping variants remain traceable in grayscale. Use no new per-shell markers. Adjust line weights within the general hierarchy, not to make high-frequency attenuation disappear.
 
-Retain the high-band shaded region, vertical boundary and existing label/arrow exactly in data space. Its range is a metric definition, not a drawing convenience. Reduce the shading opacity if necessary, uniformly and without moving its boundary. Place the legend in whitespace without covering the shaded-band annotation or the portion where the IID curve separates. Prefer a compact external legend above/adjacent to the axis if an internal one cannot avoid covering data.
+Retain the high-band shaded region and vertical boundary exactly in data space;
+their range is a metric definition, not a drawing convenience. The V3.1 author
+override removes the decorative double-headed arrow and centers the existing
+`High-band` label within the shaded region, beneath the legend and above all
+curves. Reduce the shading opacity if necessary, uniformly and without moving
+its boundary. Place the legend in whitespace without covering the shaded-band
+label or the portion where the IID curve separates.
 
 A06 must confirm the band definition and index-space/physical-space frequency interpretation. Do not rename “Frequency shell” to a physical wavenumber with invented units.
 
@@ -114,8 +120,8 @@ to the top-row axes, place d/e and f on their respective axes-top baselines,
 and crop the outer top/bottom/right rendered margins to at most `1.5 mm`.
 Use the shared model palette and `5.8 pt` hollow markers in a/b/f; enlarge only
 Panel-a raw-point clouds to `0.95 pt2`. Rename the spectrum annotation
-`High-band`, keep it near the upper edge, and keep the wrapped legend up/right
-with zero sampled curve intersections. The release
+`High-band`, remove its arrow, and center the label in the shaded band beneath
+the wrapped upper-right legend and above all sampled curves. The release
 must include fixed-size PDF/SVG/PNG outputs, a true vector-derived 162-mm render,
 grayscale and deuteranopia reviews, an exact before/after scientific data-artist hash,
 an enumerated lower-violin view-limit exception,

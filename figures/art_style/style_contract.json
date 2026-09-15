@@ -452,6 +452,8 @@
         "accuracy_errorbars": "VISIBLE",
         "violin_fill_alpha": 0.78,
         "resource_bar_fill_alpha": 0.78,
+        "panel_e_high_band_arrow": "HIDDEN_AUTHOR_EXCEPTION",
+        "panel_e_high_band_label": "CENTERED_IN_SHADED_REGION_BELOW_LEGEND_ABOVE_CURVES",
         "lower_violin_ylim": "EXPANDED_FOR_MEAN_LABEL_HEADROOM_AUTHOR_EXCEPTION",
         "dmf_gen_model_label_weight": "BOLD_AUTHOR_EXCEPTION",
         "minimum_rendered_row_union_clearance_mm": 3.0,
