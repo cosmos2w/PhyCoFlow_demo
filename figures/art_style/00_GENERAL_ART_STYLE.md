@@ -144,6 +144,10 @@ or repositioned without changing their numerical values. For Figure 4 V3 only,
 all Panel-d tick labels may instead be hidden consistently when a final-render
 single-line collision test fails; hiding labels does not authorize changing the
 tick locations, log transforms or axis limits.
+Figure 4 V4 supersedes that fallback for its active export: retain the three JSD
+tick-label sets, place them on one baseline, and resolve crowding through wider
+subplot columns and outward anchoring only. Its c/d left spines and panel-letter
+offsets must be measured in page coordinates and match within `0.01 mm`.
 
 ### Mandatory layout-integrity and cross-figure consistency gates
 

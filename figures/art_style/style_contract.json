@@ -175,6 +175,29 @@
           "maximum_tick_label_overlap_count": 0,
           "tick_label_collision_fallback": "hide all three label sets; retain ticks transforms and limits"
         }
+      },
+      "art_v4_geometry_override": {
+        "panel_a_column_header_font_pt": 7.8,
+        "panel_a_supertitle_to_header_gap_multiplier_vs_v3": 0.5,
+        "panel_a_validated_supertitle_gaps_mm": [
+          1.524,
+          2.032
+        ],
+        "panel_b_gridspec_width_multiplier_vs_v3": 1.1,
+        "panel_b_validated_axes_block_width_mm": 46.6556,
+        "panel_b_to_right_text_clearance_mm": 1.2,
+        "panel_c_width_multiplier_vs_v3": 0.902764,
+        "panel_c_intercolumn_gap_mm": 8.0,
+        "panel_c_d_left_spine_tolerance_mm": 0.01,
+        "panel_c_d_panel_tag_offset_mm": 3.0,
+        "panel_d_equal_subplot_width_mm": 26.144,
+        "panel_d_intercolumn_gap_mm": 6.5,
+        "panel_d_violin_data_right_fraction": 0.74,
+        "panel_d_mean_x_axes_fraction": 0.75,
+        "panel_d_tick_labels": "VISIBLE_SINGLE_BASELINE_OUTWARD_ANCHORED_VALUES_UNCHANGED",
+        "panel_d_xlabel_labelpad_pt": 7.0,
+        "panel_d_xlabel_to_ticks_clearance_mm": 1.0,
+        "panel_d_xlabel_bottom_to_panel_b_bottom_tolerance_mm": 0.01
       }
     },
     "figure_3_v4_4_continuity_override": {
@@ -382,7 +405,7 @@
       "number": 4,
       "asset": "Figure_MultiFieldReconstruction.pdf",
       "producer_pdf": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf",
-      "latest_art_export": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v3_20260914_2343.pdf",
+      "latest_art_export": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v4_20260915_0007.pdf",
       "panels": [
         "a",
         "b",

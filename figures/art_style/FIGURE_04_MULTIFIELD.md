@@ -4,7 +4,7 @@
 
 **Scientific baseline:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf`.
 
-**Active art export:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v3_20260914_2343.pdf`.
+**Active art export:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v4_20260915_0007.pdf`.
 
 Read the general contract. Preserve panels a–d and their existing scientific contents.
 
@@ -50,6 +50,11 @@ from `0.16` to `0.08`. V3 separately halves the inter-field spacer ratio from
 the producer. Reduce the physical Panel-a content height accordingly so the
 saved field-gap space compresses the canvas rather than stretching the map rows.
 
+For V4, set only the seven montage column headings to the small axis-title role,
+`7.8 pt`; do not reduce the two group supertitles or the row/field labels. Measure
+the rendered gap from each supertitle to its child headings and make it exactly
+half the corresponding V3 gap. The validated gaps are `1.524 mm` and `2.032 mm`.
+
 ## b — three error heatmaps
 
 Preserve all 144 source entries (three 8×6 tables), including their existing precision. V3 displays only the five individual-field columns, for 120 visible values; the author-approved `Unobs.` omission is a display operation after source loading. Do not delete the aggregate values from the manifest or source comparison. Retain the physical cell width of the five visible columns and shrink/translate the matrix block rather than stretching the cells.
@@ -66,6 +71,11 @@ text.
 Lighten the most saturated table backgrounds enough through the colormap choice to make the numeric values primary, but do not alter the metric-to-colour normalization or clip large entries. Use light cell separation rather than thick grid borders. Keep every method tick label regular under the active typography hierarchy; do not conceal lower errors belonging to other methods or add best-in-column stars.
 
 Strengthen the existing teal observed-channel marks so they can be seen at print scale. Preserve their exact column memberships under T; T+U1; and CO+T+U1+p. A colour accent for “observed” is an information encoding and must not be reassigned to the DMF-Gen brand colour. Keep the regime headings aligned at identical distances above their tables.
+
+V4 increases Panel b's lower-row GridSpec share by exactly `1.10x` relative to
+V3 while keeping the displayed 8x5 matrices and all cell values unchanged. Its
+validated axes-block width is `46.656 mm`. Keep at least `1.2 mm` rendered
+clearance from Panel-b text to the right-side panels.
 
 ## c — LSD and spectra
 
@@ -101,6 +111,18 @@ violin data to the left `0.66` axes fraction, and align the numeric mean column
 at `0.71` axes fraction. Use a 6-mm rendered inter-column gap for Panel d. All
 24 mean labels must remain within their owned axes and the final tick-label
 overlap count must be zero.
+
+V4 forces the left spines of Panels c and d to the same absolute page coordinate
+(tolerance `0.01 mm`) and places both panel tags at the same `3 mm` left offset.
+Panel c is compressed to `90.28%` of its V3 width while retaining an `8 mm`
+inter-column gap. Panel d fills the remaining right-side width with three equal
+`26.144 mm` subplot columns and a `6.5 mm` inter-column gap. Use a shared violin
+data corridor ending at axes fraction `0.74` and a mean-text column at `0.75`.
+Retain all three visible JSD tick-label sets on one baseline; outward-anchor the
+outer tick labels if needed, without changing values or locations. The global
+JSD title uses `7 pt` label padding, has at least `1 mm` clearance below the tick
+labels, and its rendered bottom must align with Panel b's rendered bottom to
+within `0.01 mm`.
 
 ## Acceptance and gates
 
