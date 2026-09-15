@@ -4,6 +4,8 @@
 
 **Active producer:** `Dis_SI_Process/figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf`.
 
+**Active art export:** `Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v1_20260915_0019/figure5_log.pdf`.
+
 Read the general contract and author checks A05/A06. The editorial revision moves this figure's evidence into Results without changing its figure number or panel contents.
 
 ## Preserve the inventory
@@ -65,3 +67,21 @@ Preserve any timing/memory error bars and their definitions; the style pass cann
 A05 must reconcile 0.1063 here with 0.117 in the preceding multi-field evaluation. A06 must confirm all uncertainty and timing/statistical encodings. Retain the current scientific values until approved. A02 still governs the Fourier baseline identity in f.
 
 Check that all five generative methods are present in a–c, both six-category violin axes align, e contains truth plus six variant traces, and every scorecard row matches across its five columns. Ensure no coloured baseline is nearly invisible, no legend covers the high-band tail and no bar/interval geometry changes. Review the complete figure at 162 mm and record the latency/ensemble-scope question as a scientific release gate, not an art defect.
+
+For the active art V1 export, use a fixed `180 x 200 mm` MediaBox rather than
+the baseline's approximately `258 x 249 mm` tight crop. Apply the established
+hierarchy at the final physical size: panel labels `11.0 pt` bold, axis titles
+approximately `8.5 pt`, ticks and legends `7.8 pt`, and ordinary in-plot
+annotations `7.0 pt`. At 162-mm insertion width, ordinary ticks and legends
+therefore remain at least `7 pt`. Keep every scientific artist coordinate,
+scale and limit unchanged. Wrap the four long Panel-d categories onto two lines
+and retain one common `45 degree` rotation. Use a `7.3:2.7` Panel-d/e width
+split with `0.30` internal wspace, raise only the lower violin row by `2.5 mm`,
+shorten the upper violin axes from below by `8 mm`, inset the middle-row top by
+`1 mm`, drop the d/e tags by `1 mm`, and translate the aligned scorecard row
+downward by `2.5 mm` to preserve at least `3 mm` rendered clearance from both
+adjacent major rows. Place the Panel-f tag in the left gutter, top-aligned with
+its scorecard axes. The release
+must include fixed-size PDF/SVG/PNG outputs, a true vector-derived 162-mm render,
+grayscale and deuteranopia reviews, an exact before/after scientific-state hash,
+and zero clipped text, tick-label overlaps or panel-tag/data-window overlaps.

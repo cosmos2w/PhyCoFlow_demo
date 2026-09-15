@@ -11,6 +11,7 @@
     "00_GENERAL_ART_STYLE.md",
     "FIGURE_03_MIXED_RESOLUTION.md",
     "FIGURE_04_MULTIFIELD.md",
+    "FIGURE_05_ENSEMBLE_COST.md",
     "../editorial/02_AUTHOR_CHECKS.md"
   ],
   "source_policy": {
@@ -418,6 +419,29 @@
       "number": 5,
       "asset": "Figure_Evaluations.pdf",
       "producer_pdf": "Dis_SI_Process/figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf",
+      "latest_art_export": "Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v1_20260915_0019/figure5_log.pdf",
+      "art_v1_geometry": {
+        "canvas_mm": [
+          180.0,
+          200.0
+        ],
+        "panel_label_pt": 11.0,
+        "axis_title_pt": 8.5,
+        "tick_and_legend_pt": 7.8,
+        "in_plot_annotation_pt": 7.0,
+        "panel_d_e_width_ratios": [
+          7.3,
+          2.7
+        ],
+        "panel_d_e_wspace": 0.3,
+        "panel_d_category_rotation_deg": 45.0,
+        "panel_d_long_categories": "WRAPPED_WITH_TEXT_UNCHANGED",
+        "top_middle_rendered_union_clearance_mm": 3.8302,
+        "middle_bottom_rendered_union_clearance_mm": 3.8056,
+        "maximum_clipped_text_count": 0,
+        "maximum_tick_or_text_overlap_count": 0,
+        "scientific_state_sha256": "8248fd8165ed1749d42bfc2672ea79aff3a7201e6aad5152b8a9f412c651da32"
+      },
       "panels": [
         "a",
         "b",
