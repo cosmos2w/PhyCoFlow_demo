@@ -4,7 +4,7 @@
 
 **Active producer:** `Dis_SI_Process/figures/generated/figure5_precision_log_revision_20260910/figure5_log.pdf`.
 
-**Active art export:** `Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v2_20260915_0804/figure5_log.pdf`.
+**Active art export:** `Dis_SI_Process/figures/generated/art_style_review/Figure_Evaluations_art_v3_20260915_0900/figure5_log.pdf`.
 
 Read the general contract and author checks A05/A06. The editorial revision moves this figure's evidence into Results without changing its figure number or panel contents.
 
@@ -38,6 +38,12 @@ Use a coordinated ablation palette: full model uses DMF-Gen red; three condition
 
 Increase the label size and either wrap long category names consistently or retain one common modest rotation with sufficient bottom gutter. Keep the six tick centres fixed. Do not rotate each name by a different angle or change to horizontal violins as an easier layout. The upper metric label and lower high-band label should share an x offset and sit outside the data region.
 
+For V3, both violin axes are `41 mm` high and touch at one shared boundary
+(`0 mm` hspace). Display each existing mean above its violin tip using two
+significant digits and at least `1 mm` rendered tip clearance. The sole lower
+y-limit extension is an author-approved display-headroom exception; preserve
+the log transform and every violin/mean coordinate, and record the change.
+
 Use thin violin outlines and gentle fills. Internal dashed mean/summary marks should remain at their exact positions; they must not be re-centred visually. The IID source's lower whole-field error and worse high-band error are a central trade-off, so do not make its first violin visually subdued or its second violin excessively saturated.
 
 ## e — population spectrum
@@ -67,27 +73,41 @@ The final memory column has filled and hollow encodings for model state and peak
 
 Preserve any timing/memory error bars and their definitions; the style pass cannot infer their confidence level. The equal-looking row design must not imply identical native training workloads or one-draw/64-draw equivalence. These are reporting questions under A06.
 
+V3 author override: in the right-most inference-memory axis only, retain the
+error-bar artists and source intervals in memory but hide them from export.
+Keep the paired filled model-state and hollow peak bars; use a `0.9 pt` outline
+on all eight hollow peak bars. This does not authorize hiding uncertainty in
+the other four scorecard axes.
+
 ## Acceptance and release gates
 
 A05 must reconcile 0.1063 here with 0.117 in the preceding multi-field evaluation. A06 must confirm all uncertainty and timing/statistical encodings. Retain the current scientific values until approved. A02 still governs the Fourier baseline identity in f.
 
 Check that all five generative methods are present in a–c, both six-category violin axes align, e contains truth plus six variant traces, and every scorecard row matches across its five columns. Ensure no coloured baseline is nearly invisible, no legend covers the high-band tail and no bar/interval geometry changes. Review the complete figure at 162 mm and record the latency/ensemble-scope question as a scientific release gate, not an art defect.
 
-For the active art V2 export, use a fixed `180 x 220 mm` MediaBox rather than
+For the active art V3 export, use a fixed `179.8 x 244 mm` MediaBox rather than
 the baseline's approximately `258 x 249 mm` tight crop. Apply the established
 hierarchy at the final physical size: panel labels `11.0 pt` bold, axis titles
 approximately `8.5 pt`, ticks and legends `7.8 pt`, and ordinary in-plot
 annotations `7.0 pt`. At 162-mm insertion width, ordinary ticks and legends
-therefore remain at least `7 pt`. Keep every scientific artist coordinate,
-scale and limit unchanged. Use one measured visible left rail for the longest
+therefore remain at least `7 pt`. Keep every scientific artist coordinate and
+scale type unchanged. Use one measured visible left rail for the longest
 model names, both Panel-d y-axis titles and tags a/d/f, and one common right
 axes boundary for all three major rows. Use an exact `2:1` Panel-d/e plotting
 width ratio with a `14 mm` inter-panel gutter. Both Panel-d violin axes must be
-at least `33 mm` high; wrap the two y-axis titles consistently and verify at
+`41 mm` high with zero hspace; wrap the two y-axis titles consistently and verify at
 least `3 mm` title-to-title clearance. Wrap the four long Panel-d categories
 onto two lines and retain one common `45 degree` rotation. Give Panel f four
-equal `4 mm` physical gaps and align its method-label spine with Panel a. The release
+equal `4 mm` physical gaps, match its categorical row pitch to Panel a within
+5%, and align its method-label spine with Panel a. Align the baselines of a/b/c
+to the top-row axes, place d/e and f on their respective axes-top baselines,
+and crop the outer top/bottom/right rendered margins to at most `1.5 mm`.
+Use the shared model palette and `5.8 pt` hollow markers in a/b/f; enlarge only
+Panel-a raw-point clouds to `0.95 pt2`. Rename the spectrum annotation
+`High-band`, place it at the upper edge, and keep the wrapped legend down/right
+with zero sampled curve intersections. The release
 must include fixed-size PDF/SVG/PNG outputs, a true vector-derived 162-mm render,
-grayscale and deuteranopia reviews, an exact before/after scientific-state hash,
+grayscale and deuteranopia reviews, an exact before/after scientific data-artist hash,
+an enumerated lower-violin view-limit exception,
 and zero clipped text, text-to-text overlaps, text-to-nonowned-axes overlaps,
 tick-label overlaps or panel-tag/data-window overlaps.

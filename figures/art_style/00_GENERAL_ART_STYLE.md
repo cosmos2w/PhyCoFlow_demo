@@ -77,6 +77,16 @@ complete 7.0-pt string cannot fit after wrapping, equivalent number formatting
 and geometry reallocation have all been attempted.  Such a reduction requires
 a per-artist record and may not go below 6.6 pt at 180 mm (5.94 pt at 162 mm).
 
+Latest author-authorized Figure 5 exceptions are narrowly scoped to its V3 art
+export: retain the inference-memory uncertainty artists and values in the
+figure object but hide their caps/lines from the rendered right-most scorecard
+axis; add the twelve existing violin means as 2-significant-digit annotations;
+and extend only the lower violin y-limit enough to keep those labels above the
+violin tips without entering the upper axes. The release must prove an exact
+before/after data-artist hash, enumerate the hidden artists, record the sole
+view-limit change, and retain all source values. These exceptions do not permit
+removing error bars or changing limits in any other panel or figure.
+
 These floors apply to ordinary base text, not the naturally smaller glyphs in superscripts/subscripts. Several current DMF-Gen ordinary labels measure about 4–5 pt in the PDF. Do not reproduce that size merely because the standalone figure looks readable when enlarged. Use one sans-serif family throughout, preferably Arial; use Liberation Sans or DejaVu Sans only as available substitutes, and use the same substitution in every figure. Record the resolved family. Never ship font files.
 
 Set font sizes at the final physical export size. Preserve that size in the PDF MediaBox: indiscriminate `bbox_inches='tight'` can change the physical width and therefore the subsequent scaling. Use explicit margins and axes positions; validate PDF dimensions after export. Increase room, wrap long labels and reallocate whitespace before reducing font size. If all panels cannot be retained at the minimum readable size in an acceptable page footprint, report a layout conflict rather than drop data or shrink labels invisibly.
