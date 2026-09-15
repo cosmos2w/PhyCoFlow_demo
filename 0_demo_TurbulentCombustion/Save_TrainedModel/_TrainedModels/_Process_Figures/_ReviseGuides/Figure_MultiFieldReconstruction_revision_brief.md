@@ -1,5 +1,14 @@
 # Revision brief for `Figure_MultiFieldReconstruction`
 
+> **Status for the current art-style-only V2 pass:** this is an older
+> scientific-redesign brief and is not an implementation instruction. The
+> active precedence order is `figures/art_style/00_GENERAL_ART_STYLE.md`, then
+> `figures/art_style/FIGURE_04_MULTIFIELD.md`, then the author's latest task.
+> Do not implement recommendations below that replace bars, change plotted
+> model membership, add or remove scientific annotations, change numerical
+> formatting or normalization, or restore Panel-a colourbars. Such changes
+> require a separately authorized scientific revision.
+
 ## 1. Scientific role of the figure
 
 This figure should serve as the paper's clearest test of **measurement-content variation through \(\mathcal{Y}\)**. The domain \(\Omega\), query set \(X\), five-channel target state, and test set remain fixed; what changes is which physical variables are present in the marked measurement set. The figure should establish five points, in this order:

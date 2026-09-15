@@ -6,9 +6,10 @@
     4,
     5
   ],
-  "status": "DESIGN_PROPOSAL_NOT_EXECUTED",
+  "status": "ACTIVE_ART_STYLE_CONTRACT",
   "read_first": [
     "00_GENERAL_ART_STYLE.md",
+    "FIGURE_04_MULTIFIELD.md",
     "../editorial/02_AUTHOR_CHECKS.md"
   ],
   "source_policy": {
@@ -35,13 +36,30 @@
     "record_resolved_family": true,
     "ship_font_files": false,
     "size_pt_at_design_width": {
-      "panel_letter": 10,
-      "group_heading": 9,
-      "axis_label": 8.5,
-      "legend_tick_method_label": 8,
-      "dense_numeric_base_minimum": 7.8
+      "panel_letter_bold": 11,
+      "major_title_regular": 9.5,
+      "axis_or_subplot_title_regular": 8.5,
+      "legend_tick_method_label_regular": 7.8,
+      "in_plot_annotation_regular": 7,
+      "constrained_annotation_absolute_minimum": 6.6
     },
-    "ordinary_base_text_minimum_pt_at_insertion": 7
+    "size_pt_at_162mm": {
+      "panel_letter_bold": 9.9,
+      "major_title_regular": 8.55,
+      "axis_or_subplot_title_regular": 7.65,
+      "legend_tick_method_label_regular": 7.02,
+      "in_plot_annotation_regular": 6.3,
+      "constrained_annotation_absolute_minimum": 5.94
+    },
+    "strict_role_order": [
+      "panel_letter_bold",
+      "major_title_regular",
+      "axis_or_subplot_title_regular",
+      "legend_tick_method_label_regular",
+      "in_plot_annotation_regular"
+    ],
+    "default_weight": "regular",
+    "dynamic_annotation_reduction_requires_per_artist_qa_record": true
   },
   "model_styles": {
     "DMF-Gen": {
@@ -99,7 +117,31 @@
     "ordered_correlation": "cividis",
     "joint_density": "cividis",
     "normalization_policy": "RETAIN_SOURCE_CLASS_PARAMETERS_LIMITS_AND_MASKS",
-    "zero_centering_policy": "DO_NOT_CHANGE_NORMALIZATION; select neutral lookup position at existing normalized zero or flag"
+    "zero_centering_policy": "DO_NOT_CHANGE_NORMALIZATION; select neutral lookup position at existing normalized zero or flag",
+    "figure_4_round3_continuity_override": {
+      "panel_a_CH4": "crest",
+      "panel_a_CO": "YlGnBu",
+      "panel_a_T": "inferno",
+      "panel_a_p": "viridis",
+      "panel_a_U1": "RdBu_r",
+      "panel_a_absolute_error": "OrRd",
+      "panel_b": "Reds",
+      "panel_a_colorbars": "REMOVED_BY_LATEST_AUTHOR_AUTHORIZATION_WITH_LIMITS_RECORDED",
+      "panel_a_prediction_error_hspace": {
+        "before": 0.16,
+        "after": 0.08,
+        "saved_height_in": 0.1645614035,
+        "transfer_target": "panel_a_master_lower_gap"
+      },
+      "panel_d_geometry": {
+        "shared_violin_width": 0.46,
+        "violin_data_right_fraction": 0.5,
+        "mean_x_axes_fraction": 0.66,
+        "panel_d_column_wspace": 0.06,
+        "minimum_rendered_violin_to_mean_clearance_mm_at_162mm": 1.5,
+        "maximum_tick_label_overlap_count": 0
+      }
+    }
   },
   "line_sizes_pt": {
     "axes": 0.65,
@@ -146,6 +188,8 @@
     "require_exact_semantic_style_table": true,
     "require_grayscale_check": true,
     "require_color_vision_deficiency_check": true,
+    "require_text_role_inventory": true,
+    "require_annotation_reduction_records": true,
     "output": "LAYOUT_QA.json"
   },
   "freeze": [

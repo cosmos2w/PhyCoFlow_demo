@@ -48,15 +48,28 @@ Before changing anything, preserve the original outputs and record file hashes, 
 
 Use **180 mm** as the production design width for these multi-panel figures. This is a proposed house design width, not a claim about a current journal requirement. The supplied TeX has A4 width 210 mm and 24-mm left/right margins, so its current insertion width is **162 mm**. Review every export at both widths. A font designed at 180 mm shrinks by 0.9 at 162 mm. Increasing export DPI will not repair undersized text.
 
-Recommended sizes at 180-mm design width:
+The following five-level hierarchy is mandatory at the 180-mm design width.
+Values are final-size roles, not Matplotlib defaults to be scaled again.  Use
+regular weight throughout unless the table explicitly says otherwise; method
+identity, category labels and major titles do not become bold merely to fill
+space.
 
 | Role | Design size | At 162 mm |
 |---|---:|---:|
-| Bold lowercase panel letter | 10 pt | 9 pt |
-| Major group heading | 8.8–9 pt | 7.9–8.1 pt |
-| Axis label / ordinary panel title | 8.5 pt | 7.65 pt |
-| Legend / tick / method label | 8 pt | 7.2 pt |
-| Dense numeric annotation / equation base | at least 7.8 pt | at least 7.0 pt |
+| Bold lowercase panel letter | 11 pt | 9.9 pt |
+| Major group heading / figure-internal major title, regular | 9.5 pt | 8.55 pt |
+| Axis title / colourbar title / ordinary subplot title, regular | 8.5 pt | 7.65 pt |
+| Tick / standard legend / method label, regular | 7.8 pt | 7.02 pt |
+| In-plot annotation / matrix value / mean label, regular | 7.0 pt | 6.3 pt |
+
+The role ordering is strict: `panel label > major title > axis/subplot title >
+tick/legend > in-plot annotation`.  A renderer must resolve every visible text
+artist to one of these roles and record the result in `LAYOUT_QA.json`.  Do not
+promote dense values to tick size, or allow a legend to compete with a major
+title.  A constrained annotation may be reduced below 7.0 pt only when the
+complete 7.0-pt string cannot fit after wrapping, equivalent number formatting
+and geometry reallocation have all been attempted.  Such a reduction requires
+a per-artist record and may not go below 6.6 pt at 180 mm (5.94 pt at 162 mm).
 
 These floors apply to ordinary base text, not the naturally smaller glyphs in superscripts/subscripts. Several current DMF-Gen ordinary labels measure about 4–5 pt in the PDF. Do not reproduce that size merely because the standalone figure looks readable when enlarged. Use one sans-serif family throughout, preferably Arial; use Liberation Sans or DejaVu Sans only as available substitutes, and use the same substitution in every figure. Record the resolved family. Never ship font files.
 
@@ -111,6 +124,14 @@ Preserve major panel order and keep each figure's existing narrative. Within a c
 Panel letters sit outside data regions at a consistent left/top offset. Do not put bold letters over colour maps. Align a shared legend with the group it explains and use a compact multi-column layout where needed. Preserve legend memberships and category order unless the legend alone is being harmonized; the ranking/order of the plotted rows remains frozen. Never move a legend over a scientifically important boundary, uncertainty ribbon or high-frequency tail.
 
 Do not duplicate a label merely to decorate the canvas. Conversely, do not remove labels, sensors, plots or colourbars that contain information. Existing numerical labels can move from an opaque in-map box into a small adjacent gutter if the association remains unambiguous and the complete map remains visible. Do not enlarge a box so that it hides an error hotspot.
+
+Latest author-authorized Figure 4 exception: the far-right Panel-a colourbars may
+be removed in the compact art revision because the field/error limits remain
+frozen and recorded in the source manifest.  This exception does not authorize
+rescaling, shared-limit substitution or colourbar removal in another figure.
+Panel-c spectral y ticks may be thinned to at most four labelled levels without
+changing the log scale or axis limits, and Panel-d tick labels may be staggered
+or repositioned without changing their numerical values.
 
 ### Mandatory layout-integrity and cross-figure consistency gates
 

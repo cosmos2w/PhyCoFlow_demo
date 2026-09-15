@@ -32,7 +32,18 @@ Do not treat image-difference percentages as a content-integrity test: a colorma
 
 ## Required visual checks
 
-Inspect both at design width and at the current 162-mm insertion width. Ordinary body/tick/legend/numeric base text should remain at least 7 pt after scaling; panel labels must be clear and consistent. Superscripts can be smaller naturally, but scientific-notation exponents must still be visible. Font embedding and math-glyph rendering must be checked in the exported PDF, not just the plotting window.
+Inspect both at design width and at the current 162-mm insertion width. Ordinary
+body/tick/legend text should remain at least 7 pt after scaling; panel labels
+must be clear and consistent. Figure-specific contracts may authorize a
+smaller numeric-annotation tier only when design and insertion sizes are
+recorded, the text stays above the global absolute minimum, every affected
+artist passes renderer containment and contrast checks, and any further
+dynamic reduction is logged per artist. Figure 4 currently authorizes 7.0 pt
+at 180 mm (6.3 pt at 162 mm) for matrix values and mean annotations, with a
+6.6-pt design-width floor only for individually logged constrained exceptions.
+Superscripts can be smaller naturally, but scientific-notation exponents must
+still be visible. Font embedding and math-glyph rendering must be checked in
+the exported PDF, not just the plotting window.
 
 Apply the mandatory layout-integrity gates in `00_GENERAL_ART_STYLE.md` after the final draw. Renderer-based checks must report zero unexplained text/text, text/panel and text/evidence intersections, zero clipped artists and the required horizontal and vertical clearances at both widths. Inspect full-page and high-zoom previews as a separate check. Save the measured results, intentional in-data annotation exceptions and resolved cross-figure semantic style table in `LAYOUT_QA.json`; neither visual inspection nor geometry checks may substitute for the other.
 
