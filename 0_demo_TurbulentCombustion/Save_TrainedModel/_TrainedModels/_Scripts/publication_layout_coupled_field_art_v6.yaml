@@ -1,0 +1,93 @@
+# Figure 4 art V6. Scientific arrays and mappings remain V5-locked.
+name: CoupledFieldReconstruction
+width_in: 7.0866141732
+height_in: 10.6692913386
+lower_row_content_height_in: 7.82
+outer_middle_width_ratios: [0.3666663, 0.6333337]
+
+qualitative:
+  snapshot_index: 0
+  fields: [CH4, p, U1]
+  conditions: [Cond_T, Cond_TU1, Cond_COTU1P]
+  proposed_model: DMF-Gen
+  generative_preference: [Latent FM, SiT]
+  deterministic_preference: [Senseiver, Geo-FNO]
+  include_sit_comparison: true
+  x_compression: 0.45
+  contour_levels: 25
+  value_percentiles: [1.0, 99.0]
+  robust_error_percentile: 99.0
+  reconstruction_to_error_height: [1.0, 1.0]
+
+panel_a_layout_overrides:
+  content_height_in: 2.71869
+  prediction_error_hspace: 0.08
+  colorbar_extend: neither
+  colorbar_title_loc: left
+  master_lower_gap_in: 0.3345614035
+  grid_wspace: 0.050
+  sit_enabled_grid_wspace: 0.045
+  composite_right_pad_ratio: 0.010
+
+typography_overrides_pt:
+  size_panel_label: 11.0
+  size_subplot_title: 8.5
+  size_axis_label: 8.5
+  size_tick_label: 7.8
+  size_legend: 7.8
+  size_annotation: 7.0
+
+composite_layout_overrides:
+  panel_wspace_in: 0.90
+  bottom_margin_in: 0.22
+  composite_margin_left_in: 0.31
+  composite_margin_right_in: 0.08
+  panel_c_d_gap_in: 0.68
+
+panel_b_layout_overrides:
+  condition_hspace: 0.15
+
+panel_c_layout_overrides:
+  grid_hspace: 0.22
+
+panel_d_layout_overrides:
+  x_label_pad: 7.0
+  row_hspace: 0.22
+  cond_t_xlabel: "JSD of joint PDF"
+  dmf_first_at_top: true
+
+spectral:
+  condition: Cond_T
+  snapshot_index: 0
+  x_label: "Wavenumber"
+  field_selection: main
+  field_options:
+    main: [CH4, p, U1]
+    y_co_backup: [CH4, CO, U1]
+  show_all_models_in_lsd: true
+
+joint_pdf:
+  condition: Cond_T
+  pair: T-U1
+  snapshot_mode: fixed_random_aggregate
+  snapshot_count: 5
+  snapshot_seed: 42
+  fixed_columns: [Ground truth, DMF-Gen, FFM-FNO, FFM-Perceiver, Latent FM, SiT, MLP-RBF, Geo-FNO, Senseiver]
+
+style_v5:
+  panel_b_heatmap_alpha: 0.75
+  panel_c_bar_face_alpha: 0.75
+  panel_d_violin_face_alpha: 0.75
+
+style_v6:
+  canvas_mm: [180.0, 271.0]
+  major_row_order: [a, b, c, d]
+  panel_b_condition_layout: horizontal
+  panel_c_legend_rows: 1
+  panel_d_legend_rows: 1
+  panel_a_geometry: preserve_v5
+
+export:
+  formats: [pdf, svg, png]
+  png_dpi: 600
+  tight_pad_inches: 0.10

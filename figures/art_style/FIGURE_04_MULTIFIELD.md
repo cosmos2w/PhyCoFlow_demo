@@ -4,7 +4,7 @@
 
 **Scientific baseline:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf`.
 
-**Active art export:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v5_20260915_1035.pdf`.
+**Active art export:** `0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v6_20260919_1245.pdf`.
 
 Read the general contract. Preserve panels a–d and their existing scientific contents.
 
@@ -81,6 +81,13 @@ V5 retains the V4 matrix geometry and normalization, and sets the three matrix
 image artists to alpha `0.75`. Numeric annotations and observed-channel marks
 remain fully opaque and retain their dynamic black/white contrast.
 
+V6 arranges the three condition matrices horizontally across the full row.
+Keep the condition order T, T+U1, CO+T+U1+p. Repeat the complete five-field
+header directly above every table, but show the ordered eight-model label rail
+only once on the far left. The three equal table windows must share one top,
+bottom and right edge; the displayed matrices remain 8x5 views of the complete
+8x6 frozen source tables.
+
 ## c — LSD and spectra
 
 The upper three panels are **bar charts**, not a redesign opportunity. Retain all eight bars, original heights, widths in data/category space, ordering, intervals and raw point overlays. Use the shared method palette, moderate fill saturation and a thin readable edge. Draw error bars above both bars and state points. Raw dots may become smaller and more transparent uniformly, but no subsampling, fresh jitter or clipping is allowed.
@@ -103,6 +110,12 @@ V5 removes only the redundant `(unobs.)` suffix from the three upper titles,
 leaving `$Y_{CH_4}$`, `$p$` and `$U_1$`, and shortens the shared spectrum title
 to `Wavenumber`. Set all 24 bar faces to alpha `0.75` while retaining fully
 opaque edges, intervals and state points.
+
+V6 gives Panel c the full page width and replaces both earlier legend bands
+with one centred nine-entry, single-line legend above the row: Ground truth plus
+the eight methods in their frozen order. Keep three aligned LSD axes over three
+aligned spectrum axes. Wider, flatter axes are intentional; no curve, bar,
+interval, point, scale, limit or tick value may change.
 
 ## d — joint distributions and JSD violins
 
@@ -137,6 +150,12 @@ V5 shortens the global title to `JSD of joint PDF` and sets all 24 violin-body
 faces to alpha `0.75`. Keep every violin edge, internal summary, mean label and
 distribution coordinate fully opaque and unchanged.
 
+V6 gives Panel d the full page width and uses one centred eight-method,
+single-line legend above the row. Keep the three PDF/violin columns aligned and
+in their existing pair order. The wider, flatter PDFs and violins are a display
+geometry change only; the density bins, masks, violin paths, log transforms,
+ticks and mean values remain frozen.
+
 ## Acceptance and gates
 
 A02 governs the Fourier baseline's scientific display name. A05 governs the difference between the temperature-only Unobs. result here and the Fig. 5 score; preserve this figure's numbers until the authors reconcile the run ledger. A07 governs units, metric reduction and source protocols. Do not copy Fig. 5's smaller score into b.
@@ -148,3 +167,11 @@ spectral membership, add/remove scientific annotations, change normalization,
 or restore Panel-a colourbars from that older brief.
 
 Verify seven displayed montage columns × three physical-field reconstruction/error pairs, three displayed 8×5 heatmaps backed by complete 8×6 source matrices, three LSD/spectrum pairs and three PDF/JSD pairs. The final-aspect gate must report zero text/text, text/non-owned-data-window and clipped-mean collisions. All observed-channel marks, scalar observations, histogram bins, state dots and distributions must retain their memberships. Review ordinary heatmap and error-label text at 162 mm; if it cannot be read, adjust panel allocation and label wrapping rather than scientific content.
+
+For V6, additionally verify a 42-axis Panel-a inventory, exactly one Panel-b
+model-label rail, three complete Panel-b field-header rails, a 9-column Panel-c
+legend, an 8-column Panel-d legend, aligned panel-tag x coordinates within
+`0.01 mm`, aligned lower-row right edges within `0.01 mm`, and at least `3 mm`
+between every adjacent rendered major-row union. Both the 180-mm PDF and a new
+162-mm vector-derived render must be inspected; reusing or resizing the 180-mm
+PNG does not satisfy the insertion-width gate.

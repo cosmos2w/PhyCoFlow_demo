@@ -406,7 +406,7 @@
       "number": 4,
       "asset": "Figure_MultiFieldReconstruction.pdf",
       "producer_pdf": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_round3_spacing_20260828_0810.pdf",
-      "latest_art_export": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v5_20260915_1035.pdf",
+      "latest_art_export": "0_demo_TurbulentCombustion/Save_TrainedModel/_TrainedModels/_Process_Figures/Assembled/Composite/CoupledFieldReconstruction_art_v6_20260919_1245.pdf",
       "art_v5_style": {
         "geometry_baseline": "art_v4",
         "panel_c_titles": [
@@ -422,6 +422,33 @@
         "bar_and_violin_edge_alpha": 1.0,
         "require_exact_scientific_state": true,
         "maximum_text_overlap_count": 0
+      },
+      "art_v6_geometry": {
+        "geometry_baseline": "art_v5_panel_a",
+        "canvas_mm": [
+          180.0,
+          271.0
+        ],
+        "major_row_order": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "panel_a_axis_count": 42,
+        "panel_b_condition_layout": "THREE_HORIZONTAL_TABLES",
+        "panel_b_model_label_rail_count": 1,
+        "panel_b_field_header_rail_count": 3,
+        "panel_c_legend_entries": 9,
+        "panel_c_legend_rows": 1,
+        "panel_d_legend_entries": 8,
+        "panel_d_legend_rows": 1,
+        "minimum_rendered_row_union_clearance_mm": 3.0,
+        "maximum_panel_tag_x_spread_mm": 0.01,
+        "maximum_lower_right_edge_spread_mm": 0.01,
+        "maximum_text_overlap_count": 0,
+        "maximum_clipped_text_count": 0,
+        "require_exact_scientific_state": true
       },
       "panels": [
         "a",

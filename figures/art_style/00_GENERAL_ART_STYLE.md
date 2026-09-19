@@ -171,6 +171,19 @@ titles, set all three Panel-b matrix images, all 24 Panel-c bar faces and all 24
 Panel-d violin faces to alpha `0.75`, and keep existing bar/violin borders fully
 opaque. This transparency exception does not authorize changing colour
 normalization, artist coordinates, numerical annotations or model identity.
+Figure 4 V6 supersedes the asymmetric lower composition with four sequential
+full-width major rows in the unchanged scientific order `a`, `b`, `c`, `d`.
+Panel a is physically locked to V5. Panel b places its three existing condition
+tables side by side, repeats the complete five-field header above each table,
+and shows the eight-model label rail only once at far left. Panels c and d each
+use one centred single-line legend above their complete full-width row; legacy
+scattered legend bands must be removed. This is a geometry and legend-placement
+exception only. It does not authorize changes to arrays, model/field membership,
+ordering, limits, scales, normalizations, numerical annotations, bar intervals,
+spectral traces, PDF bins, violin paths, or statistic locations. The V6 canvas
+is `180 x 271 mm`; all four panel tags share one page-coordinate x position,
+all three lower rows share one right edge, and every adjacent rendered row union
+must retain at least `3 mm` clearance after the final draw.
 
 ### Mandatory layout-integrity and cross-figure consistency gates
 
