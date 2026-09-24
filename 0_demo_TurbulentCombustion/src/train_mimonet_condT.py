@@ -24,7 +24,8 @@ import torch.nn.functional as F
 import yaml
 from torch.utils.data import DataLoader
 
-from helpers import TurbulentCombustionH5Dataset, build_sparse_condition
+from helpers import TurbulentCombustionH5Dataset, build_sparse_condition, visualize_reconstruction
+from evaluate_ablation_condT import read_plan
 from mimonet_upstream import MIMONet
 
 
@@ -187,6 +188,114 @@ def diagnostic_full_validation(model, dataset, coords, cfg, device, *, count: in
                             for c in range(5)}}
 
 
+class MIMONetSampleAdapter:
+    """Expose deterministic MIMONet through A0's visualization interface."""
+
+    def __init__(self, model: MIMONet, max_sensors: int):
+        self.model = model
+        self.max_sensors = max_sensors
+
+    def eval(self):
+        self.model.eval()
+        return self
+
+    @torch.no_grad()
+    def sample(self, *, coords, obs_coords, obs_values, obs_mask,
+               obs_field_ids, clamp_indices, n_steps=1, **_unused):
+        if obs_coords.shape[1] > self.max_sensors:
+            raise ValueError("Too many sensors for the MIMONet branches")
+        if not torch.all(obs_field_ids[obs_mask.bool()] == 2):
+            raise ValueError("Only T observations may enter MIMONet")
+        padding = self.max_sensors - obs_coords.shape[1]
+        branches = branch_inputs(
+            F.pad(obs_coords, (0, 0, 0, padding)),
+            F.pad(obs_values, (0, 0, 0, padding)),
+            F.pad(obs_mask, (0, padding)),
+        )
+        prediction = torch.cat(
+            [self.model(branches, chunk) for chunk in coords.split(2048, dim=1)], dim=1)
+        for batch in range(coords.shape[0]):
+            valid = obs_mask[batch].bool()
+            prediction[batch, clamp_indices[batch, valid], 2] = obs_values[batch, valid, 0]
+        return prediction
+
+
+def reconstruction_diagnosis(model, dataset, cfg: dict, run_dir: Path,
+                             epoch: int, device: torch.device) -> dict:
+    """Match A0's every-500-epoch snapshot-0 plots and normalized L2 JSON."""
+    snapshot = int(cfg["reconstruction_snapshot_index"])
+    plan_path = resolve(cfg["reconstruction_sensor_plan"])
+    sensors = read_plan(plan_path)[snapshot]
+    sample = dataset[snapshot]
+    if len(sensors) != 256 or any(int(row["field_index"]) != 2 for row in sensors):
+        raise ValueError("Expected exactly 256 T sensors in the archived plan")
+    indices = torch.tensor([[int(row["point_index"]) for row in sensors]],
+                           dtype=torch.long, device=device)
+    truth = sample["fields"].unsqueeze(0).to(device)
+    coords = sample["coords"].unsqueeze(0).to(device)
+    values = truth[0, indices[0], 2].view(1, 256, 1)
+    recorded = np.asarray([float(row["normalized_value"]) for row in sensors])
+    np.testing.assert_allclose(values[0, :, 0].cpu().numpy(), recorded,
+                               atol=1e-6, rtol=1e-6)
+    sparse = {"obs_coords": coords[:, indices[0]], "obs_values": values,
+              "obs_mask": torch.ones((1, 256), device=device),
+              "obs_indices": indices,
+              "obs_field_ids": torch.full((1, 256), 2, device=device, dtype=torch.long)}
+    output = run_dir / "Evaluation" / f"epoch_{epoch:04d}"
+    output.mkdir(parents=True, exist_ok=True)
+    adapter = MIMONetSampleAdapter(model, int(cfg["n_obs_max_list"][0]))
+    with torch.inference_mode():
+        normalized_metrics, payload = visualize_reconstruction(
+            model=adapter, dataset=dataset, epoch=epoch, device=device,
+            save_dir=str(output), cond_fields=[2], n_obs=[256], n_steps=1,
+            snapshot_index=snapshot, file_tag="mimonet", return_payload=True,
+            obs_consistency_mode="default_hard", sparse_condition=sparse)
+    truth_phys = np.asarray(payload["truth_phys"], dtype=np.float64)
+    prediction_phys = np.asarray(payload["recon_phys"], dtype=np.float64)
+    physical_l2 = np.sqrt(np.sum((prediction_phys - truth_phys) ** 2, axis=0)) / (
+        np.sqrt(np.sum(truth_phys ** 2, axis=0)) + 1e-12)
+    diagnosis = {
+        "epoch": epoch, "snapshot_index": snapshot,
+        "time_index": int(sample["time_index"]),
+        "condition": "256 temperature measurements only",
+        "sensor_plan": str(plan_path), "sensor_plan_sha256": sha256(plan_path),
+        "model": "deterministic MIMONet; no ODE/NFE variants",
+        "normalized_relative_l2": {str(dataset.field_names[i]): float(normalized_metrics[dataset.field_names[i]])
+                                   for i in range(5)},
+        "physical_relative_l2": {str(dataset.field_names[i]): float(physical_l2[i])
+                                 for i in range(5)},
+        "unobserved_mean_physical_relative_l2": float(np.mean(physical_l2[list(UNOBSERVED)])),
+        "sensor_relative_l2": float(normalized_metrics["obs_rel_l2_SenConsis"]),
+        "fields": {str(dataset.field_names[i]): {
+            "truth_range": [float(truth_phys[:, i].min()), float(truth_phys[:, i].max())],
+            "prediction_range": [float(prediction_phys[:, i].min()), float(prediction_phys[:, i].max())],
+            "truth_spatial_std": float(truth_phys[:, i].std()),
+            "prediction_spatial_std": float(prediction_phys[:, i].std()),
+            "prediction_nonphysical_fraction": float(np.mean(
+                prediction_phys[:, i] <= 0 if i in (2, 4) else prediction_phys[:, i] < 0
+            )) if i != 3 else None,
+        } for i in range(5)},
+    }
+    (output / "quality_diagnosis.json").write_text(json.dumps(diagnosis, indent=2) + "\n")
+    (output / "figure_contract.md").write_text(
+        "# Every-500-epoch MIMONet reconstruction diagnosis\n\n"
+        "- Claim: inspect five-field full-mesh reconstruction quality for the same held-out snapshot 0 used by A0's training-time Evaluation.\n"
+        f"- Source: live model at epoch {epoch}, A0 HDF5/stats, and `{plan_path}`.\n"
+        "- Panels: physical ground truth, reconstruction, and absolute error for each field, using A0's plotting helper.\n"
+        "- Metrics: A0 normalized relative L2 and sensor consistency, plus physical relative L2 and range/variation checks.\n"
+        "- Caveat: this is one holdout snapshot, not the full 1,000-state test score. MIMONet is deterministic, so ODE/NFE variants do not apply.\n"
+    )
+    return diagnosis
+
+
+def plot_loss_curve(run_dir: Path) -> None:
+    fig_python = Path(sys.executable).resolve().parents[2] / "fig/bin/python"
+    script = DEMO / "figures/scripts/plot_mimonet_loss.py"
+    if not fig_python.is_file():
+        raise FileNotFoundError(f"Figure environment is required: {fig_python}")
+    subprocess.run([str(fig_python), str(script), str(run_dir)], check=True)
+
+
 def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int,
                     train_loss: float, val_loss: float | None, best_val: float,
                     dataset, config: dict) -> None:
@@ -301,6 +410,12 @@ def main() -> None:
                 "val_test_indices_sha256": hashlib.sha256(val_set.indices.tobytes()).hexdigest(),
                 "train_samples": len(train_set), "val_test_samples": len(val_set),
                 "field_names": train_set.field_names,
+                "source_sha256": {name: sha256(DEMO / name) for name in (
+                    "src/train_mimonet_condT.py",
+                    "src/evaluate_mimonet_condT.py",
+                    "src/helpers.py",
+                    "figures/scripts/plot_mimonet_loss.py",
+                    "Save_config/mimonet/config_MIMONet_condT.yaml")},
                 "launch_command": str(Path(sys.executable).resolve()) +
                     " -u src/train_mimonet_condT.py --config " + args.config +
                     " --run-dir " + str(run_dir)}
@@ -357,11 +472,17 @@ def main() -> None:
             writer.writeheader()
             writer.writerows(rows)
         (run_dir / "loss_history.json").write_text(json.dumps(rows, indent=2) + "\n")
+        if epoch == 1 or epoch % int(cfg["loss_curve_plot_every"]) == 0:
+            plot_loss_curve(run_dir)
         print(json.dumps({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss,
                           "lr": row["lr"], "train_seconds": train_seconds,
                           "val_seconds": val_seconds, "train_samples_per_second":
                           row["train_samples_per_second"], "gpu_peak_allocated_gib":
                           row["gpu_peak_allocated_gib"], "diagnostic": diag}), flush=True)
+        if epoch % int(cfg["reconstruction_eval_every"]) == 0:
+            quality = reconstruction_diagnosis(model, val_set, cfg, run_dir, epoch, device)
+            print(json.dumps({"reconstruction_epoch": epoch,
+                              "quality_diagnosis": quality}), flush=True)
 
 
 if __name__ == "__main__":

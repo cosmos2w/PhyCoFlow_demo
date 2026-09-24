@@ -29,4 +29,8 @@ trunk_hidden_dim: 256
 merge_type: mul
 num_outputs: 5
 diagnostic_val_samples: 4
+loss_curve_plot_every: 50
+reconstruction_eval_every: 500
+reconstruction_snapshot_index: 0
+reconstruction_sensor_plan: Save_TrainedModel/_TrainedModels/_Process_Results/SensorPlans/SensorPlan_paper_full_20260711.csv
 device: cuda:0
