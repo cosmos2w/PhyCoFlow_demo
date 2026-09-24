@@ -42,6 +42,7 @@
 !/0_demo_TurbulentCombustion/**/*.toml
 !/1_SubTask_SuperResolution/**/*.toml
 !/0_demo_TurbulentCombustion/**/*.md
+!/0_demo_TurbulentCombustion/src/mimonet_upstream/LICENSE
 !/1_SubTask_SuperResolution/**/*.md
 !/Dis_SI_Process/**/*.md
 !/Dis_SI_Process/.gitignore
