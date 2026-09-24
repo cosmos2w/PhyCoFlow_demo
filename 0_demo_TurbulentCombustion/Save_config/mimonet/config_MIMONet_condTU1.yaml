@@ -1,0 +1,40 @@
+name: MIMONet_condTU1_DemoN601
+condition: Cond_TU1
+reference_run: Save_TrainedModel/_TrainedModels/DMF_Gen/Cond_TU1
+data: Dataset/Merged_CH4COTU1P.h5
+dataset_stats_path: Save_TrainedModel/_TrainedModels/DMF_Gen/Cond_TU1/dataset_stats.pt
+save_root: Save_TrainedModel/deterministic_baselines/MIMONet_condTU1
+seed: 42
+train_ratio: 0.9
+time_stride: 1
+cond_fields: [2, 3]
+n_obs_min_list: [192, 192]
+n_obs_max_list: [384, 384]
+n_query_points: 4096
+query_sampling: obs_mix
+query_sample_near_ratio: 0.25
+query_sample_far_ratio: 0.25
+query_sample_sigma_ratio: 0.05
+epochs: 5000
+batch_size: 128
+val_batch_size: 32
+num_workers: 4
+optimizer: Adam
+lr: 0.0001
+weight_decay: 0.000001
+scheduler: CosineAnnealingLR
+scheduler_t_max: 5000
+eval_every: 5
+save_every: 1
+loss: normalized_mse
+latent_dim: 256
+branch_hidden_dim: 512
+trunk_hidden_dim: 256
+merge_type: mul
+num_outputs: 5
+diagnostic_val_samples: 4
+loss_curve_plot_every: 50
+reconstruction_eval_every: 500
+reconstruction_snapshot_index: 0
+reconstruction_sensor_plan: Save_TrainedModel/_TrainedModels/_Process_Results/SensorPlans/SensorPlan_paper_full_20260711.csv
+device: cuda:0

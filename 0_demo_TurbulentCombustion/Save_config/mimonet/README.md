@@ -1,4 +1,4 @@
-# MIMONet Cond_T baseline
+# MIMONet combustion baselines
 
 This is one deterministic, 5,000-epoch MIMONet comparison to the saved A0 DMF-Gen run. The upstream MIMONet branch–trunk network is in `src/mimonet_upstream/`; `src/train_mimonet_condT.py` only prepares combustion tensors and runs training.
 
@@ -20,3 +20,25 @@ conda run -n phycoflow_env --no-capture-output python -u src/train_mimonet_condT
 ```
 
 The smoke path writes no result artifacts. The main run writes its configuration, metadata, model summary, histories, loss figure, recurring reconstruction evaluation, and `best.pt`/`last.pt` under `Save_TrainedModel/deterministic_baselines/MIMONet_condT/`.
+
+## Additional saved conditions
+
+`src/train_mimonet_multicond.py` trains two further 5,000-epoch comparisons with the same released branch/trunk architecture, 256-dimensional basis, five outputs, Adam settings, checkpoint cadence, default loss plot, and every-500-epoch five-field reconstruction diagnosis:
+
+| Condition | Branch sensors per state | Training query sampling | Unobserved fields |
+| --- | --- | --- | --- |
+| `Cond_TU1` | 192–384 T and 192–384 U_1 | A0 `obs_mix` | CH4, CO, p |
+| `Cond_COTU1P` | 192–384 each of CO, T, U_1, p | A0 `uniform` | CH4 |
+
+The sensor value and normalized coordinate branches give each conditioned field a fixed 384-slot segment. The A0 sampler still selects independent random sensors for each field; the adapter only moves the padded observations into stable segments. No unobserved field enters either branch. Both configurations use their own saved DMF-Gen reference config and statistics. Their train and holdout split is the same 9,000/1,000 split as Cond_T. Training query sampling follows each reference config; validation uses uniform queries as in A0. Every 500 epochs, the archived 256-sensors-per-field paper plan is used for a single holdout snapshot reconstruction, with A0-style plots and normalized metrics plus physical relative-L2 and field-range diagnostics. These held-out diagnostics do not change training settings.
+
+Run from `0_demo_TurbulentCombustion/`:
+
+```bash
+conda run -n phycoflow_env --no-capture-output python -u src/train_mimonet_multicond.py --config Save_config/mimonet/config_MIMONet_condTU1.yaml --smoke
+conda run -n phycoflow_env --no-capture-output python -u src/train_mimonet_multicond.py --config Save_config/mimonet/config_MIMONet_condCOTU1P.yaml --smoke
+conda run -n phycoflow_env --no-capture-output python -u src/train_mimonet_multicond.py --config Save_config/mimonet/config_MIMONet_condTU1.yaml
+conda run -n phycoflow_env --no-capture-output python -u src/train_mimonet_multicond.py --config Save_config/mimonet/config_MIMONet_condCOTU1P.yaml
+```
+
+The output roots are `Save_TrainedModel/deterministic_baselines/MIMONet_condTU1/` and `Save_TrainedModel/deterministic_baselines/MIMONet_condCOTU1P/`. Their output folders contain configuration, source hashes, reference hashes, exact launch command, model summary, histories, best/latest/milestone checkpoints, loss plots, and `Evaluation/epoch_XXXX/` diagnoses. The normalized five-field MSE is a necessary deviation from A0's rectified-flow loss because MIMONet directly predicts fields. No hyperparameter sweep or uncertainty module is used.

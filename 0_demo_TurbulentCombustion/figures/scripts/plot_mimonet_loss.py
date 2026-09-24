@@ -1,4 +1,4 @@
-"""Replot a MIMONet Cond_T training history from its saved CSV."""
+"""Replot a combustion MIMONet training history from its saved CSV."""
 from __future__ import annotations
 
 import argparse
@@ -29,7 +29,10 @@ def main() -> None:
                   if row["val_loss"]]
     if any(value <= 0 for _, value in train + validation):
         raise ValueError("Loss curve requires positive finite MSE values")
-    destination = DEMO / "figures/generated/mimonet_condT_loss" / run.name
+    condition = run.name.split("_DemoN", 1)[0].removeprefix("MIMONet_")
+    title_condition = {"condT": "Cond_T", "condTU1": "Cond_TU1",
+                       "condCOTU1P": "Cond_COTU1P"}.get(condition, condition)
+    destination = DEMO / f"figures/generated/mimonet_{condition}_loss" / run.name
     destination.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7.2, 4.5), constrained_layout=True)
     ax.plot(*zip(*train), label="Training", color="#244C70", linewidth=1.7)
@@ -37,7 +40,7 @@ def main() -> None:
         ax.plot(*zip(*validation), label="Validation", color="#C05C2D", linewidth=1.7,
                 marker="o", markersize=2.8)
     ax.set(xlabel="Epoch", ylabel="Normalized five-field MSE",
-           title="MIMONet Cond_T training")
+           title=f"MIMONet {title_condition} training")
     ax.set_yscale("log")
     ax.grid(alpha=0.2)
     ax.legend(frameon=False)
@@ -46,11 +49,11 @@ def main() -> None:
     plt.close(fig)
     shutil.copy2(destination / "loss_history.png", run / "loss_history.png")
     (destination / "figure_contract.md").write_text(
-        "# MIMONet Cond_T loss curve\n\n"
+        f"# MIMONet {title_condition} loss curve\n\n"
         "- Claim: shows optimization and validation behavior over the observed epochs; it does not establish final reconstruction fidelity.\n"
         f"- Source: `{history}`.\n"
         "- Panel: training and holdout-validation normalized five-field MSE by epoch, log y-axis.\n"
-        "- Caveat: A0-style validation resamples sparse T sensors, so individual validation values fluctuate.\n"
+        "- Caveat: A0-style validation resamples the configured sparse sensors, so individual validation values fluctuate.\n"
     )
 
 
