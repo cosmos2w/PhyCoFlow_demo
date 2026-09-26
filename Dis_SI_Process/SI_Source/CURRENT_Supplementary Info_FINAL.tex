@@ -1,0 +1,863 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=24mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs,array,tabularx,longtable}
+\usepackage{caption}
+\usepackage{microtype}
+\usepackage{needspace}
+\usepackage{placeins}
+\usepackage[hidelinks]{hyperref}
+\usepackage{bookmark}
+\usepackage{tocloft}
+\setlength{\cftbeforesecskip}{4pt}
+
+\hypersetup{ pdftitle={Supplementary Information: Sparse Reconstruction by Direct Measurement-to-Field Generation in Function Space}, pdfauthor={Linzheng Wang, Jason Chen, Nicolas Tricard, Zituo Chen, Xingsen Guo, Sili Deng}
+}
+\renewcommand{\tablename}{Supplementary Table}
+\renewcommand{\figurename}{Supplementary Figure}
+\renewcommand{\theequation}{S\arabic{equation}}
+\captionsetup{font=small,labelfont=bf,labelsep=period}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.40em}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.16}
+\setlength{\emergencystretch}{3em}
+\setlength{\LTpre}{0.6em}
+\setlength{\LTpost}{0.6em}
+\raggedbottom
+\clubpenalty=10000
+\widowpenalty=10000
+
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+
+\setcounter{tocdepth}{2}
+\newcommand{\sisubsection}[1]{%
+\FloatBarrier
+\Needspace{5\baselineskip}%
+\subsection{#1}%
+}
+
+\newcommand{\suppgraphic}[1]{\includegraphics[width=\linewidth,height=0.64\textheight,keepaspectratio]{#1}}
+\newcommand{\detail}[1]{\par\Needspace{4\baselineskip}\textbf{#1}\enspace}
+\newcommand{\DMF}{DMF-Gen}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\EA}[2]{\textbf{E:} #1\par\textbf{A:} #2}
+
+\begin{document}
+
+\begin{center}
+{\large\bfseries Supplementary Information\par}
+\vspace{0.6em}
+{\Large\bfseries Sparse Reconstruction by Direct Measurement-to-Field\\
+Generation in Function Space\par}
+\vspace{0.9em}
+Linzheng Wang$^{1*}$, Jason Chen$^1$, Nicolas Tricard$^1$, Zituo Chen$^1$,\\
+Xingsen Guo$^{2,3}$, Sili Deng$^{1*}$\par
+\vspace{0.4em}
+\small
+$^1$Department of Mechanical Engineering, Massachusetts Institute of Technology,\\
+Cambridge, MA 02139, USA\par
+$^2$Department of Civil, Environmental and Geomatic Engineering,\\
+University College London, London WC1E 6BT, UK\par
+$^3$Department of Engineering, University of Cambridge, Cambridge CB2 1PZ, UK\par
+\vspace{0.3em}
+$^*$Correspondence: \texttt{wanglz@mit.edu}; \texttt{silideng@mit.edu}
+\end{center}
+
+\vspace{0.4em}
+\begingroup
+\small
+\setlength{\parskip}{0pt}
+\pdfbookmark[1]{Contents}{contents}
+\tableofcontents
+\endgroup
+\clearpage
+\section*{Supplementary Methods}
+
+\FloatBarrier
+\Needspace{12\baselineskip}
+\section{Data preparation and observation protocols}
+\label{sec:data}
+
+Supplementary Table~\ref{tab:protocol-summary} summarizes the three experimental families. We use \emph{training partition} for records used to optimize model parameters and \emph{held-out evaluation pool} or \emph{cohort} for records outside that partition. Where checkpoint selection and final evaluation use the same held-out records, this is stated explicitly below. Reported bootstrap intervals quantify case or frame sampling under the selected trained realization; they do not quantify independent-training variability or uncertainty on an untouched test set.
+
+{\small
+\begin{longtable}{@{}P{0.11\linewidth} P{0.17\linewidth} P{0.15\linewidth} P{0.13\linewidth} P{0.10\linewidth} P{0.14\linewidth} C{0.06\linewidth}@{}}
+\caption{Summary of the experimental protocols. The nominal sensor budget is the principal setting; ranges identify reported sensor sweeps.}\label{tab:protocol-summary}\\
+\toprule
+Task / dataset & Training and evaluation partition & Reconstructed fields & Observed fields & Sensor budget & Requested output & Main figure \\
+\midrule
+\endfirsthead
+\multicolumn{7}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Task / dataset & Training and evaluation partition & Reconstructed fields & Observed fields & Sensor budget & Requested output & Main figure \\
+\midrule
+\endhead
+\midrule
+\multicolumn{7}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Elasticity / Geo-FNO release & 1,600 training; 400 held-out evaluation cases & Stress and material mask & Stress & 16; sweep 8--64 & $41\times41$ field and mask & 2 \\
+Airfoil / Geo-FNO release & 1,992 training; 498 held-out evaluation cases & $(\rho,u,v,p)$ and fluid mask & Pressure & 32; sweep 8--64 & $101\times101$ field and mask & 2 \\
+Mixed-resolution / PDEBench & 9,000 training trajectories; 1,000 held-out trajectories & $V_x$ & $V_x$ & 256; sweep 64--512 & $128\times128$ H grid & 3 \\
+Turbulent combustion & 90\% training frames; 10\% held-out evaluation frames & $Y_{\mathrm{CH_4}}$, $Y_{\mathrm{CO}}$, $T$, $U_1$, $p$ & $T$; $T$, $U_1$; $Y_{\mathrm{CO}}$, $T$, $U_1$, $p$ & 256 per observed channel & Native $403\times100$ state & 4, 5 \\
+\end{longtable}
+}
+
+\sisubsection{Elasticity and airfoil}
+\label{subsec:data-irregular}
+The elasticity and airfoil data are taken from the Geo-FNO release~\cite{li2023geofno}. The 2,000 elasticity cases are partitioned into 1,600 training and 400 held-out cases, and the 2,490 airfoil cases into 1,992 and 498 cases. Case indices are shuffled using \code{numpy.random.default_rng(42)}. The first $\lfloor0.8N\rfloor$ indices form the training partition, and each partition is subsequently sorted. The held-out cases are used for both checkpoint selection and evaluation.
+
+Elasticity uses the released $41\times41$ interpolated stress and material-mask arrays on $[0,1]^2$, derived from the 972-node body-fitted representation. For airfoil, the $221\times51$ C-grid fields are interpolated independently onto a $101\times101$ Cartesian grid over $x\in[-0.5,1.5]$, $y\in[-1,1]$ using piecewise-linear \code{scipy.interpolate.griddata}, with zero fill outside the interpolation hull. A point-in-polygon test on the wall ring defines the fluid mask. Hole and body cells are zero-filled before normalization. The regressed channels are stress and material mask for elasticity, and $(\rho,u,v,p)$ and fluid mask for airfoil. Mach number is derived during evaluation (Section~\ref{subsec:metrics-irregular}).
+
+\detail{Observation sampling.} Elasticity candidates are material cells within three four-connected binary-dilation steps of the hole, giving 210--258 candidates per case. Airfoil candidates lie in a fixed elliptical ring in normalized coordinates, centred at $(0.5,0.5)$ with semi-axes $(0.30,0.12)$ and $0.92\le r\le1.08$, where $r^2=((x_n-0.5)/0.30)^2+((y_n-0.5)/0.12)^2$. The intersection with nodes that are fluid in every case gives 356 candidates. Sensors are sampled uniformly without replacement. Training counts are uniform integers in 16--32 for elasticity and 32--48 for airfoil, with counts and locations redrawn per sample at every update. Evaluation uses seed $i$ for recorded case index $i$ and no measurement noise. The nominal counts and sensor sweep are those in main Fig.~2.
+
+\detail{Normalization and coordinates.} Channels are standardized as $z_c=(\mathcal T_c(u_c)-\mu_c)/s_c$, with statistics computed from training cases over all grid nodes, including zero-filled cells. The mask is standardized as an output channel. Elasticity uses the identity transform. Airfoil uses the natural logarithm of positive density and pressure in fluid cells, with no additive offset; transformed body cells remain zero. Supplementary Table~\ref{tab:normalization} gives the preprocessing constants.
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.22\linewidth} P{0.25\linewidth} P{0.235\linewidth} P{0.235\linewidth}@{}}
+\caption{Normalization constants for elasticity and airfoil. Values are rounded float32 preprocessing constants; inversion uses the stored constants in \code{dataset_stats.pt}.}\label{tab:normalization}\\
+\toprule
+Dataset & Transformed channel & Offset $\mu_c$ & Scale $s_c$ \\
+\midrule
+\endfirsthead
+\multicolumn{4}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Dataset & Transformed channel & Offset $\mu_c$ & Scale $s_c$ \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Elasticity & $\sigma_{\mathrm{vM}}$ & 129.310 & 128.280 \\
+Elasticity & Material mask & 0.72473 & 0.44294 \\
+Airfoil & $\log\rho$ & $-0.031466$ & 0.106476 \\
+Airfoil & $u$ & 0.952377 & 0.186390 \\
+Airfoil & $v$ & $5.70\times10^{-5}$ & 0.056946 \\
+Airfoil & $\log p$ & $-0.041762$ & 0.149166 \\
+Airfoil & Fluid mask & 0.980328 & 0.138847 \\
+\end{longtable}
+}
+
+The model uses uniform $[0,1]^2$ coordinates with a zero third coordinate. Airfoil dataset coordinates are $(x,y)=(-0.5+2x_n,-1+2y_n)$, and the Fourier encoder maps normalized coordinates internally to $[-1,1]$. Inverse normalization applies $s_cz_c+\mu_c$, followed by an exponential for density and pressure. The order of ensemble averaging and inversion is specified in Section~\ref{subsec:train-irregular}.
+
+\Needspace{10\baselineskip}
+\sisubsection{Mixed-resolution Navier--Stokes}
+\label{subsec:data-mixed}
+\detail{Partitioning and resolution preparation.} The PDEBench source and processed fields contain 10,000 trajectories, 21 stored frames per trajectory and four channels. Preprocessing reads the raw variables as $(V_x,V_y,\rho,p)$, stacks them in that order and records the same order in the processed HDF5 metadata. Every evaluated mixed-resolution configuration selects processed channel index zero. The reconstructed physical variable is therefore streamwise velocity $V_x$. This assignment was also verified numerically: the evaluation truth array agrees with raw $V_x$ and processed channel zero to within $3.8\times10^{-9}$ in maximum absolute difference, while it differs from raw density by 2.44 for the same case and frame. The H field has $128\times128$ cells. Nonoverlapping spatial averages of $2\times2$ and $4\times4$ H cells produce the $64\times64$ M and $32\times32$ L fields; coarse coordinates are the corresponding averages of H coordinates. Trajectories 0--8999 form the training partition and trajectories 9000--9999 form the held-out evaluation pool. Checkpoint selection and final evaluation use this same pool. Most configurations retain frames 5--20 (16 frames); the DMF-Gen and FFM-Perceiver Zero-H-M-rich configurations retain frames 10--20 (11 frames). The reported cohort comprises 300 case--time pairs, one deterministically selected frame from each of 300 distinct held-out trajectories within the common frame window 10--20 (selection seed 42).
+
+{\small
+\begin{longtable}{@{}P{0.28\linewidth} C{0.11\linewidth} C{0.11\linewidth} C{0.11\linewidth} P{0.28\linewidth}@{}}
+\caption{Mixed-resolution training composition. Counts are trajectories assigned to each resolution. Trajectory-level native-grid spatial-DOF exposure is $(1024n_L+4096n_M+16384n_H)/(9000\times16384)$ relative to H-only. The metric excludes differences in retained frame counts and does not represent training compute, the number of update samples or total information content.}\label{tab:recipes}\\
+\toprule Recipe & L & M & H & Relative spatial-DOF exposure \\
+\midrule\endfirsthead
+\toprule Recipe & L & M & H & Relative spatial-DOF exposure \\
+\midrule\endhead
+\bottomrule\endlastfoot
+H-only & 0 & 0 & 9000 & 1.00$\times$ \\
+H-limited & 0 & 0 & 3060 & 0.34$\times$ \\
+Mixed-HML & 3000 & 3000 & 3000 & 0.44$\times$ \\
+Zero-H-balanced & 4500 & 4500 & 0 & 0.16$\times$ \\
+Zero-H-M-rich & 3000 & 6000 & 0 & 0.19$\times$ \\
+\end{longtable}
+}
+
+\detail{Observation sampling.} Training uses resolution-scaled point budgets of 32, 128 and 512 at L, M and H. Sensor coordinates and query points are resampled during training. H-grid evaluation constructs a deterministic permutation of spatial points for each case--time pair and takes its first $n$ points, so the 64, 128, 256, 384, 512, 768 and 1,024 sensor sets are nested. The 300-pair wavelet analysis and Supplementary Figure~\ref{fig:si-mixed-distributions} use 256 H-grid sensors. Main Fig.~3b and d use 512 sensors, and main Fig.~3c reports the 64--512 sensor sweep. No artificial measurement noise is applied.
+
+\detail{Normalization and coordinates.} The selected $V_x$ channel is standardized affinely using statistics fit from H-grid training fields over the frames admitted by each run. The same statistics normalize that run's L, M and H representations; inverse transformation is $u=sz+\mu$. H-only and Mixed-HML have $(\mu,s)=(1.1278551\times10^{-4},0.04850356)$; H-limited has $(2.1224830\times10^{-4},0.04873206)$; Zero-H-balanced uses the H-only constants; Zero-H-M-rich uses $(1.1203054\times10^{-4},0.03907462)$. Stored physical coordinates are first mapped to $[-1,1]$ by preprocessing, then model inputs are mapped to $[0,1]$. No nonlinear field transform is used.
+
+\sisubsection{Turbulent combustion}
+\label{subsec:data-combustion}
+\detail{Partitioning and spatial representation.} The data contain one 10,000-frame sequence with five channels $(Y_{\mathrm{CH_4}},Y_{\mathrm{CO}},T,U_1,p)$ at 40,300 points on a rectilinear $403\times100$ lattice. The physical $x$ and $y$ coordinates are nonuniform; the third coordinate is fixed at 0.5. No domain mask is stored. A seed-42 permutation assigns 90\% of frame indices to the training partition and 10\% to the held-out evaluation pool. Checkpoint selection and final evaluation use this same pool. The split is by frame within one sequence, rather than by a temporally separated trajectory. We use \emph{frame} for a stored temporal record and \emph{state} for the corresponding five-field sample in evaluation summaries.
+
+\detail{Observation sampling.} The three evaluated regimes are Cond-$T$ (temperature only; 256 measurements), Cond-$(T,U_1)$ (256 per channel) and Cond-$(Y_{\mathrm{CO}},T,U_1,p)$ (256 per channel). Each observed channel has its own uniformly sampled spatial indices without replacement; a stable seed derived from the split, condition and frame fixes these indices across compared methods. During DMF-Gen training, the per-channel count is sampled from 192--384 and positions are redrawn. Channel labels and coordinates accompany the observed values; an unobserved channel supplies no sensor token.
+
+\detail{Normalization and coordinates.} Per-channel training-frame mean and standard deviation define $z_c=(u_c-\mu_c)/s_c$, with no logarithmic transform. For $(Y_{\mathrm{CH_4}},Y_{\mathrm{CO}},T,U_1,p)$, the Cond-$T$ run uses $\mu=(0.02935767,0.00713983,1118.5344,-3.49416,114114.0781)$ and $s=(0.02669513,0.00951220,775.3419,36.27189,6885.3706)$. Predictions and reference fields are returned to physical units with $u_c=s_cz_c+\mu_c$ before field and spectral scoring. Each spatial coordinate is min--max normalized independently to $[0,1]$; the constant third coordinate maps to zero.
+
+\FloatBarrier
+\Needspace{12\baselineskip}
+\section{Model design and implementation}
+\label{sec:model}
+Dimensions and module names follow main Eqs.~(3)--(5) and (9)--(11). Parameter counts exclude fixed buffers unless stated otherwise.
+
+\sisubsection{Design rationale and architectural choices}
+\label{subsec:design-rationale}
+
+\detail{Physical-field generation and measurement encoding.} Direct physical-field transport avoids assigning the same compressed representation to the finite observation set and the unknown complete field. The latent array integrates measurement information, while the physical state is evaluated at independently specified coordinates. A change in sensor availability therefore changes the conditioning input, whereas a change in output discretization changes where the field is evaluated, without requiring a separate field autoencoder. Channel-labelled scalar tokens identify the physical quantity associated with each value and accommodate measurements of different variables at different locations. Conditional generation retains the variability left unresolved by these observations, rather than restricting reconstruction to a single deterministic estimate.
+
+\detail{Global reasoning with sensor-anchored feedback.} The measurement representation must communicate relationships across distant locations and physical variables while preserving the coordinates at which evidence was collected. Latent attention provides the global interaction, and feedback returns the processed information to the original sensor anchors. Consequently, local query conditioning receives features informed by the complete measurement set rather than only raw nearby values. Sensor re-reading and sensor feedback serve different purposes: re-reading updates the latents from the observations, whereas feedback updates the sensor features from the processed latents. This bidirectional structure connects field-wide inference to spatially located evidence. The no-feedback and local-only variants in main Fig.~5d examine these complementary roles in the turbulent-combustion task; the corresponding variants are listed in Supplementary Table~\ref{tab:ablations}.
+
+\detail{Complementary local and global query conditioning.} Distance-based radial-basis weighting associates each query with spatially relevant sensor anchors. The learned sensor-importance bias adjusts their contributions within the selected neighbourhood without replacing geometric neighbour selection. A global summary and a coordinate-dependent latent readout provide complementary information from the complete measurement set, including at queries with limited nearby evidence. These routes allow the velocity prediction to use both local measurements and relationships inferred from distant observations. The global-to-sensor feedback and the direct global query readout are therefore distinct pathways, not interchangeable descriptions of one operation.
+
+The velocity head combines this conditioning with the current field value and flow time. Its globally modulated coarse contribution and local--global residual are learned velocity contributions, not prescribed low- and high-frequency components. No spectral separation or governing-equation constraint is imposed by these branches. Their fusion is specified separately for each implementation below, rather than assuming that one head or one numerical configuration is used for every dataset.
+
+\detail{Coordinate-coherent reference functions.} The random-function source introduces spatially correlated variation before transport. Evaluating the same random coefficients at every query coordinate makes a source draw consistent across point sets, unlike assigning independent Gaussian values to each evaluated point. The reference covariance thus controls the initial spatial structure that the learned velocity must transform. Its choice affects more than whole-field reconstruction error: in the turbulent-combustion comparison in main Fig.~5d,e, the IID source gives slightly lower whole-field error but larger high-frequency error than the coherent source. This comparison supports the coherent reference for scale-resolved fidelity in that task, not uniform superiority across metrics. Source coherence alone does not establish convergence of the learned reconstruction under mesh refinement or calibration of its conditional ensembles.
+
+\detail{State-independent conditioning and reuse.} Global reasoning acts on the measurements rather than the evolving physical field. For fixed measurements and query coordinates, the measurement latents, enriched sensor features and coordinate-dependent conditioning can therefore be prepared independently of flow time and reused during integration. Only the state-dependent query features and velocity evaluation must change as the field advances. This dependency structure permits repeated field generation without repeatedly encoding the same observations. The quantities reused by each sampler follow the sampling implementation described in Section~\ref{sec:training}. The associated operation counts and timing protocol are specified in Section~\ref{sec:compute}.
+
+\sisubsection{Elasticity and airfoil}
+\label{subsec:model-irregular}
+\detail{DMF-Gen.} The sensor tokenizer contains no sensor--sensor self-attention. Sensor and query positions use sine/cosine features with arguments $\pi j(2x_d-1)$; raw coordinates are not concatenated. A single cross-attention module is reused for the sensor reads, whereas latent self-attention blocks have separate weights. Encoder and feedback blocks use pre-layer normalization with attention and feed-forward residuals. The global summary is the last latent slot, $\operatorname{pool}(Z)=Z_L$. The local weighting in main Eq.~(4) uses denominator $2\sigma^2+10^{-12}$ and bias $\lambda_b b_\theta(\widetilde s_m)$. For the learned airfoil bandwidth, $\sigma=\max[\exp(\log\sigma),10^{-6}]$; the bandwidth is common to all channels. Dimensions, bandwidths and initial learned scales are listed in Supplementary Table~\ref{tab:config}.
+
+Elasticity uses the concatenative head of main Eq.~(11), with feature order $[q_n,g+\lambda_r r_n,\ell_n]$. Airfoil uses additive fusion,
+\begin{align}
+ H_n&=q_n+\lambda_g g_q+\lambda_\ell P_\ell(\ell_n)+\lambda_r r_n,
+       \qquad g_q=P_q(g),\\
+ v_{\theta,n}&=f_\theta^{\mathrm{CQ}}
+       ([H_n,\operatorname{LN}(\zeta_n)])
+       +\lambda_c h_\theta^{\mathrm{CQ}}(q_n,g_q).
+ \label{eq:cq-head}
+\end{align}
+Here $\zeta_n\in\mathbb R^{2C}$ contains RBF-interpolated unembedded measurement values and soft support for each output channel in normalized field space. The airfoil query token also receives sinusoidal-time FiLM, $q_n\leftarrow q_n\odot[1+a(\tau)]+b(\tau)$. The coarse branch in each implementation applies global-summary FiLM before a pointwise MLP.
+
+For the reference process in main Eq.~(7), the frequencies follow $\omega_j\sim\mathcal N(0,\ell_{\mathrm{RFF}}^{-2}I)$ and the phases $b_j\sim\mathcal U[0,2\pi)$. The feature basis is common to the output channels; its feature count and length scales appear in the table.
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.27\linewidth} P{0.34\linewidth} P{0.34\linewidth}@{}}
+\caption{DMF-Gen network configurations for elasticity and airfoil. Width sequences enumerate successive linear layers. LN denotes layer normalization, FFN a feed-forward sublayer and FiLM feature-wise linear modulation.}\label{tab:config}\\
+\toprule
+Setting & Elasticity & Airfoil \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & Elasticity & Airfoil \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Output channels $C$; latent width $D$; latents $L$ & 2; 64; 32 & 5; 128; 64 \\
+Heads; latent blocks; sensor reads & 2; 4; 4 (shared read module) & 4; 6; 6 (shared read module) \\
+Fourier bands; coordinate-feature width; channel embedding & 16; 96; 32 & 32; 192; 64 \\
+Local neighbors $K$; local width $D_\ell$ & 32; 64 & 32; 64 (projected to 128) \\
+Sensor tokenizer & $129\to64\to64\to64$ & $257\to128\to128\to128$ \\
+Query tokenizer & $99\to64\to64\to64$ & $198\to128\to128\to128$ \\
+Sensor projection $P_s$ & $64\to64\to64$ & $128\to64\to64$ \\
+Summary $P_g$; further projection & $64\to64\to64$; none & $128\to128\to128$; linear $128\to128$ \\
+Time conditioning & Scalar concatenation & Scalar concatenation plus width-128 sinusoidal FiLM; zero-initialized final projection \\
+Coordinate readout & Width 64; 2 heads; full cross-attention; feed-forward multiplier 2 & Rank 64; 4 heads; value width 128; no residual/FFN \\
+Fusion head & LN(192), $192\to64\to64\to2$ & LN(138), $138\to128\to128\to5$; 10 measurement/support inputs \\
+Coarse branch & FiLM $64\to128$; LN, $64\to64\to2$ & FiLM $128\to256$; LN, $128\to128\to5$ \\
+Activation; encoder layout & GELU; pre-LN residual attention/FFN; multiplier 4 & Same; SiLU in the time MLP \\
+Attention/MLP dropout & 0.1 / 0.1 & 0.1 / 0.1; no coarse-head dropout \\
+RBF bandwidth $\sigma$ & Fixed 0.05 & Learned log-bandwidth; initial 0.06 \\
+Initial learned scales & $\lambda_b=\lambda_r=\lambda_c=0.01$ & $\lambda_b=\lambda_r=\lambda_c=0.01$; $\lambda_g=\lambda_\ell=1$ \\
+Reference features $J$; length scale $\ell_{\mathrm{RFF}}$ & 256; 0.10 & 256; 0.15 \\
+Trainable parameters & 432,392 & 1,983,865 \\
+\end{longtable}
+}
+
+\detail{Baseline implementations.} Supplementary Tables~\ref{tab:baseline-functional}--\ref{tab:baseline-deterministic} provide the architecture and data-interface settings. E/A pairs denote elasticity and airfoil, respectively. The deterministic neural-operator baseline combines the geometry-aware interface of Geo-FNO with the sparse value/support-map reconstruction formulation of RecFNO~\cite{li2023geofno,zhao2023recfno}. We denote this family Geo-FNO/RecFNO throughout. The regular Cartesian path rasterizes sparse measurements and binary support masks directly on the target grid, whereas the irregular path uses the geometry mapping when required. The deterministic MLP-RBF wrapper fixes field-state and time inputs to zero, so its pooled query feature is independent of the measurements. Latent FM's elasticity encoding contains more scalar values than its input field.
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.21\linewidth} P{0.37\linewidth} P{0.37\linewidth}@{}}
+\caption{Functional-transport baseline configurations for elasticity (E) and airfoil (A). Paired values are listed in E/A order. FFM-Perceiver uses the Perceiver architecture and FFM-FNO the Fourier-operator parameterization~\cite{kerrigan2024ffm,jaegle2022perceiverio,li2021fno}.}\label{tab:baseline-functional}\\
+\toprule
+Setting & FFM-Perceiver & FFM-FNO \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & FFM-Perceiver & FFM-FNO \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Principal dimensions & \EA{Width 64; 32 latents; 2 heads; 1 encoder cross-attention, 6 self-attention, 1 decoder cross-attention.}{Width 128; 64 latents; 4 heads; 1/8/1 blocks.} & \EA{4 Fourier layers; width 30; modes $15\times15$.}{4 layers; width 48; modes $20\times20$.} \\
+Tokenization / input & Raw $(x,y,0)$ coordinates, scalar time and channel embeddings of width 32/64. No Fourier positional features. & $U_\tau$, time, two value-map variants and a support map: $4C+1$ channels plus two coordinates (11/23 inputs). With blur off, the value maps coincide and support is binary. \\
+Output / grid interface & Cross-attention at each query; padded sensors are zeroed and key-masked. & Native $41^2/101^2$ grid; sensor values written at their nodes. Fixed index permutation; no interpolation, coordinate remapping or padding. \\
+Lifting / projection or block settings & Pre-LN attention/FFN residuals; feed-forward multiplier 4; GELU. Attention/MLP dropout 0.1/0.1 (E), 0/0 (A). & \EA{Lift $11\to60\to30$; project $30\to60\to2$.}{Lift $23\to96\to48$; project $48\to96\to5$.} \\
+Fourier implementation & Not applicable. & \code{neuralop} 2.0.0: dense complex spectral weights, GELU, no normalization; linear spectral skip and soft-gated channel MLP (width multiplier 0.5). \\
+Trainable parameters & 434,882 / 2,119,621 & 444,152 / 2,058,773; each complex entry counted once. \\
+\end{longtable}
+}
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.21\linewidth} P{0.37\linewidth} P{0.37\linewidth}@{}}
+\caption{Array-space and latent-space generator configurations for elasticity (E) and airfoil (A)~\cite{ma2024sit,dao2023latentfm}. AE denotes the autoencoder. SiT positional parameters are fixed, and the Latent FM total includes the autoencoder and flow networks.}\label{tab:baseline-array-latent}\\
+\toprule
+Setting & SiT & Latent FM \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & SiT & Latent FM \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Representation & \EA{$2\times2$ patches; width 64; 4 blocks; 2 heads; $41\to42$ padding, 441 tokens.}{Width 128; 6 blocks; 4 heads; $101\to102$ padding, 2,601 tokens.} & \EA{AE base/latent channels 32/32; 2 levels; $41\to44$ padding; latent $32\times11\times11$ (3,872 values).}{Base/latent 64/96; 3 levels; $101\to104$; latent $96\times13\times13$ (16,224 values).} \\
+Conditioning & Field plus per-channel value/mask maps and an any-sensor mask (7/16 inputs). Nearest-neighbor value fill for E; zeros at unobserved nodes for A. & Value maps average-pooled and masks max-pooled by 4/8; concatenate with latent state (37/107 U-Net inputs). Conditioning bypasses the AE. \\
+Network details & Fixed 2-D sin/cos positions; sinusoidal time MLP; adaLN-Zero; query/key normalization; feed-forward multiplier 4. & AE: strided convolutions, two GroupNorm--SiLU residual blocks per level. U-Net base 32, multipliers $[1,2]/[1,2,4]$, two AdaGN blocks per level, bottleneck attention with 2/4 heads. \\
+Trainable parameters & 330,568 / 1,875,092. Fixed positions add 28,224 / 332,928; totals 358,792 / 2,208,020. & \EA{AE 183,906; flow 1,272,544; total 1,456,450.}{AE 2,130,341; flow 5,228,576; total 7,358,917.} \\
+\end{longtable}
+}
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.19\linewidth} P{0.28\linewidth} P{0.24\linewidth} P{0.23\linewidth}@{}}
+\caption{Deterministic baseline configurations for elasticity (E) and airfoil (A). Senseiver and the Geo-FNO/RecFNO hybrid follow their respective model families~\cite{santos2023senseiver,li2021fno,li2023geofno,zhao2023recfno}. Complex Fourier coefficients are counted once per complex entry.}\label{tab:baseline-deterministic}\\
+\toprule
+Setting & Senseiver & Geo-FNO/RecFNO & MLP-RBF \\
+\midrule
+\endfirsthead
+\multicolumn{4}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & Senseiver & Geo-FNO/RecFNO & MLP-RBF \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Principal dimensions & \EA{32 latents, width 64, 2 heads; 2 encoder blocks with 2 self-attention blocks each.}{64 latents, width 128, 4 heads; 2 blocks with 3 self-attention blocks each.} & \EA{4 layers; width 64; modes $16\times16$.}{6 layers; width 128; modes $32\times32$.} & \EA{Hidden/condition/field-embedding widths 64/64/32.}{128/64/64.} \\
+Coordinates / input & 16/32 Fourier bands shared by sensors and queries; channel embedding 8/16. & Native $41^2/101^2$ grids; sparse value and binary-mask maps per field plus coordinates: 6/12 inputs. & Query Fourier features with 16/32 bands; raw sensor coordinates and channel embeddings. \\
+Decoder / aggregation & One coordinate-to-latent cross-attention, then LN and linear output. & Full-grid output; no interpolation or padding. Lifting/projection hidden width $2\times$ operator width. & Gaussian softmax over all valid sensors; fixed $\sigma=0.05$; no top-$K$ truncation. \\
+Blocks / regularization & Pre-LN, residuals, GELU, FF multiplier 4; encoder cross-attention has no FFN. Dropout 0/0.1. & GELU, linear spectral skip, soft-gated channel MLP; no normalization. & Three-layer GELU MLPs; mean-pooled query feature; no normalization or residuals. \\
+Trainable parameters & 266,002 / 1,450,197 & 2,410,690 / 53,747,205; complex entries counted once. & 50,434 / 162,821 \\
+\end{longtable}
+}
+
+\Needspace{10\baselineskip}
+\sisubsection{Mixed-resolution Navier--Stokes}
+\label{subsec:model-mixed}
+\detail{DMF-Gen.}
+{
+The Mixed-HML model uses the enhanced global/local RBF implementation: 128 latent tokens of width 128, eight attention heads, three latent blocks, a 32-band coordinate Fourier encoding (maximum frequency 64), and a 32-neighbour local query search. Gaussian distance weights have learnable initial width 0.05. The source field uses 256 random Fourier features with length scale 0.15. H-only, H-limited and Mixed-HML use this enhanced implementation; both Zero-H recipes use the earlier global/local RBF implementation. Architecture therefore differs across recipe groups. The same model accepts L-, M-, or H-grid query coordinates; the target resolution enters through the requested query set.
+}
+\detail{Baseline implementations.}
+{
+FFM-Perceiver uses 128 latent tokens of width 128, eight heads, four latent blocks, 24 coordinate Fourier bands (maximum frequency 48), and 256 random Fourier source features of length scale 0.15. It predicts a conditional velocity at arbitrary query coordinates. Senseiver uses 128 width-128 latents, three encoder layers with three self-attention blocks each, eight heads and 32 coordinate Fourier bands; it directly regresses the queried scalar. MLP-RBF is a deterministic local kernel regressor with width 256, conditioning width 128, field embedding width 128, Gaussian width 0.05 and 32 Fourier bands. Their input sensor counts scale with resolution under the same 32/128/512 rule.
+}
+
+\sisubsection{Turbulent combustion}
+\label{subsec:model-combustion}
+\detail{DMF-Gen.}
+{
+Separate DMF-Gen models were trained for the $T$, $(T,U_1)$, and $(Y_{\mathrm{CO}},T,U_1,p)$ observation regimes. The enhanced global/local RBF model has 128 latent tokens of width 256, eight heads, four latent blocks, 32 Fourier coordinate bands (maximum frequency 64), 32 local query neighbours, and 16 local sensor neighbours. Its Gaussian local width begins at 0.05 and is learned; the source uses 256 random Fourier features of length scale 0.15. Sensor-labelled tokens, global latent processing, feedback to sensor anchors and local/global query readouts condition a five-channel physical-field velocity. The flow is integrated directly in the field rather than an autoencoder latent.
+}
+\detail{Baseline implementations.}
+{
+FFM-Perceiver is a query-coordinate functional transport with 128 width-256 latents, eight heads and four latent blocks. FFM-FNO transports the full lattice with four Fourier layers, width 64 and $24\times12$ retained modes. Latent FM first learns an autoencoder (base width 64, 256 latent channels, three scales), then trains a separate latent-flow model (base width 256, two residual blocks per scale, eight heads). SiT uses velocity transport in patch-four tokens with width 256, depth eight and four heads. Senseiver uses 128 width-256 latents and three encoder layers of three self-attention blocks each. MLP-RBF uses a width-256 local kernel network with conditioning width 128 and Gaussian width 0.05. Geo-FNO/RecFNO uses four width-64 Fourier layers with $24\times12$ retained modes. In the regular-grid combustion path, sparse values and binary observation masks are rasterized on the $403\times100$ grid and concatenated with coordinates before Fourier processing; the geometry-mapping path is reserved for irregular meshes. The latter three predict fields directly; FFM-FNO, SiT and Geo-FNO/RecFNO use grid-native representations, whereas the Perceiver, Senseiver and MLP-RBF evaluate requested coordinates.
+}
+\detail{Conditioning and source variants.}
+{
+The Fig.~5d,e variants are separately trained models. The no-feedback variant suppresses the global-to-sensor feedback update but retains latent processing and its other conditioning paths. The no-local variant zeroes the local query feature. The local-only variant retains raw local sensor tokens while bypassing global observation pathways. The IID-source variant replaces random Fourier source values with independent standard-Gaussian values at training and sampling. The deterministic direct-MSE variant is documented in the ablation evaluation record but is not one of the four plotted conditioning/source removals.
+}
+{\small
+\begin{longtable}{@{}P{0.24\linewidth} P{0.35\linewidth} P{0.35\linewidth}@{}}
+\caption{Independently trained Cond-$T$ variants used in Fig.~5d,e.}\label{tab:ablations}\\
+\toprule Variant & Intervention & Retained or replaced path \\
+\midrule\endfirsthead
+\toprule Variant & Intervention & Retained or replaced path \\
+\midrule\endhead
+\bottomrule\endlastfoot
+No sensor feedback & Remove global-to-sensor update & Latent re-reading and remaining query paths retained \\
+No local conditioning & Set local query feature to zero & Global summary and latent query readout retained \\
+Local-only conditioning & Bypass global observation paths & Raw local sensor-token conditioning retained \\
+IID Gaussian source & Replace random Fourier source & Independent $\mathcal N(0,1)$ source; retrained \\
+\end{longtable}
+}
+
+\FloatBarrier
+\Needspace{12\baselineskip}
+\section{Optimization and conditional sampling}
+\label{sec:training}
+
+\sisubsection{Numerical integration}
+\label{subsec:integration}
+For $V_k=V_\theta(\tau_k,U^{(k)};\mathcal Y)$ and $h_k=\tau_{k+1}-\tau_k$, the forward-Euler update is
+\begin{equation}
+ \widetilde U^{(k+1)}=U^{(k)}+h_kV_k.
+ \label{eq:euler}
+\end{equation}
+Heun integration uses the provisional Euler state in a second evaluation,
+\begin{equation}
+ U^{(k+1)}=U^{(k)}+\frac{h_k}{2}
+ \left[V_k+V_\theta(\tau_{k+1},\widetilde U^{(k+1)};\mathcal Y)\right].
+ \label{eq:heun}
+\end{equation}
+Euler and Heun require one and two velocity evaluations per step, respectively. NFE counts these evaluations, excluding separate decoder passes. Observation-consistency operations are specified with each sampling configuration.
+
+\sisubsection{Elasticity and airfoil}
+\label{subsec:train-irregular}
+All models use the partitions, normalization and evaluation observations in Section~\ref{subsec:data-irregular}, with training seed 42 and one trained realization per configuration. Optimization budgets and regularization differ among methods. Capacity matching was targeted within the functional-transport family rather than across all baselines.
+
+\detail{DMF-Gen optimization.} The loss in main Eq.~(6) includes every sampled query and regressed channel, including the standardized mask and hole/body cells. Query indices are sampled uniformly without replacement, redrawn each batch and common to the samples within that batch. Sensor sets are sample-specific and sampled independently of the query set. No data augmentation or measurement noise is added. Supplementary Table~\ref{tab:training} specifies optimization and checkpoint selection.
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.29\linewidth} P{0.33\linewidth} P{0.33\linewidth}@{}}
+\caption{DMF-Gen optimization settings for elasticity and airfoil. EMA denotes the exponential moving average of model weights. Selected epochs identify the evaluated EMA checkpoints.}\label{tab:training}\\
+\toprule
+Setting & Elasticity & Airfoil \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & Elasticity & Airfoil \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Batch size; queried nodes & 128; 1,024 of 1,681 & 32; 4,096 of 10,201 \\
+Optimizer; learning rate; weight decay & AdamW; $2\times10^{-4}$; $10^{-4}$ & AdamW; $10^{-4}$; $10^{-4}$ \\
+Learning-rate schedule & Per-epoch cosine to zero; no warm-up & Same \\
+Completed epochs & 20,000 & 20,000 \\
+Gradient clipping; precision & Global norm 1.0; FP32, no AMP & Global norm 1.0; FP32, no AMP \\
+EMA; held-out selection & Decay 0.999; held-out flow loss every 5 epochs & Decay 0.999; held-out flow loss every 5 epochs \\
+Selected epoch; held-out loss & 12,605; 0.05085 & 18,510; 0.01258 \\
+Training seed; reported realizations & 42; one & 42; one \\
+Training GPU & One NVIDIA L40S & One NVIDIA L40S \\
+\end{longtable}
+}
+
+\detail{Baseline optimization.} Supplementary Tables~\ref{tab:ffm-training}--\ref{tab:deterministic-training} collect baseline objectives, optimization and checkpoint selection. The FFM-Perceiver encoder receives sampled query-state tokens during training and the complete query set during evaluation. The FFM-FNO objective is evaluated on the full grid.
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.23\linewidth} P{0.36\linewidth} P{0.36\linewidth}@{}}
+\caption{Optimization of the functional-transport baselines on elasticity and airfoil. Paired values are in E/A order. Both models use the reference-source settings in Supplementary Table~\ref{tab:config}.}\label{tab:ffm-training}\\
+\toprule
+Setting & FFM-Perceiver & FFM-FNO \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & FFM-Perceiver & FFM-FNO \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Optimizer; rate; decay & AdamW; LR $2\times10^{-4}/10^{-4}$; decay $10^{-4}/10^{-6}$. & Same. \\
+Schedule; completed epochs & Cosine to zero, no warm-up; 10,000/20,000 epochs. & Same. \\
+Batch / queries & 128/32; 1,024/4,096 random queries. & 128/32; full grid. \\
+EMA / selected epochs & EMA 0.999 (E), none (A); epochs 7,730/19,320. & EMA 0.999 (E), none (A); epochs 9,350/19,015. \\
+Held-out selection loss & Held-out flow MSE on sampled queries. & Held-out flow MSE on the full grid. \\
+\end{longtable}
+}
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.21\linewidth} P{0.37\linewidth} P{0.37\linewidth}@{}}
+\caption{Objectives and optimization of SiT and Latent FM on elasticity and airfoil. Paired values are in E/A order. Both use FP32 without automatic mixed precision. The autoencoder is frozen during latent-flow training.}\label{tab:array-latent-training}\\
+\toprule
+Setting & SiT & Latent FM \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & SiT & Latent FM \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Source / flow loss & IID unit Gaussian on the padded grid; straight interpolant, velocity target. MSE (E); smooth-$L_1$ / Huber $\beta=0.1$ (A). All padded nodes and mask channels included. & Unit Gaussian latent source; straight path and velocity MSE in raw encoder coordinates. No latent scaling or normalization. \\
+AE loss & Not applicable. & $0.5L_1+0.5\mathrm{MSE}$; no KL or latent regularizer. \\
+AE optimization & Not applicable. & AdamW, LR $10^{-4}$, decay $10^{-6}$; cosine to $10^{-6}$; batch 128/32; clip 1.0; no EMA. Completed 10,000/20,000 epochs; selected 10,000/19,995. \\
+Transport optimizer & AdamW, $\beta=(0.9,0.95)$, $\epsilon=10^{-6}$; LR $2\times10^{-4}/10^{-4}$; decay $0/10^{-6}$. & AdamW; LR $2\times10^{-4}/10^{-4}$; decay $0/10^{-6}$. \\
+Schedule / batch & 200-epoch linear warm-up, then cosine to zero; batch 128 (E), microbatch 8 with accumulation 4 (A). & Cosine to $10^{-6}$; batch 128/32. \\
+Clipping / averaging & Clip 0.5; skip steps when loss exceeds $5\times$ or gradient norm exceeds $10\times$ its running EMA. Weight EMA 0.9999, used for evaluation. & Clip 1.0; no EMA; frozen AE. \\
+Transport epochs; selected checkpoint & 10,000/20,000 completed; selected 8,605/16,875. & 10,000/20,000 completed; selected 3,025/2,515. \\
+\end{longtable}
+}
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.19\linewidth} P{0.28\linewidth} P{0.24\linewidth} P{0.23\linewidth}@{}}
+\caption{Optimization of the deterministic baselines on elasticity and airfoil. All use global gradient-norm clipping at 1.0, FP32 without automatic mixed precision, no EMA and one NVIDIA L40S GPU. Paired values are in E/A order.}\label{tab:deterministic-training}\\
+\toprule
+Setting & Senseiver & Geo-FNO/RecFNO & MLP-RBF \\
+\midrule
+\endfirsthead
+\multicolumn{4}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Setting & Senseiver & Geo-FNO/RecFNO & MLP-RBF \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+Loss / mask & Unweighted MSE on normalized fields and mask; all query nodes included. & Same. & Same. \\
+Optimizer / learning rate & AdamW; $10^{-4}$. & AdamW; $10^{-4}$. & AdamW; $10^{-4}$. \\
+Weight decay & $10^{-6}/10^{-4}$ & $10^{-6}$ & $10^{-6}$ \\
+Schedule & Cosine to zero; no warm-up. & Same. & Same. \\
+Completed epochs & 10,000 / 20,000 & 6,622 of 10,000 (E); 20,000 (A). & 10,000 / 20,000 \\
+Batch / queries & 64/32; full grid (E), 4,096 random (A). & 128/32; full grid. & 128/32; full grid (E), 4,096 random (A). \\
+Selected epochs & 9,365 / 3,295 & 5,385 / 19,775 & 9,085 / 16,930 \\
+\end{longtable}
+}
+
+Deterministic baselines are validated every five epochs using new sensor samples and held-out mean-squared error. Airfoil Senseiver uses the regularized run selected by held-out loss (0.01440 versus 0.01462 for the unregularized run). The evaluated airfoil Geo-FNO/RecFNO checkpoint follows the retained checkpoint-selection procedure and does not correspond to the minimum held-out loss over the complete recorded training history: the selected epoch is 19,775 with loss 0.0359, whereas the log records 0.0168 at epoch 1,330. The weights associated with the earlier logged minimum are unavailable. The elasticity Geo-FNO/RecFNO run completed 6,622 of 10,000 configured epochs.
+
+\detail{Sampling and measurement consistency.} Supplementary Table~\ref{tab:irregular-sampling} gives the integrators and evaluation counts. For DMF-Gen and the two FFM baselines, each Euler step is followed by
+\begin{equation}
+ U_{n_m,c_m}^{(k+1)}=y_m,\qquad
+ U_{n,c}^{(k+1)}=\widetilde U_{n,c}^{(k+1)}
+ \quad\text{at unobserved entries}.
+ \label{eq:hard-consistency}
+\end{equation}
+The clean normalized measurements are inserted by grid-index scatter with strength one, including at intermediate flow times and once more after the final step. This replacement is not part of the training loss. It is not applied to SiT, Latent FM or the deterministic models.
+
+\Needspace{6\baselineskip}
+{\small
+\renewcommand{\arraystretch}{1.10}
+\begin{longtable}{@{}P{0.29\linewidth} P{0.19\linewidth} P{0.15\linewidth} P{0.31\linewidth}@{}}
+\caption{Sampling settings for elasticity (E) and airfoil (A). NFE denotes velocity-network evaluations per draw. The generative estimates use eight draws; the deterministic estimates use one forward prediction.}\label{tab:irregular-sampling}\\
+\toprule
+Methods & Integrator & NFE per draw & Observation consistency \\
+\midrule
+\endfirsthead
+\multicolumn{4}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Methods & Integrator & NFE per draw & Observation consistency \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+DMF-Gen, FFM-Perceiver, FFM-FNO & Euler, uniform steps & E: 4; A: 32 & Hard replacement after each step and at completion \\
+SiT & Euler, 50 time nodes & 49 & None \\
+Latent FM & Euler & 2, followed by one decoder pass & None \\
+Senseiver, Geo-FNO/RecFNO, MLP-RBF & Direct prediction & Not applicable & None \\
+\end{longtable}
+}
+
+The five generators use source seeds $1234+977i+k$, $k=0,\ldots,7$, for recorded case index $i$. Draws are averaged in normalized space before inverse transformation, derivation of Mach number and scoring; no sample is selected by reconstruction error. For log-transformed channels, the resulting field is not the arithmetic mean of inverse-transformed draws. The same estimator is used in the sensor-count sweep.
+
+\detail{Sampling implementation.} For airfoil DMF-Gen, the measurement latents, enriched sensor features, global summary, sensor-importance biases and coordinate-readout keys and values are prepared once per condition. At fixed query coordinates, coordinate features, local aggregates, coordinate readouts and measurement/support features are also reused. Query tokenization, time modulation and velocity-head computation are repeated at each integration step, while sensor projections are reused across encoder reads. The elasticity sampler recomputes the conditioning quantities at every step.
+
+Both implementations use \code{torch.cdist} and \code{torch.topk}, with retrieval chunks of 1,024. Airfoil query evaluation and state-independent preparation use chunks of 8,192. The NFE values in Supplementary Table~\ref{tab:irregular-sampling} follow from the executed solver settings, not separately instrumented call counts.
+
+\Needspace{10\baselineskip}
+\sisubsection{Mixed-resolution Navier--Stokes}
+\label{subsec:train-mixed}
+\detail{Optimization and checkpoint selection.}
+{
+Each recipe and method is trained separately on its assigned trajectories. DMF-Gen uses a conditional flow-matching squared velocity loss on uniformly sampled query nodes. The Mixed-HML configuration specifies batch size 384, 1024 query nodes per update, learning rate $2\times10^{-4}$, weight decay $10^{-6}$, 10,000 configured epochs and seed 42. Its optimizer is AdamW, with a per-epoch cosine learning-rate schedule and gradient norm clipping at 1. The Zero-H variants use batch size 512 and the earlier backbone. Each recipe uses its selected minimum-held-out-loss checkpoint. The 300 held-out evaluation case--time pairs characterize one trained realization per configuration and do not estimate variation across training seeds. Method-specific baselines retain their own regression or flow objectives and checkpoint schedules.
+}
+\detail{Sampling and prediction estimates.}
+{
+The reported comparison evaluates the H grid with the same case--time pair and sensor indices across methods and recipes. DMF-Gen predictions use two forward-Euler steps, corresponding to two velocity evaluations, and hard observation consistency. FFM-Perceiver uses endpoint smoothing. The selected checkpoints and deterministic sensor plans are fixed before final evaluation; no evaluation-time optimization is performed.
+}
+{\small
+\begin{longtable}{@{}P{0.27\linewidth} P{0.24\linewidth} P{0.43\linewidth}@{}}
+\caption{Selected DMF-Gen epochs and material configuration differences among mixed-resolution recipes.}\label{tab:mixed-runs}\\
+\toprule Recipe & Selected epoch & Difference \\
+\midrule\endfirsthead
+\toprule Recipe & Selected epoch & Difference \\
+\midrule\endhead
+\bottomrule\endlastfoot
+H-only & 8310 & H trajectories only; 16 retained frames \\
+H-limited & 6475 & 3060 H trajectories; 16 retained frames \\
+Mixed-HML & 6755 & 3000 trajectories at each scale; enhanced backbone \\
+Zero-H-balanced & 5185 & 4500 L and 4500 M; earlier backbone \\
+Zero-H-M-rich & 6175 & 3000 L and 6000 M; 11 retained frames; earlier backbone \\
+\end{longtable}
+}
+
+\sisubsection{Turbulent combustion}
+\label{subsec:train-combustion}
+\detail{Optimization and checkpoint selection.}
+{
+The three DMF-Gen observation regimes use separate trained configurations evaluated at epochs 6005, 6060 and 6045, respectively. The Cond-$T$ configuration specifies batch size 128, 4096 uniform query nodes, AdamW learning rate $10^{-4}$, weight decay $10^{-6}$, a per-epoch cosine schedule, gradient norm clipping at 1, 10,000 configured epochs and seed 42. Sensor and query samples are redrawn during training. Configured epochs are an intended upper bound, not the completed checkpoint epoch. Baselines are optimized separately: the flow baselines use their own transport losses, deterministic models use supervised field losses, and Latent FM trains its autoencoder and latent transport in two stages. Reported results use the selected checkpoints, rather than a shared epoch budget. The Cond-$T$ configurations specify batches of 128 for FFM-FNO, 96 for FFM-Perceiver, 64/128 for Latent FM stages one/two, 32 for SiT, 256 for Senseiver, 384 for MLP-RBF and 192 for Geo-FNO/RecFNO. Latent FM specifies 5,000 epochs per stage; Senseiver specifies 5000, while the other listed baseline configurations specify 10,000. These are configured budgets rather than claims that every run reached the target epoch.
+}
+\detail{Sampling and prediction estimates.}
+{
+The main Fig.~4 evaluation uses 1,000 held-out evaluation states and fixed channel-specific sensor plans. DMF-Gen samples with two Euler steps, two velocity evaluations, and hard replacement at observed values. FFM baselines use endpoint smoothing; SiT uses four Euler steps. Field metrics are computed on inverse-standardized outputs. Main Fig.~5a--c conditions 64 draws per state on the same 256 $T$ measurements for each of 200 paired held-out states. Its point reconstruction is the ensemble mean. Main Fig.~5d,e evaluates 1,000 matched states with one saved reconstruction per state and a separately trained full-model comparator. Main Fig.~5f combines the A0 reconstruction-error summary with separate resource measurements for the adopted method checkpoints. These analysis cohorts and estimators are distinct and are not pooled as one uncertainty experiment.
+}
+{\small
+\begin{longtable}{@{}P{0.20\linewidth} P{0.31\linewidth} P{0.21\linewidth} P{0.21\linewidth}@{}}
+\caption{Analysis-specific provenance for turbulent-combustion predictions. Distinct rows use separate checkpoints or evaluation pipelines and are not interpreted as direct cross-panel performance comparisons.}\label{tab:comb-runs}\\
+\toprule Analysis & Cohort / sensors & DMF-Gen run / epoch & Draws / estimator \\
+\midrule\endfirsthead
+\toprule Analysis & Cohort / sensors & DMF-Gen run / epoch & Draws / estimator \\
+\midrule\endhead
+\bottomrule\endlastfoot
+Fig.~4, Cond-$T$ & 1,000 states; 256 $T$ & Cond-$T$ / 6005 & One saved point reconstruction per state \\
+Fig.~4, Cond-$(T,U_1)$ & 1,000 states; 256 per channel & Cond-$TU_1$ / 6060 & One saved point reconstruction per state \\
+Fig.~4, four-channel condition & 1,000 states; 256 per channel & Cond-$COTU_1P$ / 6045 & One saved point reconstruction per state \\
+Fig.~5a--c & 200 paired states; 256 $T$ & Cond-$T$ UQ run & 64 draws per state; distributional scores and ensemble mean \\
+Fig.~5d,e & 1,000 states; 256 $T$ & Ablation A0 / 7520 & One saved reconstruction per state \\
+Fig.~5f accuracy & 1,000 states; 256 $T$ & Ablation A0 / 7520 & One saved reconstruction per state; mean and block-bootstrap interval \\
+Fig.~5f resources & Batch 32 training; batch 1 inference & Adopted method checkpoints & Synchronized update and warm model-core inference measurements \\
+\end{longtable}
+}
+\detail{Ablation training.}
+{
+The Fig.~5d,e full comparator (A0) and A1--A5 variants were trained from separate initializations. Their evaluated epochs are A0 7520, A1 7180, A2/A3/A5 6000, and A4 7310; the Senseiver comparator is at epoch 5000. Therefore the plotted intervention contrasts are not matched-update-budget estimates. The A0 mean missing-field error is 0.1063, whereas the Cond-$T$ analysis in main Fig.~4 reports approximately 0.117. These analyses use distinct checkpoints and evaluation pipelines and their numerical values are therefore not interpreted as a direct cross-panel performance comparison. Main Fig.~5f uses the A0 value for the DMF-Gen accuracy coordinate.
+}
+
+\sisubsection{Implementation and comparison notes}
+\label{subsec:comparison-notes}
+Supplementary Table~\ref{tab:comparison-notes} consolidates protocol differences that affect interpretation across model families or recipe groups. Each reported configuration represents one trained realization. Comparisons therefore describe the evaluated implementations and cohorts and do not estimate variability across independent training seeds.
+
+{\small
+\begin{longtable}{@{}P{0.23\linewidth} P{0.32\linewidth} P{0.39\linewidth}@{}}
+\caption{Implementation and comparison notes. These protocol differences are retained in the interpretation of the reported comparisons.}\label{tab:comparison-notes}\\
+\toprule
+Scope & Protocol difference & Interpretation \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small Supplementary Table~\thetable\ continued}\\
+\toprule
+Scope & Protocol difference & Interpretation \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\footnotesize Continued on next page}\\
+\endfoot
+\bottomrule
+\endlastfoot
+All tasks & One trained realization per configuration; checkpoint rules and completed update counts differ among model families. & Reported intervals quantify evaluation-cohort sampling under the selected realization and do not define a matched-training-budget causal comparison. \\
+Irregular-domain Latent FM & Stage-2 training sensors are uniform over the full grid; evaluation uses the prescribed near-hole band or airfoil ellipse. & The training and evaluation placement distributions differ for this baseline. \\
+Irregular-domain Geo-FNO/RecFNO & The evaluated airfoil epoch does not attain the lowest held-out loss recorded over the complete history; weights for the earlier logged minimum are unavailable. & The reported result follows the retained checkpoint-selection procedure. \\
+Mixed resolution & H-only, H-limited and Mixed-HML use the enhanced backbone; both zero-H recipes use the earlier backbone. & Recipe-group differences include architecture as well as training-resolution composition. \\
+Mixed resolution & Most runs retain 16 frames per trajectory; two Zero-H-M-rich runs retain 11. & The spatial-DOF exposure metric intentionally excludes temporal-frame differences. \\
+Combustion ablations & A0 and A1--A5 are separately trained and have different evaluated epochs. & Intervention contrasts are not matched-update-budget estimates. \\
+\end{longtable}
+}
+
+\FloatBarrier
+\Needspace{12\baselineskip}
+\section{Evaluation procedures}
+\label{sec:evaluation}
+
+\sisubsection{Elasticity and airfoil}
+\label{subsec:metrics-irregular}
+\detail{Field and geometry errors.} Fields are inverse-transformed to dataset units and cast to float64. For the reference domain $\Omega_i$, defined by a material/fluid mask exceeding 0.5, field error is
+\begin{equation}
+ e_{i,c}=\frac{\|\widehat u_{i,c}-u_{i,c}\|_{2,\Omega_i}}
+ {\max(\|u_{i,c}\|_{2,\Omega_i},10^{-12})}.
+ \label{eq:l2}
+\end{equation}
+The norm is unweighted over valid cells. Airfoil Mach number is computed from the reconstructed primitive variables using
+\begin{equation}
+ \mathrm{Ma}=\frac{\sqrt{u^2+v^2}}{\sqrt{\gamma p_+/\rho_+}},
+ \qquad \gamma=1.4,\quad
+ p_+=\max(p,10^{-6}),\quad \rho_+=\max(\rho,10^{-6}).
+ \label{eq:mach}
+\end{equation}
+The same transformation is applied to reference and prediction. Airfoil variables are dimensionless in the dataset convention. Field scores in main Fig.~2 use stress for elasticity and derived Mach number for airfoil, not an average over airfoil channels.
+
+For geometry, let $\chi=\mathbf1\{m\le0.5\}$ denote the void/body indicator. The full-grid score is
+\begin{equation}
+ e_{\mathrm{geom}}=\frac{\|\widehat\chi-\chi\|_2}{\|\chi\|_2}
+ =\sqrt{\frac{|\widehat B\triangle B|}{|B|}},
+ \label{eq:geometry}
+\end{equation}
+where $B$ is the reference void/body set. Both masks are thresholded at 0.5 without smoothing. Field errors retain the reference physical support regardless of the predicted mask.
+
+\detail{Stress and pressure-derived quantities.} The peak-to-mean stress proxy uses the exact maximum and unweighted mean over the reference material region,
+\begin{equation}
+ K_t=\frac{\max_{\Omega}\sigma_{\mathrm{vM}}}
+ {\max(|\langle\sigma_{\mathrm{vM}}\rangle_{\Omega}|,10^{-12})}.
+ \label{eq:stress}
+\end{equation}
+No erosion or smoothing is applied. The pressure-drag coefficient is
+\begin{equation}
+ C_D=\frac{F_x\cos\alpha+F_y\sin\alpha}{q_\infty c},
+ \qquad q_\infty=\tfrac12\rho_\infty\|U_\infty\|^2.
+ \label{eq:drag}
+\end{equation}
+The longest 0.5-isocontour of the reference mask is extracted using \code{matplotlib.contour}. Pressure is linearly interpolated to its vertices from fluid cells using \code{scipy.interpolate.griddata}, without an outward surface offset. Vertices are mapped to dataset coordinates before integration. Each polygon segment contributes $-\overline{(p-p_\infty)}_k n_k$, where pressure is endpoint-averaged and $n_k=\pm(\Delta y,-\Delta x)$ is the length-weighted outward normal; polygon orientation determines its sign. Freestream density, pressure, velocity and direction are obtained from the outer border of the reference grid, and $c$ is the contour's streamwise extent. Reference geometry and freestream quantities are identical across models. No viscous contribution or predicted-shape error enters $C_D$, and no airfoil cases are excluded.
+
+For either $Q=K_t$ or $C_D$, the signed normalized error is
+\begin{equation}
+ \epsilon_i=\frac{\widehat Q_i-Q_i}{\max(|Q_i|,q_0)},
+ \qquad q_0=0.15\sqrt{\frac1n\sum_{i=1}^{n}Q_i^2}.
+ \label{eq:physical-error}
+\end{equation}
+The floors are 0.7252 for $K_t$ and 0.008555 for $C_D$, affecting 0 of 400 and 53 of 498 cases, respectively. Mean absolute error is the arithmetic mean of $|\epsilon_i|$.
+
+\detail{Gradient fidelity.} Gradient-magnitude similarity deviation (GMSD)~\cite{xue2014gmsd} is computed as
+\begin{equation}
+ \mathrm{GMS}=\frac{2g_tg_p+c_g}{g_t^2+g_p^2+c_g},
+ \qquad
+ \mathrm{GMSD}=\operatorname{std}_{\Omega_{\mathrm{int}}}(\mathrm{GMS}),
+ \label{eq:gmsd}
+\end{equation}
+using population standard deviation. Gradient magnitudes $g_t$ and $g_p$ are evaluated with \code{numpy.gradient} in grid-index units, without downsampling. Invalid cells are filled with each field's valid-region mean. The scoring region is the reference mask eroded once with a four-connected cross, excluding the grid border. The stabilizer is $c_g=(0.0026R)^2$, where $R=\max[P_{99}(g_t),P_{99}(g_p),10^{-12}]$ on this region, separately for each case and model. This implementation uses neither the original Prewitt operator nor the $0.0026R^2$ stabilizer convention.
+
+\detail{Statistical summaries.} Case-wise errors are averaged arithmetically. Physical-error violin densities use the central 90\% of each distribution, whereas median, interquartile and mean-absolute-error summaries use all cases. Geometry ridgelines use Gaussian kernel density estimation with Scott's bandwidth rule and are rescaled to equal peak height. The reported distributions are conditional on one trained realization per model and do not estimate between-training-seed variability.
+
+\Needspace{10\baselineskip}
+\sisubsection{Mixed-resolution Navier--Stokes}
+\label{subsec:metrics-mixed}
+\detail{Field errors.}
+{
+For each of the 300 paired case--time selections, the H-grid prediction is inverse-standardized and scored by $e_i=\{\sum_j(\widehat u_{ij}-u_{ij})^2\}^{1/2}/ (\{\sum_j u_{ij}^2\}^{1/2}+10^{-12})$. The sum uses all 16,384 H-grid cells without physical-area weighting. All methods and recipes use the same case--time list and 256-sensor plan for the reported comparison.
+}
+\detail{Wavelet analysis.}
+{
+The reported 300-field analysis uses a four-level two-dimensional Daubechies-2 discrete wavelet transform with periodization. The level-4 approximation and level-4 details reconstruct the large component; level-3 details reconstruct the intermediate component; levels 1--2 details reconstruct the fine component. Each component is returned to the full grid by inverse transform. Pattern correlation is the uncentered component cosine $\langle \widehat u_s,u_s\rangle/ (\|\widehat u_s\|_2\|u_s\|_2+10^{-12})$. For component $s$, the squared-energy fraction is $(E_s+\epsilon)/\sum_t(E_t+\epsilon)$, where $E_s=\sum_j u_{s,j}^2$ and $\epsilon=10^{-12}$. Signed allocation bias is 100 times the predicted fraction minus the reference fraction, in percentage points. Periodization is an analysis boundary rule and is not evidence that the simulated PDE domain is periodic.
+}
+\detail{Statistical summaries.}
+{
+Errors and wavelet scores are summarized across the 300 selected case--time pairs. Means use a 2,000-replicate simple bootstrap over these selections, with percentile 95\% intervals. The distribution plots show medians, quartiles and 1.5-IQR whiskers; concealed outlier symbols are retained in all calculations. Intervals reflect held-out cohort sampling under one trained realization per configuration.
+}
+\begin{figure}[!htbp]
+\centering
+\suppgraphic{figures_final/si01_mixed_resolution_distributions_final.pdf}
+\caption{\textbf{Mixed-resolution $V_x$ and wavelet distributions.} \textbf{a,} H-grid physical $V_x$ relative-$L_2$ error for DMF-Gen, FFM-Perceiver, Senseiver and MLP-RBF across all five training recipes. \textbf{b,} Large-, intermediate- and fine-scale wavelet pattern cosine for DMF-Gen and Senseiver in the Zero-H-M-rich recipe. \textbf{c,} Signed squared-energy allocation bias for the same comparison, in percentage points. Each distribution contains the same 300 case--time pairs from distinct held-out trajectories and uses 256 nested H-grid sensors. Box centres and edges denote the median and interquartile range; whiskers extend to 1.5 times the interquartile range. Predictions use the selected checkpoint for each configuration.}
+\label{fig:si-mixed-distributions}
+\end{figure}
+\FloatBarrier
+
+\sisubsection{Turbulent combustion}
+\label{subsec:metrics-combustion}
+\detail{Field and unobserved-channel errors.}
+{
+For each physical channel and frame, $e_{i,c}$ is the Euclidean norm of the reconstructed-minus-reference values divided by the reference norm plus $10^{-12}$, over all 40,300 finite grid points without area weighting. The unobserved-field score is the arithmetic mean of $e_{i,c}$ over the missing channels: $(Y_{\mathrm{CH_4}},Y_{\mathrm{CO}}, U_1,p)$ for Cond-$T$, $(Y_{\mathrm{CH_4}},Y_{\mathrm{CO}},p)$ for Cond-$(T,U_1)$, and $Y_{\mathrm{CH_4}}$ for four-channel conditioning.
+}
+\begin{figure}[!htbp]
+\centering
+\suppgraphic{figures_final/si02_complete_combustion_fields_final.pdf}
+\caption{\textbf{Complete five-field combustion reconstructions.} \textbf{a,} Reference state. \textbf{b--d,} DMF-Gen reconstruction and absolute physical error for Cond-$T$, Cond-$(T,U_1)$ and Cond-$(Y_{\mathrm{CO}},T,U_1,p)$, respectively. The preselected main-paper example, held-out evaluation state 0 from the 1,000-state cohort, is shown for all five channels; each prediction is a single point reconstruction. The same per-channel physical limits are used for the reference and all predictions; absolute errors share per-channel limits across the three conditions. Each observed channel has 256 measurements. Maps use the stored nonuniform rectilinear coordinates without interpolation. Physical limits for $(Y_{\mathrm{CH_4}},Y_{\mathrm{CO}},T,U_1,p)$ are $(-0.00159,0.05611)$, $(-0.00143,0.05015)$, $(364.21,2285.67)$, $(-175.06,188.08)$ and $(103380,132052)$, respectively; absolute-error limits are $(0,0.01117)$, $(0,0.00810)$, $(0,293.91)$, $(0,26.61)$ and $(0,2506.15)$.}
+\label{fig:si-multifield-fields}
+\end{figure}
+\FloatBarrier
+
+\detail{Spectral analysis and high-frequency error.}
+{
+Fields are reordered to the native $100\times403$ lattice, their spatial mean is removed, and an unwindowed two-dimensional FFT is taken without interpolation. Because physical point spacings are nonuniform, both frequency axes use unit topological cell spacing: spectral frequencies describe lattice cells, not physical inverse length. Power is $|\operatorname{FFT}(u)|^2/(N_xN_y)$. Modes are grouped in nearest radial frequency shells; shell power is divided by shell mode count, the zero mode and first three shells are omitted, and frequencies are limited to the isotropic Nyquist radius. Displayed normalized spectra divide each shell-mean curve by its sum. Per-frame log-spectral distance is the root mean square, over retained shells, of $10\log_{10}[(P_{\rm pred}+\epsilon)/(P_{\rm ref}+\epsilon)]$ in dB, where $\epsilon=\max(10^{-30},10^{-12}\max P_{\rm ref})$. Fig.~5d,e instead defines the high band as radial modes above $2k_{\max}/3$ (68 shells, 17,704 Fourier modes) and computes $\sqrt{\sum_{k\in H}|\operatorname{FFT}(\widehat u-u)|^2/ \sum_{k\in H}|\operatorname{FFT}(u)|^2}$ for $U_1$; it is not the shell-mean power ratio.
+}
+\begin{figure}[!htbp]
+\centering
+\suppgraphic{figures_final/si03_complete_spectral_diagnostics_final.pdf}
+\caption{\textbf{Five-field spectral diagnostics.} \textbf{a,} Normalized radial spectra for held-out evaluation state 0, shown for the reference and DMF-Gen under Cond-$T$, Cond-$(T,U_1)$ and Cond-$(Y_{\mathrm{CO}},T,U_1,p)$. The horizontal coordinate is topological wavenumber in radians per lattice cell; it does not represent physical inverse length on the nonuniform grid. \textbf{b,} Fieldwise log-spectral-distance distributions over 1,000 held-out evaluation states for each condition; every observed channel uses 256 fixed measurements and each prediction is a single point reconstruction. Spectra use unit lattice spacing, spatial-mean removal and no window; the zero mode and first three radial shells are omitted. Boxes denote the median and interquartile range; whiskers extend to 1.5 times the interquartile range.}
+\label{fig:si-multifield-spectra}
+\end{figure}
+\FloatBarrier
+
+\detail{Joint-field distributions.}
+{
+Two-channel reference and reconstructed samples are binned on common physical-value edges: 64 bins per axis, with global range endpoints at the 0.5th and 99.5th reference percentiles. Values outside these edges are excluded by the histogram operation. A $10^{-12}$ pseudocount is added to every bin before probability normalization. Jensen--Shannon divergence uses base-2 logarithms: $\operatorname{JSD}_2(P,Q)=\tfrac12D_{\mathrm{KL},2}(P\|M)+ \tfrac12D_{\mathrm{KL},2}(Q\|M)$, $M=(P+Q)/2$.
+}
+\detail{Conditional-ensemble scores.}
+{
+For 64 draws $x^{(m)}$ and truth $y$ expressed in a common training-standardized scale, empirical pointwise CRPS is $64^{-1}\sum_m|x^{(m)}-y|- (2\cdot64^2)^{-1}\sum_{m,n}|x^{(m)}-x^{(n)}|$. It is averaged spatially and over four unobserved channels. Ensemble spread is the spatial RMS of the 64-draw sample standard deviation (\code{ddof=1}), likewise normalized and averaged over missing channels. Reconstruction error is the macro physical relative-$L_2$ of the ensemble mean. Spearman correlation pairs spread and error over the 200 states. Selective reconstruction sorts states by macro spread, breaking ties by state index, retains $\lceil fn\rceil$ at each fraction $f$, and divides retained mean error by the full-cohort mean error.
+}
+\begin{figure}[!htbp]
+\centering
+\suppgraphic{figures_final/si04_spatial_conditional_ensembles_final.pdf}
+\caption{\textbf{Spatial structure of Cond-$T$ ensembles.} \textbf{a,} Reference; \textbf{b,} conditional ensemble mean; \textbf{c,} absolute ensemble-mean error; \textbf{d,} sample standard deviation across 64 conditional draws. The unobserved $Y_{\mathrm{CH_4}}$ and $U_1$ fields are shown for three preselected examples, held-out evaluation states 0, 502 and 999, from the 200-state ensemble cohort. Within each state, all 64 draws use the same 256 temperature measurements at fixed sensor locations. Means and references share per-channel physical limits; absolute-error limits are shared across states, and standard-deviation limits are common across the three states for each channel. The saved visualization data contain the ensemble means and standard deviations rather than the individual draw fields. Physical limits are $(-0.00159,0.05611)$ for $Y_{\mathrm{CH_4}}$ and $(-175.06,188.08)$ for $U_1$; error maxima are 0.01117 and 26.61, and shared spread maxima are 0.00690 and 8.34, respectively.}
+\label{fig:si-ensembles}
+\end{figure}
+\FloatBarrier
+
+\detail{Statistical summaries.}
+{
+Main Fig.~4 field and spectral summaries use 1,000 held-out evaluation states; their percentile 95\% intervals use 2,000 simple frame-resampling bootstrap replicates. Main Fig.~5a--c uses 200 paired states and a 2,000-replicate moving-block bootstrap of length 25. Main Fig.~5d,e uses 1,000 states and 2,000 moving-block replicates of length 20. These intervals quantify variation within the saved evaluation cohorts, not across independently trained model seeds. The frame-random partition limits a temporal-independence interpretation.
+}
+
+\FloatBarrier
+\Needspace{34\baselineskip}
+\section{Computational performance}
+\label{sec:compute}
+\sisubsection{Operation counts}
+For $M$ sensors, $N$ queries and $L$ latent tokens, sensor--latent attention uses $ML$ interactions per read, latent self-attention uses $L^2$ per block, and coordinate-to-latent readout uses $NL$. These counts omit feature widths and projection costs. Local aggregation uses $NK$ interactions after retrieval, but exact brute-force neighbour search requires $NM$ distance comparisons. Caching reduces repeated conditioning work without removing the initial retrieval cost.
+
+\sisubsection{Turbulent-combustion benchmark}
+\label{subsec:compute-combustion}
+{
+Main Fig.~5f combines reconstruction-error summaries with separate training-update and inference-resource measurements. All eight methods use 256 temperature measurements. The DMF-Gen accuracy coordinate is the A0 mean over 1,000 held-out evaluation states; the other accuracy coordinates follow the fixed eight-method scorecard. The common training-footprint experiment preloads a fixed batch of 32 training frames, runs 20 warm-up updates and then 100 timed updates in ten blocks. Each synchronized device update includes condition preparation, forward and loss evaluation, backward propagation, gradient clipping, optimizer step and native EMA update when applicable; data loading, host transfer and validation are excluded. Latent FM's two required stages are measured separately: panel f uses stage 2 for update time and stage 1 for peak memory, rather than summing nonconcurrent stages. Inference uses a separate one-state float32 batch at all 40,300 requested points, with 20 warm-up calls and at least 30 timed repetitions over at least 10 seconds. The warm model-core boundary includes source generation, value-dependent conditioning, all model or flow evaluations, observation consistency and device output. It excludes model loading, data and host/device I/O, metrics and plotting. Only reusable DMF-Gen neighbour geometry persists between calls; value-dependent features are recomputed. The training-memory coordinate is peak allocated CUDA memory. The inference-memory column distinguishes model parameters plus persistent buffers from peak allocated CUDA memory. These measurements describe fixed workloads for adopted checkpoints and do not constitute a matched-training-budget causal efficiency comparison.
+}
+{\small
+\begin{longtable}{@{}P{0.37\linewidth} P{0.57\linewidth}@{}}
+\caption{Main Fig.~5f computational workload and measurement scope. Training and inference use different fixed batch sizes.}\label{tab:timing}\\
+\toprule Quantity & Benchmark specification \\
+\midrule\endfirsthead
+\toprule Quantity & Benchmark specification \\
+\midrule\endhead
+\bottomrule\endlastfoot
+GPU & NVIDIA RTX 6000 Ada, 48 GB; training benchmark on device 2 \\
+Software & Python 3.10.19, PyTorch 2.5.1+cu121, CUDA 12.1; driver 570.207 \\
+Training precision and batch & Float32; 32 frames; 256 $T$ measurements \\
+Training scope & Preloaded device batch; synchronized forward, loss, backward, clipping, optimizer and native EMA \\
+Training warm-up / repetitions & 20 warm-up updates; ten blocks of ten measured updates \\
+Inference boundary & Warm model core; batch 1, 40,300 requested points; persistent DMF neighbour geometry \\
+Inference warm-up / repetitions & 20 warm-up calls; at least 30 repetitions and 10 seconds \\
+Inference GPU and precision & NVIDIA RTX 6000 Ada, device 2; float32 \\
+Inference memory accounting & Model parameters plus persistent buffers and peak allocated CUDA memory, reported separately in MiB \\
+Latent FM stage handling & Update time from stage 2; peak training memory from stage 1; stages are nonconcurrent and are not summed \\
+Accuracy association & A0 mean and block-bootstrap interval over 1,000 held-out evaluation states for DMF-Gen; fixed scorecard values for other methods \\
+\end{longtable}
+}
+
+\FloatBarrier
+
+\Needspace{10\baselineskip}
+\renewcommand{\refname}{Supplementary References}
+\phantomsection
+\addcontentsline{toc}{section}{Supplementary References}
+\begingroup
+\small
+\setlength{\parskip}{0pt}
+\begin{thebibliography}{99}
+\bibitem{li2023geofno} Li, Z., Huang, D. Z., Liu, B. \& Anandkumar, A. \href{https://www.jmlr.org/papers/v24/23-0064.html}{Fourier neural operator with learned deformations for PDEs on general geometries.} \emph{Journal of Machine Learning Research} \textbf{24}(388), 1--26 (2023).
+
+\bibitem{takamoto2022pdebench} Takamoto, M. \emph{et al.} \href{https://arxiv.org/abs/2210.07182}{PDEBench: An extensive benchmark for scientific machine learning.} \emph{Advances in Neural Information Processing Systems} \textbf{35}, 1596--1611 (2022).
+
+\bibitem{kerrigan2024ffm} Kerrigan, G., Migliorini, G. \& Smyth, P. \href{https://proceedings.mlr.press/v238/kerrigan24a.html}{Functional flow matching.} \emph{Proceedings of Machine Learning Research} \textbf{238}, 3934--3942 (2024).
+
+\bibitem{jaegle2022perceiverio} Jaegle, A. \emph{et al.} \href{https://arxiv.org/abs/2107.14795}{Perceiver IO: A general architecture for structured inputs \& outputs.} \emph{International Conference on Learning Representations} (2022).
+
+\bibitem{li2021fno} Li, Z. \emph{et al.} \href{https://openreview.net/forum?id=c8P9NQVtmnO}{Fourier neural operator for parametric partial differential equations.} \emph{International Conference on Learning Representations} (2021).
+
+\bibitem{zhao2023recfno} Zhao, X., Chen, X., Gong, Z., Zhou, W., Yao, W. \& Zhang, Y. \href{https://arxiv.org/abs/2302.09808}{RecFNO: A resolution-invariant flow and heat field reconstruction method from sparse observations via Fourier neural operator.} \emph{arXiv} 2302.09808 (2023).
+
+\bibitem{ma2024sit} Ma, N. \emph{et al.} \href{https://arxiv.org/abs/2401.08740}{SiT: Exploring flow and diffusion-based generative models with scalable interpolant transformers.} In \emph{Computer Vision--ECCV 2024}, \emph{Lecture Notes in Computer Science} \textbf{15135}, 23--40 (2024).
+
+\bibitem{dao2023latentfm} Dao, Q., Phung, H., Nguyen, B. \& Tran, A. \href{https://arxiv.org/abs/2307.08698}{Flow matching in latent space.} \emph{arXiv} 2307.08698 (2023).
+
+\bibitem{santos2023senseiver} Santos, J. E. \emph{et al.} \href{https://doi.org/10.1038/s42256-023-00746-x}{Development of the Senseiver for efficient field reconstruction from sparse observations.} \emph{Nature Machine Intelligence} \textbf{5}, 1317--1325 (2023).
+
+\bibitem{xue2014gmsd} Xue, W., Zhang, L., Mou, X. \& Bovik, A. C. Gradient magnitude similarity deviation: A highly efficient perceptual image quality index. \emph{IEEE Transactions on Image Processing} \textbf{23}, 684--695 (2014).
+\end{thebibliography}
+\endgroup
+\end{document}
