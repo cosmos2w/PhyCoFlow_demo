@@ -13,8 +13,8 @@ The main source was audited at `figures/editorial/main_review_candidate.tex`; it
 ### FNO baseline name and construction
 
 - **Current wording and location:** line 281: “The deterministic comparisons comprise supervised FNO reconstruction…”; Results use “FNO” and “FNO-R” at lines 322, 327, 335 and 343; Methods lines 772–775 label the method “FNO” and describe a supervised Fourier baseline; the rendered figures use “Geo-FNO” or “FNO-R.”
-- **Corrected wording:** “The deterministic neural-operator comparison is a Geo-FNO/RecFNO hybrid: it combines the geometry-aware mapping/interface used for irregular outputs with RecFNO-style sparse value and binary support maps followed by Fourier reconstruction.” Use **Geo-FNO/RecFNO** in prose, Methods and figure labels.
-- **Evidence:** the evaluated regular-grid path rasterizes measured values and binary observation masks before the Fourier layers, while the irregular wrapper supplies the geometry mapping. This matches the project implementation and the combined-model identity supplied by the authors. RecFNO is the sparse-reconstruction component described in Zhao et al., arXiv:2302.09808.
+- **Corrected wording:** “The deterministic neural-operator comparison combines Geo-FNO-style geometry handling with RecFNO-style sparse value and binary support maps. The evaluated Cartesian representations rasterize measurements and masks on the target grid; the same implementation family also provides scatter/gather geometry mapping for non-tensor grids.” Use **Geo-FNO/RecFNO** in prose, Methods and figure labels.
+- **Evidence:** the evaluated Cartesian path rasterizes measured values and binary observation masks before the Fourier layers, and the implementation family includes the Geo-FNO scatter/gather geometry interface. This matches the project implementation and the combined-model identity supplied by the authors. RecFNO is the sparse-reconstruction component described in Zhao et al., arXiv:2302.09808.
 
 ## Figure 3: mixed resolution
 
@@ -34,7 +34,7 @@ The main source was audited at `figures/editorial/main_review_candidate.tex`; it
 ### Exposure metric
 
 - **Current wording and location:** lines 388–389: “These ratios quantify the total number of scalar spatial degrees of freedom presented during training…”
-- **Corrected wording:** “These values are trajectory-level native-grid spatial-DOF exposure, \((1024n_L+4096n_M+16384n_H)/(9000\times16384)\), relative to H-only. They intentionally omit differences in retained frame counts and do not represent training compute, update-sample count or total information.”
+- **Corrected wording:** “These values are trajectory-level native-grid spatial-DOF exposure, \((1{,}024n_L+4{,}096n_M+16{,}384n_H)/(9{,}000\times16{,}384)\), relative to H-only. They intentionally omit differences in retained frame counts and do not represent training compute, update-sample count or total information.”
 - **Evidence:** the final SI training-composition table reproduces the plotted values 1.00, 0.34, 0.44, 0.16 and 0.19 from the existing recipe counts and states the metric boundary explicitly.
 
 ### Wavelet quantity
@@ -67,7 +67,7 @@ The main source was audited at `figures/editorial/main_review_candidate.tex`; it
 
 - **Current wording and location:** Fig. 4 Results line 462 reports about 0.117 for Cond-\(T\); Fig. 5 Results lines 512 and 523 report 0.1063 without stating that the analyses have different provenance.
 - **Corrected wording:** after line 512 add: “This A0 ablation value and the approximately 0.117 Cond-\(T\) value in Fig. 4 come from distinct checkpoints and evaluation pipelines and are not interpreted as a direct cross-panel performance comparison.”
-- **Evidence:** final SI Supplementary Table “Analysis-specific provenance for turbulent-combustion predictions” distinguishes the Cond-\(T\) run at epoch 6005 from A0 at epoch 7520 and separately identifies the Fig. 5f resource benchmark.
+- **Evidence:** final SI Supplementary Table “Analysis-specific provenance for turbulent-combustion predictions” distinguishes the Cond-\(T\) run at epoch 6,005 from A0 at epoch 7,520 and separately identifies the Fig. 5f resource benchmark.
 
 ### Panel f scope
 

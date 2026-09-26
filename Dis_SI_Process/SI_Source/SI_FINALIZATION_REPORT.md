@@ -8,17 +8,17 @@
 - Reproducible frozen-data renderer: `../figures/scripts/build_publication_ready_si_figures.py`
 - Main-manuscript corrections: `MAIN_TEXT_SYNC.md`
 
-The current SI source and PDF were left unchanged.
+The pre-existing SI source and PDF were not overwritten.
 
 ## Resolved inconsistencies
 
 - Traced the mixed-resolution numerical path from raw HDF5 fields through preprocessing, selected channel index and frozen evaluation truth. The reconstructed variable is streamwise velocity \(V_x\). The frozen truth agrees with raw \(V_x\) and processed channel 0 to maximum absolute difference \(3.73\times10^{-9}\); a downstream density label is stale metadata.
 - Standardized the SI to “training partition” and “held-out evaluation pool/cohort.” Each task now states when checkpoint selection and final evaluation share the held-out pool. Bootstrap intervals are explicitly limited to case/frame sampling under one selected trained realization.
 - Defined the existing 1.00/0.34/0.44/0.16/0.19 quantity as trajectory-level native-grid spatial-DOF exposure, gave its formula once and stated that retained-frame differences, compute, update-sample count and total information are outside the metric.
-- Defined the deterministic Fourier baseline as the Geo-FNO/RecFNO hybrid described by the implemented geometry interface and sparse value/support-map reconstruction path.
+- Defined the deterministic Fourier baseline as the Geo-FNO/RecFNO hybrid. The evaluated Cartesian path uses sparse value and support maps, and the implementation family also provides Geo-FNO-style geometry handling for non-tensor grids.
 - Synchronized the Fig. 5f discussion with the final five coordinates: reconstruction error, training update time, training memory, inference time and inference memory. The fixed batch/workload, warm model-core boundary, inclusion/exclusion rules, memory definitions and Latent FM stage handling are explicit.
 - Preserved the distinct approximately 0.117 and 0.1063 combustion analyses and made their checkpoint/cohort/estimator provenance explicit without assigning an unsupported causal explanation.
-- Replaced internal checkpoint, cache and folder language with neutral scientific descriptions while retaining material protocol deviations.
+- Replaced internal checkpoint, cache and folder language with neutral scientific descriptions while retaining material protocol deviations. A second sentence-level editorial pass removed forensic proof text, implementation filenames and formulaic transitions from the SI body and captions.
 
 ## Figures and tables
 
@@ -39,8 +39,8 @@ The current SI source and PDF were left unchanged.
 
 ## Verification
 
-- `latexmk` completed successfully in three passes: 23 pages, no undefined citations/references, no overfull/underfull boxes and no LaTeX warnings.
-- Source and extracted-PDF text contain no `TBD`, `pending`, `placeholder`, `TODO`, author questions, revision-color commands, missing-figure markers or internal debugging language.
+- `latexmk` completed successfully: 22 pages, no undefined citations/references, no duplicate labels, no overfull/underfull boxes and no LaTeX warnings.
+- Source and extracted-PDF text contain no `TBD`, `pending`, `placeholder`, `TODO`, author questions, revision-color commands, missing-figure markers or internal debugging language. The final prose was also checked for repeated sentences, formulaic transition patterns and cache/log narration.
 - The source contains no full-line review comments and no blue/revision-only coloring. Every prose paragraph occupies one continuous source line.
-- The final four figure PDFs embed Arial TrueType text and were visually checked at their final SI insertion size; the complete 23-page PDF was also inspected as a contact sheet and at full size on figure/table pages.
+- The final four figure PDFs embed Arial TrueType text and were visually checked at their final SI insertion size; the complete 22-page PDF was also inspected as a contact sheet and at full size on figure/table pages.
 - No model training, checkpoint continuation or substantial new result generation was introduced.
