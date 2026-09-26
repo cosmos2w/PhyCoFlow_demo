@@ -1,0 +1,49 @@
+extends: publication_layout_unified_v4_7.yaml
+
+workflow_label: mixed_resolution_unified_v5_0
+
+figure:
+  output_name: MixedResolution_unified_v5_0
+  panel_letters: [a, b, c, d, e, f]
+  aesthetic_profile: nature_v5_0_compact_split_sensor_screening_20260926
+
+# All dimensions are design-size millimetres. The legacy c/d/e panels are
+# drawn with their validated V4_7 routines and relabelled d/e/f only.
+v5_geometry:
+  canvas_width_mm: 180.0
+  canvas_height_mm: 210.0
+  upper_left_width_mm: 116.0
+  upper_right_left_mm: 120.0
+  upper_right_width_mm: 60.0
+  upper_bottom_mm: 119.0
+  panel_a: [0.0, 159.0, 116.0, 51.0]
+  panel_b: [0.0, 119.0, 116.0, 37.0]
+  panel_c: [120.0, 119.0, 60.0, 91.0]
+  panel_d: [0.0, 47.0, 114.0, 68.0]
+  panel_e: [117.4, 47.0, 62.6, 68.0]
+  panel_f: [0.0, 3.5, 180.0, 40.0]
+  panel_a_map_x_mm: [9.5, 48.0, 86.5]
+  panel_a_map_y_mm: 187.0
+  panel_a_map_size_mm: 19.8
+  panel_a_bar_mm: [13.5, 168.0, 99.5, 16.0]
+  panel_b_bar_mm: [13.0, 129.0, 100.0, 21.0]
+  panel_c_sweep_mm:
+    - [129.5, 177.0, 48.5, 17.0]
+    - [129.5, 154.0, 48.5, 17.0]
+    - [129.5, 131.0, 48.5, 17.0]
+  panel_c_legend_mm: [123.0, 199.0, 56.0, 10.0]
+
+# The source renderer first draws the frozen panel-b artists into one parent.
+# V5 then moves only the grouped-bar/sweep/legend axes to their new positions.
+panel_b_v4:
+  recipe_axis_bounds: [0.075, 0.390, 0.905, 0.530]
+  legend_bounds: [0.100, 0.100, 0.820, 0.100]
+  sweep_axis_bounds:
+    - [0.0650, 0.150, 0.300, 0.258]
+    - [0.3725, 0.150, 0.300, 0.258]
+    - [0.6800, 0.150, 0.300, 0.258]
+
+panel_a_v4:
+  # The original side-by-side blocks are reflowed after drawing; this is only
+  # the temporary bound for the inherited pre-reflow anti-collision check.
+  minimum_inset_to_training_label_margin_mm: 1.0
