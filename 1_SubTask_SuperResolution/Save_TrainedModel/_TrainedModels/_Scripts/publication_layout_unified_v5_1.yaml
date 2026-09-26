@@ -1,0 +1,53 @@
+extends: publication_layout_unified_v5_0.yaml
+
+workflow_label: mixed_resolution_unified_v5_1
+
+figure:
+  output_name: MixedResolution_unified_v5_1
+  panel_letters: [a, b, c, d, e, f]
+  aesthetic_profile: nature_v5_1_compact_rows_20260926
+
+# Target: 16.2% shorter than the 210-mm V5_0 canvas. The qualitative evidence
+# keeps its source data and shared d/e grid topology.
+v5_geometry:
+  canvas_height_mm: 176.0
+  upper_bottom_mm: 98.5
+  panel_a: [0.0, 129.5, 116.0, 46.5]
+  panel_b: [0.0, 98.5, 116.0, 30.5]
+  panel_c: [120.0, 98.5, 60.0, 77.5]
+  panel_d: [0.0, 37.0, 114.0, 59.4]
+  panel_e: [117.4, 37.0, 62.6, 59.4]
+  panel_f: [0.0, 3.5, 180.0, 32.0]
+  panel_a_map_y_mm: 152.0
+  panel_a_bar_mm: [13.0, 133.0, 100.0, 16.0]
+  panel_b_bar_mm: [13.0, 105.0, 100.0, 21.0]
+  panel_c_sweep_mm:
+    - [129.5, 149.0, 48.5, 16.0]
+    - [129.5, 129.0, 48.5, 16.0]
+    - [129.5, 109.0, 48.5, 16.0]
+  panel_c_legend_mm: [123.0, 169.0, 56.0, 6.5]
+
+v4_geometry:
+  shared_cd_grid:
+    top_margin_mm: 5.0
+    bottom_colorbar_strip_mm: 4.0
+    row_gap_mm: 4.6
+
+panel_e_v4:
+  # Preserve the six matrices and their annotations; reduce only the bands
+  # between title, recipe headers, cells, and the bottom tick labels.
+  metric_title_y: 0.964
+  recipe_title_y: 0.825
+  heatmap_bottom: 0.226
+  heatmap_height: 0.490
+
+panel_c_v4:
+  bottom_label_offset_mm: 0.45
+
+v5_1_geometry_gate:
+  baseline_height_mm: 210.0
+  target_total_height_reduction_percent: [15.0, 20.0]
+  baseline_v5_0_artist_gap_mm: 4.0
+  target_artist_gap_fraction: [0.30, 0.50]
+  minimum_artist_gap_at_162mm: 1.0
+  minimum_annotation_data_clearance_mm_at_180mm: 0.35
