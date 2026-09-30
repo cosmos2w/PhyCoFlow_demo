@@ -1,0 +1,72 @@
+extends: publication_layout_unified_v5_0.yaml
+
+workflow_label: mixed_resolution_unified_v5_2
+
+figure:
+  output_name: MixedResolution_unified_v5_2
+  panel_letters: [a, b, c, d, e, f]
+  aesthetic_profile: nature_v5_2_compact_rows_20260929
+
+# V5_2 preserves the V5_0 panel plot heights, restores the full recipe and scale
+# labels, places sweep titles in verified empty plot space, and trims the lower
+# page margin to about 0.5 mm. Rows are translated to halve the panel gaps.
+v5_geometry:
+  canvas_height_mm: 194.74
+  upper_bottom_mm: 111.22
+  panel_a: [0.0, 142.167, 116.0, 51.0]
+  panel_b: [0.0, 108.815, 116.0, 37.0]
+  panel_c: [117.4, 111.22, 62.6, 83.0]
+  panel_d: [0.0, 41.22, 114.0, 68.0]
+  panel_e: [117.4, 41.22, 62.6, 68.0]
+  panel_f: [0.0, 0.3, 180.0, 40.0]
+  panel_a_map_y_mm: 167.967
+  panel_a_bar_mm: [13.0, 149.367, 100.0, 16.0]
+  panel_b_bar_mm: [13.0, 118.815, 100.0, 21.0]
+  panel_c_sweep_mm:
+    - [129.5, 159.72, 48.5, 17.0]
+    - [129.5, 140.72, 48.5, 17.0]
+    - [129.5, 121.72, 48.5, 17.0]
+  panel_c_legend_mm: [123.0, 183.22, 56.0, 10.0]
+
+v4_geometry:
+  # Preserve the legacy panel-e (V5.2 panel f) axes dimensions while lowering
+  # its contents by 0.4 mm to trim the rendered bottom margin.
+  content_bounds:
+    e: [0.012, 0.002, 0.976, 0.976]
+  shared_cd_grid:
+    top_margin_mm: 5.0
+    bottom_colorbar_strip_mm: 4.0
+    row_gap_mm: 4.6
+
+panel_e_v4:
+  # Restore the V5_0 matrix axes, cell sizes, and title bands exactly.
+  metric_gap: 0.025
+  metric_bounds:
+    correlation: [0.110, 0.210, 0.420, 0.535]
+    bias: [0.545, 0.210, 0.440, 0.535]
+  recipe_gap: 0.0065
+  metric_title_y: 0.970
+  recipe_title_y: 0.855
+  heatmap_bottom: 0.210
+  heatmap_height: 0.535
+
+panel_c_v4:
+  bottom_label_offset_mm: 0.45
+
+v5_2_geometry_gate:
+  baseline_height_mm: 210.0
+  target_total_height_reduction_percent: [0.0, 20.0]
+  baseline_v5_0_artist_gap_mm: 4.0
+  target_artist_gap_fraction: [0.45, 0.55]
+  minimum_artist_gap_at_162mm: 1.0
+  minimum_annotation_data_clearance_mm_at_180mm: 0.35
+  minimum_panel_c_title_curve_clearance_mm: 0.40
+  minimum_panel_b_title_data_clearance_mm: 0.40
+  panel_bc_bottom_alignment_tolerance_mm: 0.50
+  # Font ink is verified from the exported raster; Text.get_tightbbox is a
+  # conservative glyph box extending below the visible ink by ~0.18 mm.
+  minimum_page_bottom_margin_mm: 0.0
+  minimum_rendered_bottom_ink_margin_mm: 0.40
+  maximum_rendered_bottom_ink_margin_mm: 0.80
+  panel_f_text_audit_bottom_extension_mm: 0.20
+  maximum_panel_f_matrix_dimension_delta_mm: 0.05
