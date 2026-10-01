@@ -26,6 +26,7 @@ import matplotlib.colorbar
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.contour import QuadContourSet
+from matplotlib.ticker import FixedLocator
 import numpy as np
 from PIL import Image, ImageOps
 
@@ -302,6 +303,9 @@ def _reflow_b_c(parent, geo: dict, ctx, width: float, height: float) -> dict:
     for index, (axis, rect) in enumerate(zip(sweeps, geo["panel_c_sweep_mm"])):
         _place(axis, rect, width, height)
         axis.set_title(axis.get_title(), y=float(geo["panel_c_subtitle_y_axes"]), pad=0.0)
+        # Exclude Matplotlib's clipped 10^1 tick, whose off-page text box
+        # appears when the upper sweep expands close to the canvas edge.
+        axis.yaxis.set_major_locator(FixedLocator([1e-2, 1e-1]))
         axis.tick_params(axis="y", labelleft=True)
         if index < 2:
             axis.set_xlabel("")
@@ -317,7 +321,7 @@ def _reflow_b_c(parent, geo: dict, ctx, width: float, height: float) -> dict:
     _place(legend_axis, geo["panel_c_legend_mm"], width, height)
     handles = __import__("common.publication_panels_unified_v3", fromlist=["_model_handles"])._model_handles(ctx)
     legend = legend_axis.legend(
-        handles=handles, ncol=2, loc="center", frameon=False,
+        handles=handles, ncol=2, loc="lower center", frameon=False,
         fontsize=7.8, columnspacing=0.8, handletextpad=0.35,
         handlelength=1.4, borderaxespad=0.0, labelspacing=0.25,
     )
@@ -445,12 +449,15 @@ def _upper_layout_qa(fig, axes, containers, geo, panel_e_label) -> dict:
     scale = 25.4 / fig.dpi
     panel_module = __import__("common.publication_panels_unified_v4_6", fromlist=["_panel_b_axes"])
     bar, sweeps = panel_module._panel_b_axes(axes["b"])
+    legend_axis = next(axis for axis in axes["b"].child_axes if axis.get_legend() is not None)
     width, height = fig.get_size_inches() * 25.4
     pos = lambda axis: [axis.get_position().x0 * width, axis.get_position().y0 * height,
                         axis.get_position().width * width, axis.get_position().height * height]
-    bar_pos, sweep_pos = pos(bar), [pos(axis) for axis in sweeps]
+    bar_pos, sweep_pos, legend_pos = pos(bar), [pos(axis) for axis in sweeps], pos(legend_axis)
     gaps = [sweep_pos[index][1] - (sweep_pos[index + 1][1] + sweep_pos[index + 1][3])
             for index in (0, 1)]
+    legend_gap = legend_pos[1] - (sweep_pos[0][1] + sweep_pos[0][3])
+    top_margin = height - legend_pos[1] - legend_pos[3]
     subtitle_top_inset = [
         (axis.get_window_extent(renderer).y1 - axis.title.get_window_extent(renderer).y1) * scale
         for axis in sweeps
@@ -466,6 +473,9 @@ def _upper_layout_qa(fig, axes, containers, geo, panel_e_label) -> dict:
         "panel_c_sweep_heights_mm": [item[3] for item in sweep_pos],
         "panel_b_c_chart_bottom_delta_mm": abs(bar_pos[1] - sweep_pos[-1][1]),
         "panel_c_sweep_vertical_gaps_mm": gaps,
+        "panel_c_legend_to_top_sweep_gap_mm": legend_gap,
+        "panel_c_all_three_gap_spread_mm": max([legend_gap, *gaps]) - min([legend_gap, *gaps]),
+        "panel_c_legend_top_canvas_margin_mm": top_margin,
         "panel_c_previous_vertical_gap_mm": 6.0,
         "panel_c_gap_reduction_fraction": 1.0 - np.mean(gaps) / 6.0,
         "panel_c_subtitle_top_inset_mm": subtitle_top_inset,
@@ -474,8 +484,10 @@ def _upper_layout_qa(fig, axes, containers, geo, panel_e_label) -> dict:
         "passed": bool(
             abs(b_container[3] - 35.2) <= .02
             and abs(bar_pos[3] - 21.0) <= .02
-            and all(abs(item[3] - 17.0) <= .02 for item in sweep_pos)
+            and all(abs(item[3] - 19.0667) <= .02 for item in sweep_pos)
             and all(abs(gap - 3.6) <= .02 for gap in gaps)
+            and abs(legend_gap - 3.6) <= .02
+            and 0.5 <= top_margin <= 1.5
             and abs(1.0 - np.mean(gaps) / 6.0 - .4) <= .002
             and abs(b_container[1] - c_container[1]) <= .02
             and abs(bar_pos[1] - sweep_pos[-1][1]) <= .02
@@ -789,10 +801,11 @@ def main() -> None:
         f"- Panels: a resolution examples and training budgets; b 512-sensor recipe transfer; "
         f"c three vertically stacked sensor sweeps; d spatial evidence; e multiscale evidence; "
         f"f complete-scale matrices.\n"
-        f"- Panels b/c: the 21-mm grouped-bar chart and all three 17-mm sweeps retain "
-        f"their heights. Their bottom plot edges align at {geo['panel_b_bar_mm'][1]:.1f} mm; "
-        f"the sweep gaps are 3.6 mm, 40% below the previous 6 mm. Panel b's "
-        f"container height is 35.2 mm, down from 37 mm.\n"
+        f"- Panels b/c: the grouped-bar chart remains 21 mm high; each of the three "
+        f"sweeps is 19.07 mm high, enlarged from 17 mm. Their bottom plot edges align "
+        f"at {geo['panel_b_bar_mm'][1]:.1f} mm. The legend-to-plot and both plot-to-plot "
+        f"gaps are 3.6 mm, 40% below the previous 6 mm sweep gaps. The legend ends "
+        f"1 mm below the canvas top. Panel b's container is 35.2 mm high.\n"
         f"- Panel d: vertical field bar spans the first two image rows, with limits "
         f"{drawn['d']['field_limits']} in field units; the local absolute-error bar has limits "
         f"{drawn['d']['error_limits']}. Labels on both bars are shown ×10⁻².\n"
@@ -822,8 +835,10 @@ def main() -> None:
         f"panel e's scale near the right edge.\n"
         f"- Refined V5_3 by moving its e tag into the left gutter, removing 'row max', "
         f"reducing panel-c sweep gaps from 6 to 3.6 mm, lowering sweep subtitles, "
-        f"aligning b/c chart bottoms, and shortening the panel-b container by 1.8 mm "
-        f"without changing any plot height.\n"
+        f"aligning b/c chart bottoms, and shortening the panel-b container by 1.8 mm.\n"
+        f"- Filled panel c's upper blank space by enlarging its three sweeps to 19.07 mm "
+        f"and placing the legend 1 mm below the canvas top; its three internal "
+        f"vertical gutters are equal at 3.6 mm.\n"
         f"- Preserved the 180 × {height:.1f} mm V5_0 canvas, source hashes, values and "
         f"all other panels; A03/A04 remain open.\n",
         encoding="utf-8",
