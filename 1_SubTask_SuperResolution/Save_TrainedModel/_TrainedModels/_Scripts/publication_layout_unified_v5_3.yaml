@@ -15,23 +15,25 @@ v5_geometry:
   upper_left_width_mm: 116.0
   upper_right_left_mm: 120.0
   upper_right_width_mm: 60.0
-  upper_bottom_mm: 119.0
+  upper_bottom_mm: 120.8
   panel_a: [0.0, 159.0, 116.0, 51.0]
-  panel_b: [0.0, 119.0, 116.0, 37.0]
-  panel_c: [120.0, 119.0, 60.0, 91.0]
+  panel_b: [0.0, 120.8, 116.0, 35.2]
+  panel_c: [120.0, 120.8, 60.0, 89.2]
   panel_d: [0.0, 47.0, 114.0, 68.0]
   panel_e: [117.4, 47.0, 62.6, 68.0]
+  panel_e_label_x_mm: 115.4
   panel_f: [0.0, 3.5, 180.0, 40.0]
   panel_a_map_x_mm: [9.5, 48.0, 86.5]
   panel_a_map_y_mm: 187.0
   panel_a_map_size_mm: 19.8
   panel_a_bar_mm: [13.5, 168.0, 99.5, 16.0]
-  panel_b_bar_mm: [13.0, 129.0, 100.0, 21.0]
+  panel_b_bar_mm: [13.0, 131.0, 100.0, 21.0]
   panel_c_sweep_mm:
-    - [129.5, 177.0, 48.5, 17.0]
-    - [129.5, 154.0, 48.5, 17.0]
+    - [129.5, 172.2, 48.5, 17.0]
+    - [129.5, 151.6, 48.5, 17.0]
     - [129.5, 131.0, 48.5, 17.0]
-  panel_c_legend_mm: [123.0, 199.0, 56.0, 10.0]
+  panel_c_legend_mm: [123.0, 193.5, 56.0, 10.0]
+  panel_c_subtitle_y_axes: 0.92
   panel_de_colorbars:
     d_map_x_mm: [5.4, 25.0, 44.6, 64.2, 83.8]
     e_map_x_mm: [117.6, 134.2, 150.8]

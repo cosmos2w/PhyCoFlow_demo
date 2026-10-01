@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Add scale bars to the exact V5_0 mixed-resolution visual baseline.
+"""Render the V5_3 mixed-resolution layout from the frozen V5_0 evidence.
 
 This renderer inherits V5_0's six-panel canvas and frozen publication sources.
-It changes the d/e image-column positions and adds four scale bars. It does not
-train a model or infer a field. The inherited qualitative drawers recompute
+It places the d/e color bars, rebalances the panel-c sweep stack, and aligns
+the b/c chart bottoms. It does not train a model or infer a field. The drawers recompute
 display metrics from unchanged caches; values are checked against V5_0.
 """
 from __future__ import annotations
@@ -219,10 +219,6 @@ def _reflow_de_with_colorbars(fig, shared, drawn, width, height, geo):
         ticks=[(0, "0"), (1, "1")],
         label=r"$|\Delta|$", label_x=175.15, label_y=e_top[1] + e_top[3] + 3.6,
         rotation=0)
-    note = fig.text(171.9 / width, (e_top[1] + e_top[3] + 7.0) / height,
-                    "row max", ha="center", va="center", color="#222222")
-    manuscript.tag_font_role(note, "annotation", size_pt=5.8)
-    texts.append(note)
     return {
         "d_map_x_mm": d_x, "e_map_x_mm": e_x,
         "d_field_limits": drawn["d"]["field_limits"],
@@ -272,6 +268,24 @@ def _reflow_a(parent, geo: dict, width: float, height: float) -> dict:
     }
 
 
+def _place_panel_e_tag(fig, parent, geo, width):
+    tags = [item for item in parent.texts if item.get_text() == "e"]
+    if len(tags) != 1:
+        raise RuntimeError(f"Expected one panel-e label, found {len(tags)}")
+    tag = tags[0]
+    anchor = fig.transFigure.inverted().transform(
+        tag.get_transform().transform(tag.get_position()))
+    label_x = float(geo["panel_e_label_x_mm"])
+    placed = fig.text(label_x / width, float(anchor[1]), "e",
+                      fontproperties=tag.get_fontproperties().copy(),
+                      color=tag.get_color(), ha=tag.get_horizontalalignment(),
+                      va=tag.get_verticalalignment(), gid=tag.get_gid(),
+                      zorder=tag.get_zorder(), clip_on=False)
+    manuscript.tag_font_role(placed, "panel_label")
+    tag.remove()
+    return {"x_mm": label_x, "artist": placed}
+
+
 def _reflow_b_c(parent, geo: dict, ctx, width: float, height: float) -> dict:
     panel_module = __import__("common.publication_panels_unified_v4_6", fromlist=["_panel_b_axes"])
     bar, sweeps = panel_module._panel_b_axes(parent)
@@ -287,6 +301,7 @@ def _reflow_b_c(parent, geo: dict, ctx, width: float, height: float) -> dict:
     bar.set_title("High-resolution reconstruction (512 sensors)", pad=1.5)
     for index, (axis, rect) in enumerate(zip(sweeps, geo["panel_c_sweep_mm"])):
         _place(axis, rect, width, height)
+        axis.set_title(axis.get_title(), y=float(geo["panel_c_subtitle_y_axes"]), pad=0.0)
         axis.tick_params(axis="y", labelleft=True)
         if index < 2:
             axis.set_xlabel("")
@@ -420,6 +435,55 @@ def _topology_qa(fig, axes, containers, shared, geo, width, height) -> dict:
         and min(horizontal_gaps.values()) * 0.9 >= 2.5
         and result["height_reduction_mm"] > 0.0
     )
+    return result
+
+
+def _upper_layout_qa(fig, axes, containers, geo, panel_e_label) -> dict:
+    """Guard the requested b/c alignment and the reduced c subplot gaps."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    scale = 25.4 / fig.dpi
+    panel_module = __import__("common.publication_panels_unified_v4_6", fromlist=["_panel_b_axes"])
+    bar, sweeps = panel_module._panel_b_axes(axes["b"])
+    width, height = fig.get_size_inches() * 25.4
+    pos = lambda axis: [axis.get_position().x0 * width, axis.get_position().y0 * height,
+                        axis.get_position().width * width, axis.get_position().height * height]
+    bar_pos, sweep_pos = pos(bar), [pos(axis) for axis in sweeps]
+    gaps = [sweep_pos[index][1] - (sweep_pos[index + 1][1] + sweep_pos[index + 1][3])
+            for index in (0, 1)]
+    subtitle_top_inset = [
+        (axis.get_window_extent(renderer).y1 - axis.title.get_window_extent(renderer).y1) * scale
+        for axis in sweeps
+    ]
+    b_container, c_container = pos(containers["b"]), pos(containers["new_c"])
+    e_tag = panel_e_label["artist"].get_window_extent(renderer)
+    e_tag_left = e_tag.x0 * scale
+    e_tag_right = e_tag.x1 * scale
+    result = {
+        "panel_b_container_height_mm": b_container[3],
+        "panel_b_c_container_bottom_delta_mm": abs(b_container[1] - c_container[1]),
+        "panel_b_chart_height_mm": bar_pos[3],
+        "panel_c_sweep_heights_mm": [item[3] for item in sweep_pos],
+        "panel_b_c_chart_bottom_delta_mm": abs(bar_pos[1] - sweep_pos[-1][1]),
+        "panel_c_sweep_vertical_gaps_mm": gaps,
+        "panel_c_previous_vertical_gap_mm": 6.0,
+        "panel_c_gap_reduction_fraction": 1.0 - np.mean(gaps) / 6.0,
+        "panel_c_subtitle_top_inset_mm": subtitle_top_inset,
+        "panel_e_label_bbox_x_mm": [e_tag_left, e_tag_right],
+        "panel_e_left_boundary_mm": float(geo["panel_e"][0]),
+        "passed": bool(
+            abs(b_container[3] - 35.2) <= .02
+            and abs(bar_pos[3] - 21.0) <= .02
+            and all(abs(item[3] - 17.0) <= .02 for item in sweep_pos)
+            and all(abs(gap - 3.6) <= .02 for gap in gaps)
+            and abs(1.0 - np.mean(gaps) / 6.0 - .4) <= .002
+            and abs(b_container[1] - c_container[1]) <= .02
+            and abs(bar_pos[1] - sweep_pos[-1][1]) <= .02
+            and min(subtitle_top_inset) >= -.80
+            and 0.0 <= e_tag_left < float(geo["panel_e"][0])
+            and e_tag_right <= float(geo["panel_e"][0]) + .5
+        ),
+    }
     return result
 
 
@@ -592,6 +656,7 @@ def main() -> None:
     drawn["c"] = {**drawn["_b_source"], "plotted_rows": [
         row for row in drawn["_b_source"]["plotted_rows"] if row["role"] != "recipe_transfer_512"]}
     next(item for item in axes["d"].texts if item.get_text() == "d").set_text("e")
+    panel_e_label = _place_panel_e_tag(fig, axes["d"], geo, width)
     for visible, legacy in (("a", "a"), ("b", "b"), ("d", "c"), ("f", "e")):
         panel_label(axes[legacy], visible)
     panel_label(containers["new_c"], "c")
@@ -614,6 +679,7 @@ def main() -> None:
     colorbar_qa = _colorbar_qa(fig, shared, colorbar_axes, colorbar_text)
     matrix_ticks = record_panel_e_v4_3_tick_settings(axes["e"], strict=True)
     topology = _topology_qa(fig, axes, containers, shared, geo, width, height)
+    upper_layout_qa = _upper_layout_qa(fig, axes, containers, geo, panel_e_label)
     alignment_qa = v4._panel_cd_alignment_qa(fig, shared, cfg["figure_style"]["paper_dpi"])
     frame_qa = base.enforce_frame_lineweights(fig, layout["figure"]["uniform_frame_linewidth_pt"])
     model_qa = v4._model_artist_qa(fig, cfg)
@@ -624,7 +690,8 @@ def main() -> None:
         scientific["status"] == "PASS", v5_0_continuity["status"] == "PASS",
         alignment_qa["passed"], model_qa["passed"],
         typography_qa["passed"], frame_qa["passed"], collision["passed"],
-        topology["passed"], panel_text_clearance["passed"], colorbar_qa["passed"],
+        topology["passed"], upper_layout_qa["passed"],
+        panel_text_clearance["passed"], colorbar_qa["passed"],
     )):
         print(json.dumps({"scientific": scientific["status"],
                           "v5_0_continuity": v5_0_continuity["status"],
@@ -632,6 +699,7 @@ def main() -> None:
                           "model": model_qa["passed"], "typography": typography_qa["passed"],
                           "frame": frame_qa["passed"], "collision": collision["passed"],
                           "topology": topology["passed"], "panel_text": panel_text_clearance["passed"],
+                          "upper_layout": upper_layout_qa,
                           "colorbar": colorbar_qa}, indent=2))
         raise RuntimeError("V5_3 scientific, typography, alignment, or layout gate failed")
     stem = release / f"MixedResolution_unified_v5_3_{rid}"
@@ -662,8 +730,10 @@ def main() -> None:
         "layout": {"panel_rectangles_mm": {
             key: geo[f"panel_{key}"] for key in "abcdef"},
             "panel_a_reflow": reflow_a, "panel_b_c_reflow": reflow_bc,
-            "topology_qa": topology, "annotation_collision_qa": collision,
+            "topology_qa": topology, "upper_layout_qa": upper_layout_qa,
+            "annotation_collision_qa": collision,
             "colorbar_layout": colorbar_layout, "colorbar_qa": colorbar_qa,
+            "panel_e_label_x_mm": panel_e_label["x_mm"],
             "cross_panel_alignment_qa": alignment_qa,
             "panel_text_clearance_qa": panel_text_clearance,
         },
@@ -686,7 +756,7 @@ def main() -> None:
         "revision": "V5_3", "tested_design_width_mm": width,
         "insertion_width_mm": 162.0, "topology_qa": topology,
         "annotation_collision_qa": collision, "alignment_qa": alignment_qa,
-        "colorbar_qa": colorbar_qa,
+        "colorbar_qa": colorbar_qa, "upper_layout_qa": upper_layout_qa,
         "requested_baseline_continuity": v5_0_continuity,
         "typography_qa": typography_qa, "model_artist_qa": model_qa,
         "panel_text_clearance_qa": panel_text_clearance,
@@ -719,6 +789,10 @@ def main() -> None:
         f"- Panels: a resolution examples and training budgets; b 512-sensor recipe transfer; "
         f"c three vertically stacked sensor sweeps; d spatial evidence; e multiscale evidence; "
         f"f complete-scale matrices.\n"
+        f"- Panels b/c: the 21-mm grouped-bar chart and all three 17-mm sweeps retain "
+        f"their heights. Their bottom plot edges align at {geo['panel_b_bar_mm'][1]:.1f} mm; "
+        f"the sweep gaps are 3.6 mm, 40% below the previous 6 mm. Panel b's "
+        f"container height is 35.2 mm, down from 37 mm.\n"
         f"- Panel d: vertical field bar spans the first two image rows, with limits "
         f"{drawn['d']['field_limits']} in field units; the local absolute-error bar has limits "
         f"{drawn['d']['error_limits']}. Labels on both bars are shown ×10⁻².\n"
@@ -728,6 +802,8 @@ def main() -> None:
         f"by row are {drawn['e']['residual_color_limits']}. The displayed residual "
         f"magnitudes run from zero to each positive endpoint. The row-wise image "
         f"normalizations are unchanged.\n"
+        f"- The panel-e label sits in the left gutter at "
+        f"{panel_e_label['x_mm']:.1f} mm; the redundant 'row max' label was removed.\n"
         f"- Sensor sweeps: Mixed-HML, Zero-H-balanced, Zero-H-M-rich; one shared log-y range "
         f"and one shared four-model legend.\n"
         f"- Data boundary: no source rows, estimates, 95% confidence intervals, field arrays, "
@@ -744,6 +820,10 @@ def main() -> None:
         f"- Added two row-normalized scale bars to panel e, for truth and residual magnitude.\n"
         f"- Compressed the image-column gaps and placed panel d near the left edge and "
         f"panel e's scale near the right edge.\n"
+        f"- Refined V5_3 by moving its e tag into the left gutter, removing 'row max', "
+        f"reducing panel-c sweep gaps from 6 to 3.6 mm, lowering sweep subtitles, "
+        f"aligning b/c chart bottoms, and shortening the panel-b container by 1.8 mm "
+        f"without changing any plot height.\n"
         f"- Preserved the 180 × {height:.1f} mm V5_0 canvas, source hashes, values and "
         f"all other panels; A03/A04 remain open.\n",
         encoding="utf-8",
