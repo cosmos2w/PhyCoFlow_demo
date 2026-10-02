@@ -75,8 +75,24 @@ def main() -> None:
         "six_colorbar_limits_exact": bars_exact,
         "colorbar_manifest_matches": (
             new["qualitative_geometry_lock"]["colorbar_multiplier"]
-            == "none; each bar shows exact scientific endpoint labels"
+            == "centered above each slim bar-and-tick assembly; endpoint tick labels have one decimal place"
         ),
+        "single_right_edge_colorbar_stack": (
+            qa["panel_a_v5_1"]["colorbar_count"] == 6
+            and abs(qa["panel_a_v5_1"]["colorbar_width_mm"] - 2.0) < 1e-6
+            and abs(qa["panel_a_v5_1"]["colorbar_right_canvas_gap_mm"]) <= 0.01
+            and len({round(bar["bbox_mm"][0], 4) for bar in bars}) == 1
+        ),
+        "all_colorbar_ticks_one_decimal": all(
+            all(label.count(".") == 1 and len(label.split(".")[1]) == 1
+                for label in bar["tick_labels"])
+            for bar in bars
+        ),
+        "colorbar_titles_centered_and_stack_clear": (
+            max(qa["panel_a_v5_1"]["exponent_title_center_offsets_mm"]) <= 0.1
+            and min(qa["panel_a_v5_1"]["colorbar_stack_gaps_mm"]) >= 0.3
+        ),
+        "uniform_map_gaps_expanded": abs(qa["panel_a_v5_1"]["map_gap_mm"] - 3.0) < 1e-6,
         "panel_a_layout_gate": qa["panel_a_v5_1"]["passed"],
         "panel_a_no_text_collision": qa["panel_a_v5_1"]["text_text_overlap_count"] == 0,
         "panel_a_no_text_on_other_axes": qa["panel_a_v5_1"]["text_nonowned_axes_overlap_count"] == 0,
@@ -119,8 +135,10 @@ def main() -> None:
     })
     (release / "STYLE_CHANGELOG.md").write_text(
         "# Figure 4 art V5.1\n\n"
-        "- Added six right-side color bars to panel a: reconstruction and absolute error for each field.\n"
-        "- Narrowed the seven panel-a maps and realigned their headers, group titles, and central divider.\n"
+        "- Placed six color bars in one compact right-edge stack, one per panel-a row.\n"
+        "- Used 2.0 mm color strips with each scientific exponent centered over its compact scale and one-decimal tick labels.\n"
+        "- Increased every panel-a intercolumn gap uniformly to 3.0 mm while preserving map sizes.\n"
+        "- Realigned the headers, group titles, and central divider with the re-spaced maps.\n"
         "- Kept all scientific values and panels b–d identical to V5.\n", encoding="utf-8")
     print(f"[OK] {release}")
     print("[OK] scientific state and panels b–d unchanged")

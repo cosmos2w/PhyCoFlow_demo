@@ -40,9 +40,11 @@ base = v5.base
 
 def _scaled_tick(value: float, exponent: int) -> str:
     scaled = value / (10.0 ** exponent)
-    if abs(scaled) < 0.005:
-        return "0"
-    return rf"${scaled:.3g}\times 10^{{{exponent}}}$"
+    return f"{scaled:.1f}"
+
+
+def _exponent_label(exponent: int) -> str:
+    return "×10" + str(exponent).translate(str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹"))
 
 
 def _panel_a_v5_1(fig, geometry: dict, scientific: dict) -> dict:
@@ -70,6 +72,8 @@ def _panel_a_v5_1(fig, geometry: dict, scientific: dict) -> dict:
     map_width_mm = (right_mm - left_mm - 6 * gap_mm) / 7
     if map_width_mm <= 0 or not right_mm + 2 < bar_x_mm:
         raise RuntimeError("Panel-a map and colorbar columns have insufficient clearance")
+    if bar_width_mm > 2.1 or abs(bar_x_mm + bar_width_mm - canvas_width_mm) > 1e-6:
+        raise RuntimeError("The single colorbar column must touch the right canvas edge")
     centers_mm = np.asarray([left_mm + map_width_mm / 2 + i * (map_width_mm + gap_mm)
                              for i in range(7)])
     for index, column in enumerate(columns):
@@ -102,8 +106,14 @@ def _panel_a_v5_1(fig, geometry: dict, scientific: dict) -> dict:
 
     row_boxes = sorted((ax.get_position() for ax in columns[0]), key=lambda box: box.y0, reverse=True)
     height_fraction = float(geometry["colorbar_height_fraction"])
+    bottom_inset_fraction = float(geometry["colorbar_bottom_inset_fraction"])
+    if not 0 < height_fraction < 1 or bottom_inset_fraction < 0 or height_fraction + bottom_inset_fraction >= 1:
+        raise ValueError("Colorbar height and bottom inset must fit inside each map row")
     fields = list(scientific["fields"])
     bar_records = []
+    bar_axes = []
+    exponent_titles = []
+    canvas_height_mm = float(fig.get_size_inches()[1]) * 25.4
     for row_index, box in enumerate(row_boxes):
         field = fields[row_index // 2]
         is_error = row_index % 2 == 1
@@ -112,7 +122,7 @@ def _panel_a_v5_1(fig, geometry: dict, scientific: dict) -> dict:
         lo, hi = map(float, limits)
         cmap = base._panel_a_colormap(error=True) if is_error else base._panel_a_colormap(field)
         bar_height = box.height * height_fraction
-        bar_bottom = box.y0 + (box.height - bar_height) / 2
+        bar_bottom = box.y0 + box.height * bottom_inset_fraction
         cax = fig.add_axes([bar_x_mm / canvas_width_mm, bar_bottom,
                             bar_width_mm / canvas_width_mm, bar_height],
                            label=f"panel-a-{field}-{'error' if is_error else 'value'}-bar")
@@ -120,36 +130,80 @@ def _panel_a_v5_1(fig, geometry: dict, scientific: dict) -> dict:
                             cax=cax, ticks=[lo, hi], orientation="vertical")
         exponent = int(np.floor(np.log10(max(abs(lo), abs(hi)))))
         cbar.ax.set_yticklabels([_scaled_tick(lo, exponent), _scaled_tick(hi, exponent)])
-        cbar.ax.tick_params(axis="y", which="both", left=False, right=True,
-                            labelleft=False, labelright=True, length=1.5, pad=1.0,
+        cbar.ax.tick_params(axis="y", which="both", left=True, right=False,
+                            labelleft=True, labelright=False, length=1.5, pad=1.0,
                             labelsize=float(geometry["colorbar_tick_size_pt"]))
         cbar.outline.set_linewidth(0.55)
+        title = fig.text(
+            (bar_x_mm + bar_width_mm / 2) / canvas_width_mm,
+            (bar_bottom * canvas_height_mm + bar_height * canvas_height_mm
+             + float(geometry["colorbar_exponent_above_bar_mm"])) / canvas_height_mm,
+            _exponent_label(exponent),
+            ha="center", va="bottom", fontsize=float(geometry["colorbar_exponent_size_pt"]),
+            fontfamily="DejaVu Sans",
+        )
+        bar_axes.append(cax)
+        exponent_titles.append(title)
         bar_records.append({"field": field, "kind": "error" if is_error else "value",
                             "limits": [lo, hi], "cmap": cmap.name,
+                            "tick_labels": [_scaled_tick(lo, exponent), _scaled_tick(hi, exponent)],
+                            "exponent": exponent, "exponent_label": title.get_text(),
                             "bbox_mm": [bar_x_mm, bar_bottom * fig.get_size_inches()[1] * 25.4,
                                         bar_width_mm, bar_height * fig.get_size_inches()[1] * 25.4]})
 
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
     scale = 25.4 / fig.dpi
-    text_overflow = []
-    for ax in fig.axes[-6:]:
-        for tick in ax.get_yticklabels():
-            if tick.get_visible() and tick.get_text():
-                box = tick.get_window_extent(renderer)
-                if box.x1 * scale > canvas_width_mm - 0.4:
-                    text_overflow.append((tick.get_text(), box.x1 * scale))
+    tick_artists = [tick for ax in bar_axes for tick in ax.get_yticklabels()
+                    if tick.get_visible() and tick.get_text()]
+    extent = lambda artist: artist.get_window_extent(renderer)
+    scale_left_mm = min(extent(tick).x0 * scale for tick in tick_artists)
+    widest_title_mm = max(extent(title).width * scale for title in exponent_titles)
+    title_center_mm = min((scale_left_mm + canvas_width_mm) / 2,
+                          canvas_width_mm - widest_title_mm / 2 - 0.2)
+    for title in exponent_titles:
+        title.set_x(title_center_mm / canvas_width_mm)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    bar_right_mm = max(extent(item).x1 * scale for item in [*tick_artists, *exponent_titles, *bar_axes])
+    text_overflow = [(item.get_text(), extent(item).x1 * scale)
+                     for item in [*tick_artists, *exponent_titles]
+                     if extent(item).x0 * scale < 0 or extent(item).x1 * scale > canvas_width_mm]
+    title_centers_mm = [abs((extent(title).x0 + extent(title).x1) * scale / 2
+                            - title_center_mm) for title in exponent_titles]
+    title_to_bar_gaps_mm = [(extent(title).y0 - extent(ax).y1) * scale
+                            for ax, title in zip(bar_axes, exponent_titles)]
+    stack_bounds = []
+    for ax, title in zip(bar_axes, exponent_titles):
+        boxes = [extent(ax), extent(title),
+                 *(extent(tick) for tick in ax.get_yticklabels()
+                   if tick.get_visible() and tick.get_text())]
+        stack_bounds.append((min(box.y0 for box in boxes), max(box.y1 for box in boxes)))
+    stack_gaps_mm = [(stack_bounds[index][0] - stack_bounds[index + 1][1]) * scale
+                     for index in range(5)]
     collision = v4._collision_gate(fig)
     result = {
         "revision": "art_v5_1", "map_count": len(maps), "colorbar_count": len(bar_records),
         "map_left_mm": left_mm, "map_right_mm": right_mm,
         "map_width_mm": map_width_mm, "map_gap_mm": gap_mm,
-        "bar_to_map_gap_mm": bar_x_mm - right_mm,
+        "colorbar_width_mm": bar_width_mm,
+        "bar_to_map_gap_mm": bar_records[0]["bbox_mm"][0] - right_mm,
         "divider_x_mm": divider_mm, "colorbars": bar_records,
+        "colorbar_right_edge_mm": bar_right_mm,
+        "colorbar_right_canvas_gap_mm": canvas_width_mm - bar_right_mm,
+        "exponent_title_center_mm": title_center_mm,
+        "exponent_title_center_offsets_mm": title_centers_mm,
+        "exponent_title_to_bar_gaps_mm": title_to_bar_gaps_mm,
+        "colorbar_stack_gaps_mm": stack_gaps_mm,
         "tick_canvas_overflow": text_overflow,
         **collision,
     }
-    result["passed"] = (not text_overflow and collision["text_text_overlap_count"] == 0
+    result["passed"] = (not text_overflow and bar_width_mm <= 2.1
+                        and abs(canvas_width_mm - bar_right_mm) <= 0.01
+                        and max(title_centers_mm) <= 0.1
+                        and min(title_to_bar_gaps_mm) >= 0.2
+                        and min(stack_gaps_mm) >= 0.3
+                        and collision["text_text_overlap_count"] == 0
                         and collision["text_nonowned_axes_overlap_count"] == 0)
     if not result["passed"]:
         raise RuntimeError(f"Panel-a V5.1 layout failed: {result}")
@@ -193,11 +247,12 @@ def main() -> int:
     manifest_path = written_base.parent / f"{written_base.name}_source_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["qualitative_colourbar_policy"] = (
-        "six right-side bars; exact physical lower and upper limits; "
-        "reconstruction and absolute error use their V5 palettes and normalizations"
+        "one right-edge stack of six bars; exact physical lower and upper limits "
+        "with one-decimal scaled tick labels and exponents centered above each compact scale; "
+        "reconstruction and absolute error retain their V5 palettes and normalizations"
     )
     manifest["qualitative_geometry_lock"]["colorbar_multiplier"] = (
-        "none; each bar shows exact scientific endpoint labels"
+        "centered above each slim bar-and-tick assembly; endpoint tick labels have one decimal place"
     )
     manifest["panel_a_v5_1_layout"] = geometry
     manifest["source_visual_revision"] = "art_v5"
