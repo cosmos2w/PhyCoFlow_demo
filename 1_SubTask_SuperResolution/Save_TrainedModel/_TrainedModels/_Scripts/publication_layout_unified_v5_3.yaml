@@ -12,6 +12,7 @@ figure:
 v5_geometry:
   canvas_width_mm: 180.0
   canvas_height_mm: 210.0
+  bottom_export_trim_mm: 3.55
   upper_left_width_mm: 116.0
   upper_right_left_mm: 120.0
   upper_right_width_mm: 60.0

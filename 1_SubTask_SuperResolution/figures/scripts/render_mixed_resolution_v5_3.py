@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,7 @@ matplotlib.use("Agg")
 import matplotlib.axes
 import matplotlib.colorbar
 import matplotlib.pyplot as plt
+import fitz
 from matplotlib.colors import Normalize
 from matplotlib.contour import QuadContourSet
 from matplotlib.ticker import FixedLocator
@@ -612,6 +614,58 @@ def _previews(pdf: Path, png: Path, release: Path) -> dict:
             "grayscale": _record(gray), "deuteranopia": _record(cvd)}
 
 
+def _trim_export_bottom(stem: Path, width_mm: float, height_mm: float,
+                        trim_mm: float) -> dict:
+    """Crop only the blank page bottom; preserve every artist's top-page coordinates."""
+    if not 0 < trim_mm < height_mm:
+        raise ValueError(f"Invalid bottom export trim: {trim_mm} mm")
+    png, pdf, svg = (stem.with_suffix(ext) for ext in (".png", ".pdf", ".svg"))
+    with Image.open(png) as source:
+        rgb = np.asarray(source.convert("RGB"))
+        crop_px = round(trim_mm * rgb.shape[1] / width_mm)
+        ink_rows = np.flatnonzero(np.any(np.any(rgb < 245, axis=2), axis=1))
+        blank_rows = rgb.shape[0] - 1 - int(ink_rows[-1])
+        if blank_rows <= crop_px:
+            raise RuntimeError("Bottom trim would clip rendered panel-f content")
+        source.crop((0, 0, source.width, source.height - crop_px)).save(png)
+    with fitz.open(pdf) as source:
+        page = source[0]
+        original_words = page.get_text("words")
+        # PDF coordinates start at the page bottom: raise that edge to keep
+        # the top edge and all text coordinates exactly where they were.
+        page.set_mediabox(fitz.Rect(0, trim_mm * 72 / 25.4,
+                                    page.rect.width, page.rect.height))
+        temp_pdf = pdf.with_name(pdf.stem + "_trimmed.pdf")
+        source.save(temp_pdf, garbage=4, deflate=True)
+    temp_pdf.replace(pdf)
+    with fitz.open(pdf) as cropped_pdf:
+        if cropped_pdf[0].get_text("words") != original_words:
+            raise RuntimeError("Bottom PDF crop changed text or its page coordinates")
+    svg_text = svg.read_text(encoding="utf-8")
+    root = re.search(r"<svg\b[^>]*>", svg_text)
+    if root is None:
+        raise RuntimeError("SVG root element is missing")
+    svg_tag = root.group()
+    height_match = re.search(r'height="([\d.]+)pt"', svg_tag)
+    view_match = re.search(r'viewBox="0 0 ([\d.]+) ([\d.]+)"', svg_tag)
+    if height_match is None or view_match is None:
+        raise RuntimeError("Unexpected SVG canvas dimensions")
+    trimmed_pt = float(height_match.group(1)) - trim_mm * 72 / 25.4
+    new_tag = svg_tag.replace(height_match.group(), f'height="{trimmed_pt:.6f}pt"')
+    new_tag = new_tag.replace(view_match.group(),
+                              f'viewBox="0 0 {view_match.group(1)} {trimmed_pt:.6f}"')
+    svg.write_text(svg_text[:root.start()] + new_tag + svg_text[root.end():],
+                   encoding="utf-8")
+    margin_mm = (blank_rows - crop_px) * width_mm / rgb.shape[1]
+    result = {"design_canvas_mm": [width_mm, height_mm],
+              "export_canvas_mm": [width_mm, height_mm - trim_mm],
+              "bottom_trim_mm": trim_mm, "rendered_bottom_margin_mm": margin_mm,
+              "passed": 0.4 <= margin_mm <= 0.9}
+    if not result["passed"]:
+        raise RuntimeError(f"Unexpected bottom margin after trim: {result}")
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_common_args(parser, models=False)
@@ -718,6 +772,9 @@ def main() -> None:
     outputs = save_figure(fig, stem, cfg, formats=("svg", "pdf", "png"),
                           dpi=cfg["figure_style"]["paper_dpi"], bbox_inches=None)
     plt.close(fig)
+    bottom_trim_qa = _trim_export_bottom(
+        stem, width, height, float(geo["bottom_export_trim_mm"]),
+    )
     if results_before != v4._tree_state(RESULTS_DIR):
         raise RuntimeError("Validated process results changed during V5_3 rendering")
     if baseline_hash != _sha256(baseline_pdf):
@@ -731,7 +788,8 @@ def main() -> None:
         "workflow_label": "mixed_resolution_unified_v5_3",
         "release_status": "art reviewed, scientific release pending (A03/A04)",
         "backend": "Python/Matplotlib in fig environment",
-        "canvas_mm": [width, height], "source_scientific_revision": "V3-7",
+        "canvas_mm": bottom_trim_qa["export_canvas_mm"],
+        "design_canvas_mm": [width, height], "source_scientific_revision": "V3-7",
         "source_visual_revision": "V5_0", "v4_7_baseline_pdf": _record(baseline_pdf),
         "requested_v5_0_baseline_pdf": _record(V5_0_PDF),
         "source_data_records": baseline["source_data_records"],
@@ -743,6 +801,7 @@ def main() -> None:
             key: geo[f"panel_{key}"] for key in "abcdef"},
             "panel_a_reflow": reflow_a, "panel_b_c_reflow": reflow_bc,
             "topology_qa": topology, "upper_layout_qa": upper_layout_qa,
+            "bottom_trim_qa": bottom_trim_qa,
             "annotation_collision_qa": collision,
             "colorbar_layout": colorbar_layout, "colorbar_qa": colorbar_qa,
             "panel_e_label_x_mm": panel_e_label["x_mm"],
@@ -769,6 +828,7 @@ def main() -> None:
         "insertion_width_mm": 162.0, "topology_qa": topology,
         "annotation_collision_qa": collision, "alignment_qa": alignment_qa,
         "colorbar_qa": colorbar_qa, "upper_layout_qa": upper_layout_qa,
+        "bottom_trim_qa": bottom_trim_qa,
         "requested_baseline_continuity": v5_0_continuity,
         "typography_qa": typography_qa, "model_artist_qa": model_qa,
         "panel_text_clearance_qa": panel_text_clearance,
@@ -797,7 +857,8 @@ def main() -> None:
         f"# Mixed-resolution Figure V5_3 contract\n\n"
         f"- Claim and displayed quantitative values: unchanged from the requested V5_0 PDF.\n"
         f"- Backend: Python/Matplotlib in the `fig` environment.\n"
-        f"- Canvas: {width:.0f} × {height:.1f} mm, identical to V5_0.\n"
+        f"- Exported canvas: {width:.0f} × {height - bottom_trim_qa['bottom_trim_mm']:.2f} mm; "
+        f"only {bottom_trim_qa['bottom_trim_mm']:.2f} mm of blank page below panel f was removed.\n"
         f"- Panels: a resolution examples and training budgets; b 512-sensor recipe transfer; "
         f"c three vertically stacked sensor sweeps; d spatial evidence; e multiscale evidence; "
         f"f complete-scale matrices.\n"
@@ -839,8 +900,9 @@ def main() -> None:
         f"- Filled panel c's upper blank space by enlarging its three sweeps to 19.07 mm "
         f"and placing the legend 1 mm below the canvas top; its three internal "
         f"vertical gutters are equal at 3.6 mm.\n"
-        f"- Preserved the 180 × {height:.1f} mm V5_0 canvas, source hashes, values and "
-        f"all other panels; A03/A04 remain open.\n",
+        f"- Trimmed {bottom_trim_qa['bottom_trim_mm']:.2f} mm of blank page below panel f; "
+        f"preserved all artist positions, source hashes, values and other panels. "
+        f"A03/A04 remain open.\n",
         encoding="utf-8",
     )
     source_snapshot = release / "source"
