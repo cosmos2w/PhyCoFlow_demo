@@ -5,9 +5,11 @@ No training, checkpoint loading, or prediction inference is performed here.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from pathlib import Path
+import shutil
 import sys
 
 import matplotlib
@@ -47,14 +49,92 @@ plt.rcParams.update({
 })
 
 
-def save(fig: plt.Figure, stem: str) -> None:
+def save(fig: plt.Figure, stem: str, *, bbox_inches="tight") -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     SI.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT / f"{stem}.svg", bbox_inches="tight")
-    fig.savefig(OUT / f"{stem}.pdf", bbox_inches="tight")
-    fig.savefig(OUT / f"{stem}.png", dpi=220, bbox_inches="tight")
-    fig.savefig(SI / f"{stem}.pdf", bbox_inches="tight")
+    fig.savefig(OUT / f"{stem}.svg", bbox_inches=bbox_inches)
+    fig.savefig(OUT / f"{stem}.pdf", bbox_inches=bbox_inches)
+    fig.savefig(OUT / f"{stem}.png", dpi=220, bbox_inches=bbox_inches)
+    shutil.copy2(OUT / f"{stem}.pdf", SI / f"{stem}.pdf")
     plt.close(fig)
+
+
+REVISION = ROOT / "Dis_SI_Process" / "figures" / "generated" / "si_s2_s4_colorbars_20261006"
+
+
+def relative_l2(truth: np.ndarray, prediction: np.ndarray) -> float:
+    """Physical, unweighted full-grid relative L2; never use clipped map values."""
+    truth = np.asarray(truth, dtype=np.float64)
+    prediction = np.asarray(prediction, dtype=np.float64)
+    assert truth.shape == prediction.shape and np.isfinite(truth).all()
+    assert np.isfinite(prediction).all()
+    return float(np.linalg.norm(prediction - truth) / (np.linalg.norm(truth) + 1e-12))
+
+
+def horizontal_scale(fig, bounds, norm, cmap, key, title, *, extend="neither"):
+    """Shared scale with explicit physical units and readable endpoint ticks."""
+    cax = fig.add_axes(bounds)
+    cb = fig.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap),
+                      cax=cax, orientation="horizontal", extend=extend,
+                      extendfrac=.025)
+    ticks = [norm.vmin, 0 if key == "U1" and norm.vmin < 0 < norm.vmax else (norm.vmin + norm.vmax) / 2,
+             norm.vmax]
+    factor = 1e-2 if key in ("CH4", "CO") else (1e5 if key == "p" and title == "Physical field"
+                                                else (1e3 if key == "p" else 1))
+    units = {"CH4": r"$\times10^{-2}$", "CO": r"$\times10^{-2}$",
+             "T": "K", "U1": r"m s$^{-1}$",
+             "p": rf"$\times10^{{{int(np.log10(factor))}}}$ Pa"}
+    labels = [f"{value:.0f}" if factor == 1 and norm.vmax >= 1000 else f"{value / factor:.3g}"
+              for value in ticks]
+    cb.set_ticks(ticks, labels=labels)
+    cb.ax.get_xticklabels()[0].set_ha("left")
+    cb.ax.get_xticklabels()[-1].set_ha("right")
+    cb.ax.tick_params(labelsize=6, length=2, width=.45, pad=1.5)
+    cb.outline.set_linewidth(.45)
+    cb.set_label(f"{title} ({units[key]})", fontsize=6.2, labelpad=1.5)
+    cb.ax.xaxis.set_label_position("top")
+    return cb
+
+
+def finish_revision(fig, stem, metrics, axes, bars):
+    """Record measured labels and check map/scale geometry before export."""
+    REVISION.mkdir(parents=True, exist_ok=True)
+    with (REVISION / f"{stem}_relative_l2.csv").open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(metrics[0]))
+        writer.writeheader()
+        writer.writerows(metrics)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    texts = [artist for artist in fig.findobj(matplotlib.text.Text)
+             if artist.get_visible() and artist.get_text().strip()
+             and (artist.axes is None or artist.axes.get_visible())]
+    text_boxes = [artist.get_window_extent(renderer) for artist in texts]
+    map_boxes = [ax.get_window_extent(renderer) for ax in axes.flat]
+    collisions = int(sum(box.overlaps(panel) for box in text_boxes for panel in map_boxes))
+    assert collisions == 0, [(artist.get_text(), i) for artist, box in zip(texts, text_boxes)
+                             for i, panel in enumerate(map_boxes) if box.overlaps(panel)]
+    text_collisions = [(texts[i].get_text(), texts[j].get_text())
+                       for i, a in enumerate(text_boxes) for j, b in enumerate(text_boxes)
+                       if i < j and a.overlaps(b)]
+    assert not text_collisions, text_collisions
+    scale_positions = [list(cb.ax.get_position().bounds) for cb in bars]
+    audit = {"map_count": len(map_boxes), "colorbar_count": len(bars),
+             "relative_l2_count": len(metrics), "text_map_overlaps": collisions,
+             "text_text_overlaps": len(text_collisions),
+             "colorbar_positions": scale_positions,
+             "metric": "norm(prediction_phys - truth_phys) / (norm(truth_phys) + 1e-12)",
+             "metric_values": "Full 40300-point arrays, before color-limit clipping; float64.",
+             "figure_size_mm": [float(v * 25.4) for v in fig.get_size_inches()]}
+    (REVISION / f"{stem}_layout_qa.json").write_text(json.dumps(audit, indent=2) + "\n")
+    # Preserve the original PDF insertion dimensions and surrounding SI pagination.
+    dimensions_mm = {"si02_complete_combustion_fields_final": (181.586935086, 120.381616296),
+                     "si04_spatial_conditional_ensembles_final": (176.281671058, 144.199994490)}
+    width, height = (v / 25.4 for v in dimensions_mm[stem])
+    tight = fig.get_tightbbox(renderer)
+    assert tight.width < width and tight.height < height, "Labels exceed the original figure canvas"
+    bounds = matplotlib.transforms.Bbox.from_bounds(
+        tight.x0 - (width - tight.width) / 2, tight.y0 - (height - tight.height) / 2, width, height)
+    save(fig, stem, bbox_inches=bounds)
 
 
 def rows(path: Path) -> list[dict[str, str]]:
@@ -152,9 +232,14 @@ def render_combustion_fields() -> None:
     truth = caches[0]["truth_phys"]
     assert all(np.array_equal(truth, cache["truth_phys"]) for cache in caches[1:])
     idx, x, y = grid_order(caches[0]["coords_phys"])
-    fig, axes = plt.subplots(5, 7, figsize=(183 / 25.4, 121 / 25.4),
-                             gridspec_kw={"wspace": .055, "hspace": .2})
+    fig = plt.figure(figsize=(183 / 25.4, 130 / 25.4))
+    axes = np.empty((5, 7), dtype=object)
+    left, right, gap = .075, .99, .008
+    width = (right - left - 6 * gap) / 7
+    row_pitch, map_height = .173, .105
+    metrics, bars = [], []
     for field, key in enumerate(FIELD_KEYS):
+        bottom = .805 - field * row_pitch
         vmin, vmax = limits["physical_limits"][key]
         emax = limits["robust_error_limits"][key][1]
         cmap = "coolwarm" if key == "U1" else ("inferno" if key == "T" else "viridis")
@@ -163,7 +248,8 @@ def render_combustion_fields() -> None:
             vals.extend([cache["recon_phys"][:, field],
                          np.abs(cache["recon_phys"][:, field] - truth[:, field])])
         for col, values in enumerate(vals):
-            ax = axes[field, col]
+            ax = axes[field, col] = fig.add_axes([left + col * (width + gap), bottom,
+                                                width, map_height])
             norm = Normalize(0, emax) if col > 0 and col % 2 == 0 else Normalize(vmin, vmax)
             ax.pcolormesh(x, y, values[idx].reshape(100, 403), shading="nearest",
                           cmap="magma" if col > 0 and col % 2 == 0 else cmap,
@@ -172,14 +258,25 @@ def render_combustion_fields() -> None:
             for spine in ax.spines.values(): spine.set_visible(False)
             if field == 0:
                 ax.set_title(["Reference", "Cond-$T$", "Abs. error", "Cond-$(T,U_1)$", "Abs. error",
-                              "Four-channel", "Abs. error"][col], fontsize=6.7, pad=3)
+                              "Four-channel", "Abs. error"][col], fontsize=6.7, pad=6)
             if col == 0:
                 ax.set_ylabel(FIELD_LABELS[field], rotation=0, labelpad=13, va="center", fontsize=7)
-    for col, label in zip([0, 1, 3, 5], "abcd"):
-        axes[0, col].text(-.10, 1.34, label, transform=axes[0, col].transAxes,
-                          fontsize=8, fontweight="bold", ha="left", va="bottom")
-    fig.subplots_adjust(left=.07, right=.995, top=.92, bottom=.04)
-    save(fig, "si02_complete_combustion_fields_final")
+        for ci, condition in enumerate(CONDITIONS):
+            error = relative_l2(truth[:, field], caches[ci]["recon_phys"][:, field])
+            metrics.append({"figure": "S2", "state": 0, "field": key,
+                            "condition": condition, "relative_l2": error,
+                            "relative_l2_percent": 100 * error})
+            axes[field, 2 * ci + 2].text(.5, -.08, rf"rel. $L_2$: {100 * error:.2f}%",
+                                         transform=axes[field, 2 * ci + 2].transAxes,
+                                         ha="center", va="top", fontsize=6)
+        bar_y = bottom - .041
+        bars.append(horizontal_scale(fig, [left, bar_y, 3 * width + 2 * gap, .010],
+                                     Normalize(vmin, vmax), cmap, key, "Physical field"))
+        bars.append(horizontal_scale(fig, [left + 4 * (width + gap), bar_y,
+                                           3 * width + 2 * gap, .010],
+                                     Normalize(0, emax), "magma", key, "Absolute error",
+                                     extend="max" if any(np.any(v > emax) for v in vals[2::2]) else "neither"))
+    finish_revision(fig, "si02_complete_combustion_fields_final", metrics, axes, bars)
 
 
 def render_spectral_diagnostics() -> None:
@@ -249,8 +346,11 @@ def render_conditional_ensembles() -> None:
         offset = physical.mean() - scale * norm.mean()
         assert np.max(np.abs(physical - (offset + scale * norm))) < .01
         scales.append(scale); offsets.append(offset)
-    fig, axes = plt.subplots(6, 4, figsize=(183 / 25.4, 148 / 25.4),
-                             gridspec_kw={"hspace": .21, "wspace": .05})
+    fig = plt.figure(figsize=(183 / 25.4, 160 / 25.4))
+    axes = np.empty((6, 4), dtype=object)
+    left, right, gap = .12, .99, .012
+    width = (right - left - 3 * gap) / 4
+    metrics, bars = [], []
     shared_spread_max = {field: max(float(np.quantile(scales[field] * payload["ensemble_std_norm"][:, field], .99))
                                     for payload in maps) for field in (0, 3)}
     colors = json.loads((COMB / "_Process_Figures" / "_Contours" /
@@ -260,6 +360,7 @@ def render_conditional_ensembles() -> None:
         idx, x, y = grid_order(payload["coords"])
         for k, field in enumerate([0, 3]):
             row = 2 * state_row + k
+            bottom = .812 - row * .1206
             true = offsets[field] + scales[field] * payload["truth_norm"][:, field]
             mean = offsets[field] + scales[field] * payload["ensemble_mean_norm"][:, field]
             spread = scales[field] * payload["ensemble_std_norm"][:, field]
@@ -270,7 +371,8 @@ def render_conditional_ensembles() -> None:
             norms = [Normalize(vmin, vmax), Normalize(vmin, vmax), Normalize(0, emax),
                      Normalize(0, max(shared_spread_max[field], 1e-12))]
             for col, (values, norm) in enumerate(zip(vals, norms)):
-                ax = axes[row, col]
+                ax = axes[row, col] = fig.add_axes([left + col * (width + gap), bottom,
+                                                  width, .097])
                 ax.pcolormesh(x, y, values[idx].reshape(100, 403), shading="nearest",
                               norm=norm, cmap="magma" if col > 1 else ("coolwarm" if field == 3 else "viridis"), rasterized=True)
                 ax.set_xticks([]); ax.set_yticks([])
@@ -280,17 +382,40 @@ def render_conditional_ensembles() -> None:
                 if col == 0:
                     ax.set_ylabel(f"State {record['state']}\n{FIELD_LABELS[field]}", rotation=0,
                                   labelpad=18, va="center", fontsize=6.3)
-    for col, label in enumerate("abcd"):
-        axes[0, col].text(-.08, 1.22, label, transform=axes[0, col].transAxes,
-                          fontsize=8, fontweight="bold", ha="left", va="bottom")
-    fig.text(.995, .985, "256 temperature measurements fixed across 64 draws within each state",
-             ha="right", va="top", fontsize=6.5, color="#263238")
-    fig.subplots_adjust(left=.12, right=.995, top=.92, bottom=.045)
-    save(fig, "si04_spatial_conditional_ensembles_final")
+            error = relative_l2(true, mean)
+            metrics.append({"figure": "S4", "state": int(record["state"]), "field": key,
+                            "condition": "Cond_T_ensemble_mean", "relative_l2": error,
+                            "relative_l2_percent": 100 * error})
+            axes[row, 2].text(.5, -.02, rf"rel. $L_2$: {100 * error:.2f}%",
+                              transform=axes[row, 2].transAxes,
+                              ha="center", va="top", fontsize=6)
+    for k, field in enumerate([0, 3]):
+        key = FIELD_KEYS[field]
+        vmin, vmax = colors["physical_limits"][key]
+        emax = colors["robust_error_limits"][key][1]
+        cmap = "coolwarm" if field == 3 else "viridis"
+        bar_y = .145 - k * .066
+        fig.text(.104, bar_y + .006, FIELD_LABELS[field], ha="right", va="center", fontsize=7)
+        bars.append(horizontal_scale(fig, [left, bar_y, 2 * width + gap, .010],
+                                     Normalize(vmin, vmax), cmap, key, "Physical field"))
+        clipped_error = any(np.any(np.abs(scales[field] *
+                           (payload["ensemble_mean_norm"][:, field] - payload["truth_norm"][:, field])) > emax)
+                            for payload in maps)
+        bars.append(horizontal_scale(fig, [left + 2 * (width + gap), bar_y, width, .010],
+                                     Normalize(0, emax), "magma", key, "Absolute error",
+                                     extend="max" if clipped_error else "neither"))
+        bars.append(horizontal_scale(fig, [left + 3 * (width + gap), bar_y, width, .010],
+                                     Normalize(0, shared_spread_max[field]), "magma", key, "Ensemble SD",
+                                     extend="max"))
+    finish_revision(fig, "si04_spatial_conditional_ensembles_final", metrics, axes, bars)
 
 
 if __name__ == "__main__":
-    render_mixed_resolution(); print("Supplementary Figure 1 complete", flush=True)
-    render_combustion_fields(); print("Supplementary Figure 2 complete", flush=True)
-    render_spectral_diagnostics(); print("Supplementary Figure 3 complete", flush=True)
-    render_conditional_ensembles(); print("Supplementary Figure 4 complete", flush=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--figures", type=int, choices=(1, 2, 3, 4), nargs="+", default=(1, 2, 3, 4),
+                        help="Render only the selected supplementary figures.")
+    renderers = {1: render_mixed_resolution, 2: render_combustion_fields,
+                 3: render_spectral_diagnostics, 4: render_conditional_ensembles}
+    for number in parser.parse_args().figures:
+        renderers[number]()
+        print(f"Supplementary Figure {number} complete", flush=True)
