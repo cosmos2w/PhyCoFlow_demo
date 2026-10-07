@@ -1,0 +1,20 @@
+extends: publication_layout_unified_v5_3.yaml
+workflow_label: mixed_resolution_unified_v5_4
+figure:
+  output_name: MixedResolution_unified_v5_4
+  aesthetic_profile: white_bars_simple_lines_dual_sensor_axis
+v5_4_geometry:
+  canvas_height_mm: 214.0
+  panel_a_shift_up_mm: 4.0
+  panel_b_bar_mm: [13.5, 131.0, 99.5, 21.0]
+  panel_b_legend_bottom_mm: 157.0
+  panel_c_sweep_mm:
+    - [129.5, 175.0, 48.5, 17.0]
+    - [129.5, 153.0, 48.5, 17.0]
+    - [129.5, 131.0, 48.5, 17.0]
+  panel_c_title_bottom_mm: [200.5, 171.0, 149.0]
+  panel_c_legend_top_mm: 213.4
+  hero_linewidth_pt: 2.2
+  baseline_linewidth_pt: 1.2
+  hero_markersize_pt: 5.2
+  baseline_markersize_pt: 4.2
