@@ -10,10 +10,11 @@ v5_4_geometry:
   panel_b_bar_mm: [13.5, 131.0, 99.5, 21.0]
   panel_b_legend_bottom_mm: 157.0
   panel_c_sweep_mm:
-    - [129.5, 175.0, 48.5, 17.0]
-    - [129.5, 153.0, 48.5, 17.0]
-    - [129.5, 131.0, 48.5, 17.0]
-  panel_c_title_bottom_mm: [200.5, 171.0, 149.0]
+    - [129.5, 176.4, 48.5, 20.2]
+    - [129.5, 153.7, 48.5, 20.2]
+    - [129.5, 131.0, 48.5, 20.2]
+  panel_c_title_axes_xy: [0.96, 0.96]
+  data_alpha: 0.75
   panel_c_legend_top_mm: 213.4
   hero_linewidth_pt: 2.2
   baseline_linewidth_pt: 1.2

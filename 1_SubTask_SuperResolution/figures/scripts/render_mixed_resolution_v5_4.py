@@ -15,6 +15,7 @@ from matplotlib.axes import Axes
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv, to_rgb, to_rgba
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle, Polygon
+from matplotlib.path import Path as MplPath
 from matplotlib.transforms import Bbox
 import numpy as np
 from PIL import Image, ImageOps
@@ -26,7 +27,7 @@ ROOT, SCRIPTS = V53.ROOT, V53.SCRIPTS
 LAYOUT = SCRIPTS / "publication_layout_unified_v5_4.yaml"
 BASELINE = ROOT / "figures/generated/art_style_review/MixedResolution_unified_v5_3_20261001_2010"
 BASELINE_PDF = V53.FIGURES_DIR / "Assembled/MixedResolution_unified_v5_3_20261001_2010.pdf"
-DEFAULT_RUN_ID = "20261007_refined"
+DEFAULT_RUN_ID = "20261007_refined2"
 MODELS = ["DMFGen", "FFM_Perceiver", "Senseiver", "MLP_RBF"]
 MARKERS = dict(zip(MODELS, ["o", "s", "^", "D"]))
 
@@ -123,6 +124,7 @@ def draw_v53(args, cfg, layout, baseline):
 
 def restyle(fig, axes, ctx, layout, baseline):
     geo = layout["v5_4_geometry"]
+    data_alpha = geo["data_alpha"]
     width, old_height = fig.get_size_inches() * 25.4
     height = geo["canvas_height_mm"]
     inherited_axes = all_axes(fig)
@@ -166,7 +168,7 @@ def restyle(fig, axes, ctx, layout, baseline):
             patch.remove(); removed_backgrounds += 1
             continue
         model = gid.split(":", 1)[1]
-        patch.set_facecolor(colors[model]); patch.set_alpha(.95)
+        patch.set_facecolor(colors[model]); patch.set_alpha(data_alpha)
         patch.set_edgecolor(np.asarray(colors[model]) * .66)
         patch.set_linewidth(.5); patch.set_zorder(3)
     bar.set_facecolor("white"); bar.set_axisbelow(True)
@@ -178,8 +180,9 @@ def restyle(fig, axes, ctx, layout, baseline):
     for i, (ax, box) in enumerate(zip(sweeps, geo["panel_c_sweep_mm"])):
         V53._place(ax, box, width, height)
         title = ax.get_title(); ax.set_title("")
-        titles.append(fig.text((box[0] + box[2] / 2) / width,
-            geo["panel_c_title_bottom_mm"][i] / height, title, ha="center", va="bottom", fontsize=8.5))
+        titles.append(ax.text(*geo["panel_c_title_axes_xy"], title,
+            transform=ax.transAxes, ha="right", va="top", fontsize=8.5, zorder=6,
+            gid="recipe-inset-title"))
         ax.set_facecolor("white"); ax.set_axisbelow(True)
         ax.grid(False, which="both")
         ax.grid(True, axis="y", which="major", color="lightgray", alpha=.3, linestyle="--", linewidth=.35, zorder=0)
@@ -191,7 +194,7 @@ def restyle(fig, axes, ctx, layout, baseline):
             gid = str(line.get_gid() or "")
             if not gid.startswith("model-line:"): continue
             model = gid.split(":", 1)[1]; hero = model == "DMFGen"
-            line.set_color(colors[model]); line.set_alpha(1.0); line.set_linestyle("-")
+            line.set_color(colors[model]); line.set_alpha(data_alpha); line.set_linestyle("-")
             line.set_linewidth(geo["hero_linewidth_pt"] if hero else geo["baseline_linewidth_pt"])
             line.set_marker(MARKERS[model]); line.set_markersize(geo["hero_markersize_pt"] if hero else geo["baseline_markersize_pt"])
             line.set_markerfacecolor(colors[model] if hero else "none")
@@ -203,18 +206,20 @@ def restyle(fig, axes, ctx, layout, baseline):
         for model, container in zip(MODELS, intervals):
             _, caps, collections = container.lines
             for artist in [*caps, *collections]:
-                artist.set_color(colors[model]); artist.set_alpha(.85)
+                artist.set_color(colors[model]); artist.set_alpha(data_alpha)
+        for artist in [*ax.lines, *ax.collections]: artist.set_alpha(data_alpha)
     old_legend = next(ax for ax in axes["b"].child_axes if ax.get_legend() is not None)
     old_legend.get_legend().remove(); old_legend.set_axis_off()
     line_handles = [Line2D([], [], label=ctx.model_label(m), color=colors[m], linestyle="-",
         linewidth=geo["hero_linewidth_pt"] if m == "DMFGen" else geo["baseline_linewidth_pt"],
         marker=MARKERS[m], markersize=geo["hero_markersize_pt"] if m == "DMFGen" else geo["baseline_markersize_pt"],
-        markerfacecolor=colors[m] if m == "DMFGen" else "none", markeredgewidth=.9) for m in MODELS]
+        markerfacecolor=colors[m] if m == "DMFGen" else "none", markeredgewidth=.9,
+        alpha=data_alpha) for m in MODELS]
     c_legend = fig.legend(handles=line_handles, ncol=2, loc="upper center", frameon=False,
         bbox_to_anchor=(153.75 / width, geo["panel_c_legend_top_mm"] / height),
         borderaxespad=0, fontsize=7.8, handlelength=1.4, columnspacing=.8, handletextpad=.35, labelspacing=.25)
     patch_handles = [Patch(label=ctx.model_label(m), facecolor=colors[m],
-        edgecolor=np.asarray(colors[m]) * .66, alpha=.95, linewidth=.5) for m in MODELS]
+        edgecolor=np.asarray(colors[m]) * .66, alpha=data_alpha, linewidth=.5) for m in MODELS]
     b_legend = fig.legend(handles=patch_handles, ncol=4, loc="lower center", frameon=False,
         bbox_to_anchor=((13.5 + 99.5 / 2) / width, geo["panel_b_legend_bottom_mm"] / height),
         borderaxespad=0, fontsize=7.8, handlelength=1.15, handleheight=.8,
@@ -335,7 +340,7 @@ def layout_qa(fig, state, comparison):
     clipping = V53.manuscript.validate_text_within_canvas(fig, raise_on_error=False)
     bar, sweeps, top = state["bar"], state["sweeps"], state["top"]
     legends = [state["b_legend"], state["c_legend"]]
-    guide_texts = [*state["titles"], bar.title, bar.xaxis.label, bar.yaxis.label,
+    guide_texts = [bar.title, bar.xaxis.label, bar.yaxis.label,
         *top.get_xticklabels(), top.xaxis.label, *sweeps[-1].get_xticklabels(),
         sweeps[-1].xaxis.label, sweeps[1].yaxis.label,
         *[t for ax in [bar, *sweeps] for t in ax.get_yticklabels()]]
@@ -359,6 +364,36 @@ def layout_qa(fig, state, comparison):
     hero = [l for l in lines if l.get_gid() == "model-line:DMFGen"]
     baseline_lines = [l for l in lines if l not in hero]
     patches = [p for p in bar.patches if str(p.get_gid() or "").startswith("model-bar:")]
+    title_graph_hits = []
+    title_records = []
+    for ax, title in zip(sweeps, state["titles"]):
+        text_box = title.get_window_extent(renderer)
+        padded = text_box.padded(.4 * fig.dpi / 25.4)
+        data_box = ax.get_window_extent(renderer)
+        contained = data_box.contains(text_box.x0, text_box.y0) and data_box.contains(text_box.x1, text_box.y1)
+        title_records.append({"text": title.get_text(), "axes_xy": list(title.get_position()),
+            "bbox_mm": V53._box_mm(text_box, fig), "inside_own_subplot": contained})
+        for line in [*ax.lines, *ax.get_ygridlines()]:
+            if not line.get_visible(): continue
+            path = line.get_path().transformed(line.get_transform())
+            if line.get_linestyle() not in {"None", "none", "", " "} and path.intersects_bbox(
+                padded.padded(line.get_linewidth() * fig.dpi / 144), filled=False):
+                title_graph_hits.append([title.get_text(), "line or grid", line.get_gid()])
+            if line.get_marker() not in {None, "None", "none", "", " "}:
+                radius = (line.get_markersize() + line.get_markeredgewidth()) * fig.dpi / 144
+                if any(padded.padded(radius).contains(x, y) for x, y in path.vertices):
+                    title_graph_hits.append([title.get_text(), "marker", line.get_gid()])
+        for collection in ax.collections:
+            if hasattr(collection, "get_segments"):
+                for segment in collection.get_segments():
+                    path = MplPath(segment).transformed(collection.get_transform())
+                    if path.intersects_bbox(padded, filled=False):
+                        title_graph_hits.append([title.get_text(), "confidence interval"])
+        for name, spine in ax.spines.items():
+            if spine.get_visible() and spine.get_path().transformed(spine.get_transform()).intersects_bbox(padded, filled=False):
+                title_graph_hits.append([title.get_text(), "spine", name])
+    alpha_artists = [*patches, *[artist for ax in [bar, *sweeps] for artist in [*ax.lines, *ax.collections]],
+        *[artist for legend in legends for artist in legend.legend_handles]]
     checks = {
         "all_v5_3_scientific_metadata_exact": all(comparison.values()),
         "all_numerical_artists_arrays_intervals_and_limits_exact": state["numerical_before"] == state["numerical_after"],
@@ -366,7 +401,11 @@ def layout_qa(fig, state, comparison):
         "before_gap_compression_other_inherited_geometry_exact": state["unchanged_axis_geometry_max_delta_mm"] < .001,
         "no_text_text_overlap": not overlaps,
         "no_clipped_text": not any(clipping.values()),
-        "no_b_c_titles_ticks_or_legends_inside_data_or_on_spines": not text_data_hits,
+        "no_b_c_axis_labels_ticks_or_legends_inside_data_or_on_spines": not text_data_hits,
+        "c_recipe_titles_inside_own_subplot_upper_right": all(r["inside_own_subplot"] and np.allclose(r["axes_xy"], [.96, .96]) for r in title_records),
+        "c_recipe_titles_clear_of_lines_markers_intervals_grids_and_spines": not title_graph_hits,
+        "c_three_sweeps_equally_expanded_from_17_to_20_2mm": np.allclose(np.asarray(boxes[1:])[:, 3] - np.asarray(boxes[1:])[:, 1], 20.2),
+        "b_c_data_and_legend_handles_all_alpha_0_75": all(a.get_alpha() == .75 for a in alpha_artists),
         "bar_pure_white_and_background_spans_removed": bar.get_facecolor() == to_rgba("white") and len(bar.patches) == 20 and state["removed_backgrounds"] >= 1,
         "bar_twenty_thin_dark_borders": len(patches) == 20 and all(p.get_linewidth() == .5 for p in patches),
         "bar_lightgray_dashed_grid_below_bars": bar.get_axisbelow() and all(l.get_color() == "lightgray" and l.get_alpha() == .3 and l.get_linestyle() == "--" and l.get_zorder() == 0 for l in bar.get_ygridlines() if l.get_visible()),
@@ -381,6 +420,8 @@ def layout_qa(fig, state, comparison):
     }
     return dict(revision="V5_4", canvas_mm=[width, height], checks=checks,
         all_gates_passed=all(checks.values()), text_overlaps=overlaps, clipped_text=clipping,
+        inset_title_records=title_records, inset_title_graph_intersections=title_graph_hits,
+        inset_title_graph_required_clearance_mm=.4, data_alpha=.75, alpha_artist_count=len(alpha_artists),
         text_or_legend_data_intersections=text_data_hits, b_c_spine_boxes_mm=boxes,
         sensor_counts=state["counts"], H_grid_density_percent_exact=state["density"],
         top_bottom_tick_alignment_error_px=float(np.max(abs(top_tick_positions - bottom_tick_positions))),
@@ -485,6 +526,9 @@ def main():
         panel.update(figure_revision="V5_4", source_visual_revision="V5_3")
     panels["b"]["zero_h_region_shaded"] = False
     panels["c"]["dual_x_axis"] = {"bottom": "Sensor count", "top": "H-grid density (%)", "shared_by_all_three_sweeps": True}
+    for panel in ("b", "c"): panels[panel]["data_alpha"] = layout["v5_4_geometry"]["data_alpha"]
+    panels["c"]["inset_title_records"] = qa["inset_title_records"]
+    panels["c"]["subplot_heights_mm"] = [box[3] - box[1] for box in qa["b_c_spine_boxes_mm"][1:]]
     manifest = dict(revision="V5_4", run_id=args.run_id, backend="Python/Matplotlib in fig",
         source_visual_revision="V5_3", baseline_pdf=V53._record(BASELINE_PDF),
         source_data_records=baseline["source_data_records"], cache_source_records=baseline["cache_source_records"],
@@ -500,16 +544,16 @@ def main():
         "artist_after": state["numerical_after"], "source_file_count": len(source_records),
         "all_source_hashes_exact": True, "process_results_tree_unchanged": True})
     V53._write_json(output / "SOURCE_LOCK.json", {"baseline": V53._record(BASELINE_PDF), "sources": source_records})
-    (output / "figure_contract.md").write_text("# MixedResolution V5.4 contract\n\nThe asymmetric mixed-modality figure retains the V5.3 evidence sequence: native resolution/training budgets; 512-sensor recipe transfer; sensor-count sweeps; fixed physical field/zoom/error example; multiscale components/residuals; complete-scale population matrices. All scientific source files, cache arrays, 20 bar estimates, 60 sweep estimates, confidence intervals, normalizations and axis limits are frozen. No model training or inference was performed. Existing A03/A04 author checks retain their prior status.\n\nPanel b has a pure white background, lightgray dashed grids below its bars, slightly stronger baseline chroma, 0.5-point darker bar edges and a dedicated horizontal patch legend. Panel c has solid 2.2-point red DMF-Gen traces with filled markers and solid 1.2-point baselines with distinct hollow geometric markers. Its shared bottom axis shows sensor counts; the shared top axis shows the original H-grid percentages. Titles occupy external bands. Panel a is translated upward by 4 mm to accommodate the new bar legend; its data/artists are unchanged. The design canvas grows from 210 to 214 mm. The three c plot windows are 17 mm tall, with equal 5-mm title gutters, while b retains its 21-mm height. b/c bottom spines align at 131 mm, b aligns with a's chart rails, and all c spines align.\n")
+    (output / "figure_contract.md").write_text("# MixedResolution V5.4 contract\n\nThe asymmetric mixed-modality figure retains the V5.3 evidence sequence: native resolution/training budgets; 512-sensor recipe transfer; sensor-count sweeps; fixed physical field/zoom/error example; multiscale components/residuals; complete-scale population matrices. All scientific source files, cache arrays, 20 bar estimates, 60 sweep estimates, confidence intervals, normalizations and axis limits are frozen. No model training or inference was performed. Existing A03/A04 author checks retain their prior status.\n\nPanel b has a pure white background, lightgray dashed grids below its bars, slightly stronger baseline chroma, 0.5-point darker bar edges and a dedicated horizontal patch legend. Panel c has solid 2.2-point red DMF-Gen traces with filled markers and solid 1.2-point baselines with distinct hollow geometric markers. Its shared bottom axis shows sensor counts; the shared top axis shows the original H-grid percentages on a visible spine. Recipe titles occupy each subplot's upper-right blank area, with a measured clearance of at least 0.4 mm from curves, markers, confidence intervals, grids and spines. Moving these titles inside reclaims the upper title band and reduces internal gaps from 5 to 2.5 mm, uniformly expanding the three data windows from 17 to 20.2 mm without changing their limits. Bars, lines, symbols, intervals and matching legend graphics in b/c all use alpha=0.75; grid alpha remains 0.3. Panel b retains its 21-mm height. b aligns with a's chart rails, all c left/right spines align, and b/c bottom spines share one rail.\n")
     (output / "STYLE_CHANGELOG.md").write_text("# MixedResolution V5.4 review\n\nThe requested bar and line styling was applied without changing the scientific inputs, intervals, arrays, model/recipe identities, color limits or axis scales/limits. Twelve source/cache hashes and all numerical-artist hashes match V5.3.\n\n![V5.4 full-page preview](preview.png)\n\nFigure 1. Rebuilt V5.4 layout with the V5.3 evidence preserved.\n\n![V5.4 vector preview at 162 mm](preview_162mm.png)\n\nFigure 2. Vector-derived review for manuscript insertion.\n\n![V5.4 grayscale review](preview_grayscale.png)\n\nFigure 3. Grayscale review of marker and line distinctions.\n\n![V5.4 deuteranopia review](preview_deuteranopia.png)\n\nFigure 4. Color-vision review of the same scientific figure.\n\nFigure index: Figure 1, full page; Figure 2, insertion review; Figure 3, grayscale; Figure 4, deuteranopia.\n")
     if "refinement_qa" in qa:
         refinement = qa["refinement_qa"]
         contract = output / "figure_contract.md"
-        contract.write_text(contract.read_text().replace("b/c bottom spines align at 131 mm", "Before inter-row compaction, b/c bottom spines align at 131 mm")
+        contract.write_text(contract.read_text()
             + f"\nThe final V5.4 refinement aligns the top edges of letters a and c and explicitly displays the secondary top-axis spine. The visible b/c-to-d/e whitespace is reduced from {refinement['visible_row_gap_before_mm']:.6f} to {refinement['visible_row_gap_after_mm']:.6f} mm, exactly half. All upper-row artists move downward together by {refinement['canvas_height_reduction_mm']:.6f} mm; lower panels and all plot dimensions remain fixed. The design height becomes {refinement['design_canvas_after_mm'][1]:.6f} mm and the final export height is {trim_qa['export_canvas_mm'][1]:.6f} mm. Numeric artist hashes remain exact after compaction.\n")
         changelog = output / "STYLE_CHANGELOG.md"
         changelog.write_text(changelog.read_text()
-            + f"\nRefinement: a/c letter tops align, the density axis has a visible top spine, and the visible middle gap is halved to {refinement['visible_row_gap_after_mm']:.6f} mm with a matching reduction in canvas height. Every data window retains its physical dimensions.\n")
+            + f"\nRefinement: a/c letter tops align, the density axis has a visible top spine, and the visible middle gap remains {refinement['visible_row_gap_after_mm']:.6f} mm with the corresponding canvas reduction. Panel c's recipe headings now sit inside the upper-right blank areas; its three plots are uniformly expanded from 17 to 20.2 mm. All panel-b/c data and legend graphics use alpha=0.75, while faint grids retain alpha=0.3. Other data windows retain their physical dimensions.\n")
     manifest["outputs"] = {p.name: V53._record(p) for p in sorted(output.iterdir()) if p.is_file()}
     V53._write_json(output / "source_manifest_v5_4.json", manifest)
     if not args.trial_dir:
