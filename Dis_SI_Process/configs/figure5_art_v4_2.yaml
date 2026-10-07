@@ -1,0 +1,17 @@
+schema_version: figure5-art-v4-2
+baseline_config: figure5_art_v4_1.yaml
+canvas:
+  width_mm: 179.8
+  manuscript_width_mm: 162.0
+geometry_mm:
+  left: 21.6
+  right: 176.0
+  top_scatter_right: 90.0
+  top_separator_x: 92.0
+  top_numeric_x: 94.0
+  top_column_split: 120.0
+  middle_gap: 12.0
+  score_gap: 4.0
+  row_spacing_factor: 1.25
+  middle_height_factor: 1.25
+  outer_margin: 1.3
