@@ -15,6 +15,7 @@ from matplotlib.axes import Axes
 from matplotlib.colors import hsv_to_rgb, rgb_to_hsv, to_rgb, to_rgba
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle, Polygon
+from matplotlib.transforms import Bbox
 import numpy as np
 from PIL import Image, ImageOps
 import fitz
@@ -25,7 +26,7 @@ ROOT, SCRIPTS = V53.ROOT, V53.SCRIPTS
 LAYOUT = SCRIPTS / "publication_layout_unified_v5_4.yaml"
 BASELINE = ROOT / "figures/generated/art_style_review/MixedResolution_unified_v5_3_20261001_2010"
 BASELINE_PDF = V53.FIGURES_DIR / "Assembled/MixedResolution_unified_v5_3_20261001_2010.pdf"
-DEFAULT_RUN_ID = "20261007"
+DEFAULT_RUN_ID = "20261007_refined"
 MODELS = ["DMFGen", "FFM_Perceiver", "Senseiver", "MLP_RBF"]
 MARKERS = dict(zip(MODELS, ["o", "s", "^", "D"]))
 
@@ -143,7 +144,7 @@ def restyle(fig, axes, ctx, layout, baseline):
     for ax in a_axes:
         box = physical_boxes[ax].copy(); box[1] += geo["panel_a_shift_up_mm"]
         V53._place(ax, box, width, height)
-    c_container = next(ax for ax in inherited_axes if ax.get_label() == "panel-c-container")
+    c_container = next(ax for ax in inherited_axes if any(t.get_text() == "c" for t in ax.texts))
     c_box = physical_boxes[c_container].copy(); c_box[3] += height - old_height
     V53._place(c_container, c_box, width, height)
     V53._place(bar, geo["panel_b_bar_mm"], width, height)
@@ -227,6 +228,7 @@ def restyle(fig, axes, ctx, layout, baseline):
     top.xaxis.set_label_coords(.5, 1.28)
     top.xaxis.label.set_va("bottom")
     top.spines[["left", "right", "bottom"]].set_visible(False)
+    top.spines["top"].set_visible(True)
     top.spines["top"].set_linewidth(.5); top.spines["top"].set_color("#444444")
     top.patch.set_visible(False); top.grid(False)
     # The inherited e tag grazes its multiline first heading. Move only
@@ -246,11 +248,83 @@ def restyle(fig, axes, ctx, layout, baseline):
     a_deltas = [(final_boxes[ax] - physical_boxes[ax]).tolist() for ax in a_axes]
     moved = {id(ax) for ax in [*a_axes, c_container, bar, *sweeps]}
     unchanged_offsets = [np.max(abs(final_boxes[ax] - physical_boxes[ax])) for ax in inherited_axes if id(ax) not in moved]
-    return dict(bar=bar, sweeps=sweeps, top=top, b_legend=b_legend, c_legend=c_legend,
+    return dict(bar=bar, sweeps=sweeps, top=top, c_container=c_container, b_legend=b_legend, c_legend=c_legend,
         titles=titles, colors=colors, removed_backgrounds=removed_backgrounds,
         numerical_before=before, numerical_after=after, inherited_axes=inherited_axes,
         counts=counts, density=density, panel_a_geometry_deltas_mm=a_deltas,
         unchanged_axis_geometry_max_delta_mm=float(max(unchanged_offsets)))
+
+
+def refine_spacing(fig, axes, state, fraction):
+    """Halve visible inter-row whitespace while preserving every plot size."""
+    def descendants(ax):
+        return [ax, *[a for child in ax.child_axes for a in descendants(child)]]
+    upper_axes = set([*descendants(axes["a"]), *descendants(axes["b"]), state["top"], state["c_container"]])
+    legends = [state["b_legend"], state["c_legend"]]
+    upper_texts = set([*state["titles"], *[t for legend in legends for t in legend.get_texts()],
+        *[t for ax in upper_axes for t in ax.findobj(matplotlib.text.Text)]])
+    def row_boxes():
+        fig.canvas.draw(); renderer = fig.canvas.get_renderer()
+        upper, lower = [], []
+        for ax in all_axes(fig):
+            if ax.has_data():
+                (upper if ax in upper_axes else lower).append(ax.get_window_extent(renderer))
+        for text, box in V53.manuscript._visible_text_bboxes(fig):
+            (upper if text.axes in upper_axes or text in upper_texts else lower).append(box)
+        upper.extend(legend.get_window_extent(renderer) for legend in legends)
+        return Bbox.union(upper), Bbox.union(lower)
+    fig.canvas.draw(); renderer = fig.canvas.get_renderer()
+    a_tag = next(t for t in axes["a"].texts if t.get_text() == "a")
+    c_tag = next(t for ax in upper_axes for t in ax.texts if t.get_text() == "c")
+    delta_px = a_tag.get_window_extent(renderer).y1 - c_tag.get_window_extent(renderer).y1
+    xy = c_tag.get_transform().transform(c_tag.get_position())
+    c_tag.set_position(c_tag.get_transform().inverted().transform(xy + [0, delta_px]))
+    before_upper, before_lower = row_boxes()
+    width, old_height = fig.get_size_inches() * 25.4
+    old_gap = (before_upper.y0 - before_lower.y1) * 25.4 / fig.dpi
+    if old_gap <= 0: raise RuntimeError("Inter-row visible gap is not positive")
+    reduction = old_gap * (1 - fraction)
+    height = old_height - reduction
+    inherited_axes = all_axes(fig)
+    boxes = {ax: np.asarray([ax.get_position().x0 * width, ax.get_position().y0 * old_height,
+        ax.get_position().width * width, ax.get_position().height * old_height]) for ax in inherited_axes}
+    figure_texts = {t: (t.get_position()[0] * width, t.get_position()[1] * old_height)
+        for t in fig.findobj(matplotlib.text.Text) if t.get_transform() is fig.transFigure}
+    anchors = {legend: [legend.get_bbox_to_anchor().x0 * 25.4 / fig.dpi,
+                       legend.get_bbox_to_anchor().y0 * 25.4 / fig.dpi] for legend in legends}
+    science_before = numerical_hash(state["inherited_axes"])
+    fig.set_size_inches(width / 25.4, height / 25.4)
+    for ax, box in boxes.items():
+        placed = box.copy()
+        if ax in upper_axes: placed[1] -= reduction
+        V53._place(ax, placed.tolist(), width, height)
+    for text, (x, y) in figure_texts.items():
+        if text.axes in upper_axes or text in upper_texts: y -= reduction
+        text.set_position((x / width, y / height))
+    for legend, (x, y) in anchors.items():
+        legend.set_bbox_to_anchor((x / width, (y - reduction) / height), transform=fig.transFigure)
+    after_upper, after_lower = row_boxes()
+    new_gap = (after_upper.y0 - after_lower.y1) * 25.4 / fig.dpi
+    renderer = fig.canvas.get_renderer()
+    alignment = abs(a_tag.get_window_extent(renderer).y1 - c_tag.get_window_extent(renderer).y1) * 25.4 / fig.dpi
+    max_geometry_error = 0.0
+    for ax, box in boxes.items():
+        actual = np.asarray([ax.get_position().x0 * width, ax.get_position().y0 * height,
+            ax.get_position().width * width, ax.get_position().height * height])
+        expected = box.copy()
+        if ax in upper_axes: expected[1] -= reduction
+        max_geometry_error = max(max_geometry_error, float(np.max(abs(actual - expected))))
+    state["refinement_qa"] = {
+        "visible_row_gap_before_mm": old_gap, "visible_row_gap_after_mm": new_gap,
+        "requested_gap_fraction": fraction, "canvas_height_reduction_mm": reduction,
+        "design_canvas_before_mm": [width, old_height], "design_canvas_after_mm": [width, height],
+        "panel_a_c_label_top_alignment_error_mm": alignment,
+        "plot_sizes_and_row_translation_max_error_mm": max_geometry_error,
+        "numeric_hash_before_spacing": science_before,
+        "numeric_hash_after_spacing": numerical_hash(state["inherited_axes"]),
+        "upper_row_visible_boxes_before_after_mm": [V53._box_mm(before_upper, fig), V53._box_mm(after_upper, fig)],
+        "lower_row_visible_boxes_before_after_mm": [V53._box_mm(before_lower, fig), V53._box_mm(after_lower, fig)],
+    }
 
 
 def layout_qa(fig, state, comparison):
@@ -288,8 +362,8 @@ def layout_qa(fig, state, comparison):
     checks = {
         "all_v5_3_scientific_metadata_exact": all(comparison.values()),
         "all_numerical_artists_arrays_intervals_and_limits_exact": state["numerical_before"] == state["numerical_after"],
-        "panel_a_nested_zooms_maps_and_bars_translate_identically": np.allclose(state["panel_a_geometry_deltas_mm"], [0, 4, 0, 0], atol=.001),
-        "all_other_inherited_axis_geometry_exact": state["unchanged_axis_geometry_max_delta_mm"] < .001,
+        "before_gap_compression_panel_a_nested_geometry_preserved": np.allclose(state["panel_a_geometry_deltas_mm"], [0, 4, 0, 0], atol=.001),
+        "before_gap_compression_other_inherited_geometry_exact": state["unchanged_axis_geometry_max_delta_mm"] < .001,
         "no_text_text_overlap": not overlaps,
         "no_clipped_text": not any(clipping.values()),
         "no_b_c_titles_ticks_or_legends_inside_data_or_on_spines": not text_data_hits,
@@ -357,7 +431,19 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     fig, axes, containers, shared, panels, ctx, cb_axes, cb_texts, comparison = draw_v53(args, cfg, layout, baseline)
     state = restyle(fig, axes, ctx, layout, baseline)
+    if "inter_row_gap_fraction" in layout["v5_4_geometry"]:
+        refine_spacing(fig, axes, state, layout["v5_4_geometry"]["inter_row_gap_fraction"])
     qa = layout_qa(fig, state, comparison)
+    if "refinement_qa" in state:
+        refinement = qa["refinement_qa"] = state["refinement_qa"]
+        qa["checks"].update({
+            "panel_a_and_c_letters_aligned": refinement["panel_a_c_label_top_alignment_error_mm"] < .001,
+            "panel_c_secondary_top_axis_line_visible": state["top"].spines["top"].get_visible(),
+            "visible_inter_row_gap_exactly_halved": abs(refinement["visible_row_gap_after_mm"] - refinement["visible_row_gap_before_mm"] * .5) < .001,
+            "canvas_height_reduced_by_removed_gap": abs(refinement["design_canvas_before_mm"][1] - refinement["design_canvas_after_mm"][1] - refinement["canvas_height_reduction_mm"]) < .001,
+            "plot_sizes_and_internal_row_geometry_preserved": refinement["plot_sizes_and_row_translation_max_error_mm"] < .001,
+            "spacing_refinement_numerical_artists_exact": refinement["numeric_hash_before_spacing"] == refinement["numeric_hash_after_spacing"],
+        })
     qa["physical_colorbars_qa"] = V53._colorbar_qa(fig, shared, cb_axes, cb_texts)
     qa["annotation_collision_qa"] = V53.measure_annotation_collision_gate(fig, minimum_clearance_mm=1.0, strict=False)
     qa["checks"]["physical_colorbars_preserved_and_clear"] = qa["physical_colorbars_qa"]["passed"]
@@ -407,6 +493,8 @@ def main():
         layout_source=V53._record(args.layout), canvas_mm=trim_qa["export_canvas_mm"],
         model_training_or_inference=False, new_prediction_or_evaluation_rows_generated=False,
         release_status=baseline["release_status"])
+    if "refinement_qa" in qa:
+        manifest["spacing_refinement"] = qa["refinement_qa"]
     V53._write_json(output / "SCIENTIFIC_STATE_COMPARISON.json", {
         "status": "PASS", "metadata_checks": comparison, "artist_before": state["numerical_before"],
         "artist_after": state["numerical_after"], "source_file_count": len(source_records),
@@ -414,6 +502,14 @@ def main():
     V53._write_json(output / "SOURCE_LOCK.json", {"baseline": V53._record(BASELINE_PDF), "sources": source_records})
     (output / "figure_contract.md").write_text("# MixedResolution V5.4 contract\n\nThe asymmetric mixed-modality figure retains the V5.3 evidence sequence: native resolution/training budgets; 512-sensor recipe transfer; sensor-count sweeps; fixed physical field/zoom/error example; multiscale components/residuals; complete-scale population matrices. All scientific source files, cache arrays, 20 bar estimates, 60 sweep estimates, confidence intervals, normalizations and axis limits are frozen. No model training or inference was performed. Existing A03/A04 author checks retain their prior status.\n\nPanel b has a pure white background, lightgray dashed grids below its bars, slightly stronger baseline chroma, 0.5-point darker bar edges and a dedicated horizontal patch legend. Panel c has solid 2.2-point red DMF-Gen traces with filled markers and solid 1.2-point baselines with distinct hollow geometric markers. Its shared bottom axis shows sensor counts; the shared top axis shows the original H-grid percentages. Titles occupy external bands. Panel a is translated upward by 4 mm to accommodate the new bar legend; its data/artists are unchanged. The design canvas grows from 210 to 214 mm. The three c plot windows are 17 mm tall, with equal 5-mm title gutters, while b retains its 21-mm height. b/c bottom spines align at 131 mm, b aligns with a's chart rails, and all c spines align.\n")
     (output / "STYLE_CHANGELOG.md").write_text("# MixedResolution V5.4 review\n\nThe requested bar and line styling was applied without changing the scientific inputs, intervals, arrays, model/recipe identities, color limits or axis scales/limits. Twelve source/cache hashes and all numerical-artist hashes match V5.3.\n\n![V5.4 full-page preview](preview.png)\n\nFigure 1. Rebuilt V5.4 layout with the V5.3 evidence preserved.\n\n![V5.4 vector preview at 162 mm](preview_162mm.png)\n\nFigure 2. Vector-derived review for manuscript insertion.\n\n![V5.4 grayscale review](preview_grayscale.png)\n\nFigure 3. Grayscale review of marker and line distinctions.\n\n![V5.4 deuteranopia review](preview_deuteranopia.png)\n\nFigure 4. Color-vision review of the same scientific figure.\n\nFigure index: Figure 1, full page; Figure 2, insertion review; Figure 3, grayscale; Figure 4, deuteranopia.\n")
+    if "refinement_qa" in qa:
+        refinement = qa["refinement_qa"]
+        contract = output / "figure_contract.md"
+        contract.write_text(contract.read_text().replace("b/c bottom spines align at 131 mm", "Before inter-row compaction, b/c bottom spines align at 131 mm")
+            + f"\nThe final V5.4 refinement aligns the top edges of letters a and c and explicitly displays the secondary top-axis spine. The visible b/c-to-d/e whitespace is reduced from {refinement['visible_row_gap_before_mm']:.6f} to {refinement['visible_row_gap_after_mm']:.6f} mm, exactly half. All upper-row artists move downward together by {refinement['canvas_height_reduction_mm']:.6f} mm; lower panels and all plot dimensions remain fixed. The design height becomes {refinement['design_canvas_after_mm'][1]:.6f} mm and the final export height is {trim_qa['export_canvas_mm'][1]:.6f} mm. Numeric artist hashes remain exact after compaction.\n")
+        changelog = output / "STYLE_CHANGELOG.md"
+        changelog.write_text(changelog.read_text()
+            + f"\nRefinement: a/c letter tops align, the density axis has a visible top spine, and the visible middle gap is halved to {refinement['visible_row_gap_after_mm']:.6f} mm with a matching reduction in canvas height. Every data window retains its physical dimensions.\n")
     manifest["outputs"] = {p.name: V53._record(p) for p in sorted(output.iterdir()) if p.is_file()}
     V53._write_json(output / "source_manifest_v5_4.json", manifest)
     if not args.trial_dir:
